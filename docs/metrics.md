@@ -1,6 +1,6 @@
-# MIND Recommendation Metrics
+# MIND 推荐指标
 
-Current machine-readable evidence:
+当前机器可读证据：
 
 - `docs/metrics/mind_recommendation.json`
 - `docs/metrics/mind_intent_mechanism.json`
@@ -8,65 +8,58 @@ Current machine-readable evidence:
 - `docs/metrics/mind_search_latency.json`
 - `docs/metrics/mind_system.json`
 
-The main ranking split is a global chronological request holdout inside MIND-small
-train. Requests are never divided across partitions. LightGBM trains on 20,000 complete
-requests and evaluates on 10,000 complete requests using only real exposed candidates.
+主要排序切分是在 MIND-small 训练集内部执行的全局请求级时间顺序留出。
+请求不会跨分区拆分。LightGBM 使用 20,000 个完整请求训练，并使用 10,000 个完整请求评估；
+所有候选项均来自真实曝光。
 
-| Arm | Recall@5 | Recall@10 | NDCG@10 | MRR |
+| 实验分组 | Recall@5 | Recall@10 | NDCG@10 | MRR |
 |---|---:|---:|---:|---:|
-| Popularity | 0.3028 | 0.4831 | 0.2541 | 0.2167 |
-| Category-profile manual | 0.3325 | 0.5027 | 0.2703 | 0.2334 |
+| 热度基线 | 0.3028 | 0.4831 | 0.2541 | 0.2167 |
+| 手工类别画像 | 0.3325 | 0.5027 | 0.2703 | 0.2334 |
 | LightGBM | **0.4213** | **0.5969** | **0.3628** | **0.3293** |
 | LightGBM + MMR (`penalty=0.02`) | 0.4169 | 0.5956 | 0.3626 | 0.3296 |
-| ALS-adjusted LightGBM | 0.4212 | 0.5967 | 0.3627 | 0.3292 |
+| ALS 调整后的 LightGBM | 0.4212 | 0.5967 | 0.3627 | 0.3292 |
 
-ALS candidate Recall@50 is 0.0262. LightGBM exceeded the tested baselines, but ALS did
-not add sampled Recall@10. Pointwise metrics are ROC AUC 0.6719, PR AUC 0.0738, and
-log loss 0.1516.
+ALS 候选 Recall@50 为 0.0262。LightGBM 超过了已测试的基线，但 ALS 未能提升抽样 Recall@10。
+逐点指标为 ROC AUC 0.6719、PR AUC 0.0738、对数损失 0.1516。
 
-MMR was swept as a reranker over each request's real exposed candidates. The selected
-`0.02` similarity penalty stayed inside the predeclared Recall@10 absolute-drop
-guardrail of `0.005`:
+MMR 作为重排器在每个请求的真实曝光候选项上进行参数扫描。选定的 `0.02` 相似度惩罚
+满足预先声明的 Recall@10 绝对下降不超过 `0.005` 的护栏：
 
-| Arm | Recall@10 | Category diversity@10 | Topic coverage@10 | Hybrid intra-list similarity@10 |
+| 实验分组 | Recall@10 | 类别多样性@10 | 主题覆盖率@10 | 混合列表内相似度@10 |
 |---|---:|---:|---:|---:|
 | LightGBM | 0.5969 | 4.4234 | 11.9145 | 0.2433 |
 | LightGBM + MMR | 0.5956 | 4.8011 | 12.9051 | 0.1935 |
 
-The Recall@10 delta is `-0.00125`; topic coverage increased by `0.9906`, and hybrid
-intra-list similarity fell by `0.0498` (20.5%). This does not establish end-to-end
-candidate recall, online CTR, or causal user benefit, so
-`lgb_plus_als_plus_search_mmr` remains a non-default experiment arm.
+Recall@10 变化为 `-0.00125`；主题覆盖率增加 `0.9906`，混合列表内相似度下降
+`0.0498`（20.5%）。这不能证明端到端候选召回、在线点击率或用户因果收益，
+因此 `lgb_plus_als_plus_search_mmr` 仍是非默认实验分组。
 
-Official dev known-user coverage is only 11.44%, so it is not presented as a general
-known-user collaborative benchmark. The content/category fallback reached Recall@10
-0.5568 on 8,902 sampled unknown-user requests.
+官方开发集的已知用户覆盖率只有 11.44%，因此不将其作为通用已知用户协同基准。
+在 8,902 个抽样未知用户请求上，内容/类别回退方案的 Recall@10 达到 0.5568。
 
-The intent report injects deterministic category queries into three demo scenarios.
-Only one scenario changed top-10 target-category share; mean delta was 0.2. MIND has no
-observed search logs, so this is not a CTR, causal-lift, or user-benefit result.
+意图报告会向三个演示场景注入确定性类别查询。只有一个场景改变了前 10 项中目标类别的占比，
+平均变化为 0.2。MIND 不含观察到的搜索日志，因此这不是点击率、因果增益或用户收益结果。
 
-Search relevance uses a fixed 48-query benchmark over all 65,238 normalized articles
-with 1,239 pooled judgments. Labels are AI-assisted; 12 stratified judgments were
-approved in a human spot-check.
+搜索相关性评估在全部 65,238 篇规范化文章上使用固定的 48 查询基准，包含 1,239 条汇总标注。
+标注由 AI 辅助生成，其中 12 条分层标注通过人工抽样检查。
 
-| Search arm | Recall@10 | NDCG@10 | MRR@10 | OOD reject accuracy |
+| 搜索分组 | Recall@10 | NDCG@10 | MRR@10 | OOD 拒绝准确率 |
 |---|---:|---:|---:|---:|
-| Legacy lexical | 0.2895 | 0.2854 | 0.3158 | 0.0 |
+| 旧版词法搜索 | 0.2895 | 0.2854 | 0.3158 | 0.0 |
 | BM25 | 0.6847 | 0.6790 | 0.7444 | 1.0 |
-| Dense | **0.8806** | **0.8319** | **0.8772** | 1.0 |
-| Hybrid | 0.8122 | 0.8131 | 0.8596 | 1.0 |
+| 稠密检索 | **0.8806** | **0.8319** | **0.8772** | 1.0 |
+| 混合检索 | 0.8122 | 0.8131 | 0.8596 | 1.0 |
 
-Hybrid improved held-out NDCG@10 over lexical by `0.5277`; the paired 95% interval is
-`[0.3130, 0.7257]`. Dense remained the strongest overall arm, while hybrid was strongest
-on spelling/noise queries. See `docs/search_relevance.md` for the full protocol and
-limitations.
+混合检索相对词法搜索将留出集 NDCG@10 提升 `0.5277`，配对 95% 区间为
+`[0.3130, 0.7257]`。稠密检索仍是整体最强的分组，混合检索则在拼写/噪声查询上最强。
+完整协议和限制请参阅 `docs/search_relevance.md`。
 
-Local measurements:
+本地测量结果：
 
-| Surface | p50 | p95 | Boundary |
+| 场景 | p50 | p95 | 测量边界 |
 |---|---:|---:|---|
-| Feed API loopback | 9.47 ms | 14.18 ms | 30 local requests |
-| Hybrid retrieval | 6.433 ms | 9.568 ms | 100 warm in-process calls, 174 documents |
+| 信息流 API 本地回环 | 9.47 ms | 14.18 ms | 30 个本地请求 |
+| 混合检索 | 6.433 ms | 9.568 ms | 100 次预热后进程内调用，174 篇文档 |
 
-Historical pre-migration metrics remain available in Git history and are not current.
+迁移前的历史指标仍可在 Git 历史中查阅，但不代表当前结果。

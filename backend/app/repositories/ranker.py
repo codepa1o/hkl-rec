@@ -1,8 +1,8 @@
-"""LightGBM online ranker — load model and score candidates in batch.
+"""LightGBM 在线排序器——加载模型并批量为候选项评分。
 
-Singleton model loaded on first call; thread-safe for read-only inference.
+单例模型在首次调用时加载；只读推理是线程安全的。
 
-Usage in mysql.py scoring loop:
+在 mysql.py 评分循环中的用法：
     from backend.app.repositories.ranker import build_feature_vector, score_candidates
 
     features = [build_feature_vector(...) for candidate in candidates]
@@ -51,7 +51,7 @@ def load_model(model_dir: str | None = None) -> lgb.Booster | None:
     meta_path = base / "lgb_ranker_v1_meta.json"
 
     if not model_path.exists() or not meta_path.exists():
-        return None  # model not trained yet — caller should fall back
+        return None  # 模型尚未训练，调用方应使用回退方案
 
     signature = (model_path.stat().st_mtime_ns, meta_path.stat().st_mtime_ns)
     if _MODEL is not None and signature == _MODEL_SIGNATURE:
@@ -77,10 +77,9 @@ def loaded_model_metadata() -> dict[str, Any]:
 
 
 def score_candidates(feature_dicts: list[dict[str, float]]) -> list[float] | None:
-    """Return predicted click probabilities for each candidate row.
+    """返回每个候选记录的预测点击概率。
 
-    Returns None when the model file has not been trained yet; callers should
-    fall back to manual scoring.
+    模型文件尚未训练时返回 None；调用方应回退到手工评分。
     """
     model = load_model()
     if model is None:
@@ -90,7 +89,7 @@ def score_candidates(feature_dicts: list[dict[str, float]]) -> list[float] | Non
         return []
 
     if _FEATURE_ORDER:
-        # strict column order matching training
+        # 严格保持与训练时一致的列顺序
         rows = [[row.get(col, 0.0) for col in _FEATURE_ORDER] for row in feature_dicts]
     else:
         cols = list(feature_dicts[0].keys())
@@ -116,10 +115,9 @@ def build_feature_dict(
     article_click_count: int | None = None,
     article_impression_count: int | None = None,
 ) -> dict[str, float]:
-    """Build one feature dict matching the training feature columns.
+    """构建一个与训练特征列匹配的特征字典。
 
-    This mirrors the normalized-MIND feature builder so online inference stays aligned
-    with training.
+    此处与规范化 MIND 的特征构建器保持一致，确保在线推理与训练对齐。
     """
     import time as _time
 

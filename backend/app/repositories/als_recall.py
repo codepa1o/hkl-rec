@@ -1,8 +1,7 @@
-"""ALS + FAISS recall channel — online ANN retrieval for feed candidates.
+"""ALS + FAISS 召回通道——为信息流候选项执行在线 ANN 检索。
 
-Loads pre-trained ALS embeddings and FAISS index at startup. Cold users
-(no interaction history → no ALS embedding) return empty results; callers
-should fall back to content-based recall channels.
+启动时加载预训练的 ALS 嵌入和 FAISS 索引。冷启动用户（没有交互历史，
+因此也没有 ALS 嵌入）返回空结果；调用方应回退到基于内容的召回通道。
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ class ALSRecall:
             self._meta_path,
         )
         if not all(path.exists() for path in required_paths):
-            return  # not trained yet — all calls become no-ops
+            return  # 尚未训练，所有调用均不执行任何操作
         signature = tuple(path.stat().st_mtime_ns for path in required_paths)
         if self._loaded and self._signature == signature:
             return
@@ -81,9 +80,9 @@ class ALSRecall:
         user_id: int,
         k: int = 200,
     ) -> list[tuple[int, float]]:
-        """Return top-k `(answer_id, inner_product_score)` pairs for a user.
+        """返回指定用户的前 k 个 `(answer_id, inner_product_score)`。
 
-        Returns empty list for cold users or when ALS artifacts haven't been built.
+        对冷启动用户或尚未构建 ALS 制品的情况返回空列表。
         """
         self._ensure_loaded()
         if not self._loaded or user_id not in self._user_id_map:

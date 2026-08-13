@@ -150,19 +150,19 @@ Learning`，下次从 Section 4.2 的缓存优化继续。
 
 1. `01-random-forests-breiman-2001.pdf`
    - Leo Breiman, "Random Forests", 2001.
-   - Source: https://www.stat.berkeley.edu/~breiman/randomforest2001.pdf
+   - 来源：https://www.stat.berkeley.edu/~breiman/randomforest2001.pdf
 
 2. `02-gradient-boosting-machine-friedman-2001.pdf`
    - Jerome H. Friedman, "Greedy Function Approximation: A Gradient Boosting Machine", 2001.
-   - Download source: UIUC public course mirror.
-   - Canonical publication: https://doi.org/10.1214/aos/1013203451
+   - 下载来源：UIUC 公开课程镜像。
+   - 规范出版地址：https://doi.org/10.1214/aos/1013203451
 
 3. `03-xgboost-chen-guestrin-2016.pdf`
    - Tianqi Chen and Carlos Guestrin, "XGBoost: A Scalable Tree Boosting System", 2016.
-   - Source: https://arxiv.org/abs/1603.02754
+   - 来源：https://arxiv.org/abs/1603.02754
 
 4. `04-lightgbm-ke-et-al-2017.pdf`
    - Guolin Ke et al., "LightGBM: A Highly Efficient Gradient Boosting Decision Tree", 2017.
-   - Source: https://proceedings.neurips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html
+   - 来源：https://proceedings.neurips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html
 
 `Classification and Regression Trees` (CART, 1984) 是书籍而不是论文，因此没有复制到当前目录。

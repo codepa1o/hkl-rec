@@ -135,7 +135,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
             max_connections=settings.mysql_pool_max_connections,
         )
 
-    # ── public API ──────────────────────────────────────────────
+    # ── 公共 API ────────────────────────────────────────────────
 
     def close(self) -> None:
         self._connection_pool.close()
@@ -288,7 +288,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
             feature_now_ts = as_of_ts if as_of_ts is not None else now_ts
             user_topic_count = len(topic_weight_map)
 
-            # ── build feature dicts for all candidates ────────────────
+            # ── 为所有候选项构建特征字典 ─────────────────────────────
             feature_dicts: list[dict[str, float]] = []
             candidate_keys: list[tuple[int, Any, Any, set[int], float, list[str], bool]] = []
             for answer_id, candidate in candidates.items():
@@ -331,14 +331,14 @@ class MysqlRuntimeRepository(RuntimeRepository):
                     )
                 )
 
-            # ── batch model inference ─────────────────────────────────
+            # ── 批量模型推理 ─────────────────────────────────────────
             model_scores = score_candidates(feature_dicts) if feature_dicts and use_lgb else None
             if require_lgb and model_scores is None:
                 raise RuntimeError(
                     "requested LightGBM experiment arm but a compatible model is unavailable"
                 )
 
-            # ── build FeedItem list ────────────────────────────────────
+            # ── 构建 FeedItem 列表 ───────────────────────────────────
             scored_items: list[tuple[FeedItem, RecallCandidateDebug]] = []
             for idx, (
                 answer_id,
@@ -365,7 +365,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 if model_scores is not None and idx < len(model_scores):
                     final_score = round(float(model_scores[idx]), 6)
                 else:
-                    # fallback: manual formula when model not trained yet
+                    # 回退方案：模型尚未训练时使用手工公式
                     final_score = round(base_score + topic_match_score + query_recall_boost, 6)
 
                 item = FeedItem(
@@ -1041,7 +1041,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
         )
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
-        # Delegate event types that already have rich profile-update logic.
+        # 将已有完整画像更新逻辑的事件类型交给对应处理器。
         if payload.event_type == "recommendation_click":
             if payload.article_id is None:
                 raise ValueError("recommendation_click requires article_id")
@@ -1098,8 +1098,8 @@ class MysqlRuntimeRepository(RuntimeRepository):
         if payload.event_type == "upvote":
             if payload.article_id is None:
                 raise ValueError("upvote requires article_id")
-            # Apply the same positive profile update as a recommendation click,
-            # but stamp the user_event row with event_type='upvote' for analytics distinction.
+            # 应用与推荐点击相同的正向画像更新，
+            # 但将 user_event 记录标记为 event_type='upvote'，便于分析时区分。
             event_ts = (
                 payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
             )
@@ -1208,7 +1208,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 behavior_score=update["behavior_score"],
             )
 
-        # Log-only events: feed_impression, detail_view, dwell, downvote, share
+        # 仅记录日志的事件：feed_impression、detail_view、dwell、downvote、share
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
@@ -1309,7 +1309,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
             behavior_score=None,
         )
 
-    # ── orchestrator helpers ────────────────────────────────────
+    # ── 编排辅助方法 ────────────────────────────────────────────
 
     def _artifact_debug(self) -> ArtifactDebug:
         lgb_metadata = loaded_model_metadata()
@@ -1518,7 +1518,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 raw_base_score=float(row.get("hot_score") or 0.0),
             )
 
-        # ── ALS collaborative filtering recall (4th channel) ───────
+        # ── ALS 协同过滤召回（第 4 个通道）────────────────────────
         if use_als:
             als = get_als_recall()
             als_candidates = als.get_candidates(

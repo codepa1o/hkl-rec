@@ -3,15 +3,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, cast
 
+from dotenv import dotenv_values
+
 EventMode = Literal["sync_mysql", "kafka_dual_write", "kafka_async"]
 SearchRetrievalMode = Literal["lexical_v1", "hybrid_v1"]
 logger = logging.getLogger(__name__)
 _DEPRECATED_ENV_WARNINGS: set[str] = set()
+_DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# Process environment variables still take precedence in _env_optional().
+_DOTENV_VALUES: Mapping[str, str | None] = dotenv_values(_DOTENV_PATH)
 
 
 def parse_event_mode(value: str) -> EventMode:
@@ -29,20 +35,23 @@ def parse_search_retrieval_mode(value: str) -> SearchRetrievalMode:
 
 
 def _env_optional(name: str) -> str | None:
-    if name in os.environ:
-        return os.environ[name]
     legacy_name = name.replace("NEWSREC_", "ZHIHUREC_", 1)
-    if legacy_name in os.environ:
-        if legacy_name not in _DEPRECATED_ENV_WARNINGS:
-            logger.warning(
-                "deprecated environment variable used",
-                extra={
-                    "deprecated_env": legacy_name,
-                    "replacement_env": name,
-                },
-            )
-            _DEPRECATED_ENV_WARNINGS.add(legacy_name)
-        return os.environ[legacy_name]
+    for source in (os.environ, _DOTENV_VALUES):
+        value = source.get(name)
+        if value is not None:
+            return value
+        legacy_value = source.get(legacy_name)
+        if legacy_value is not None:
+            if legacy_name not in _DEPRECATED_ENV_WARNINGS:
+                logger.warning(
+                    "deprecated environment variable used",
+                    extra={
+                        "deprecated_env": legacy_name,
+                        "replacement_env": name,
+                    },
+                )
+                _DEPRECATED_ENV_WARNINGS.add(legacy_name)
+            return legacy_value
     return None
 
 

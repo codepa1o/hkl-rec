@@ -75,7 +75,7 @@ MIND 提供真实的新闻曝光、点击和点击历史，但**不提供用户�
 
 推荐表达：
 
-> Built a personal news recommendation system using the public Microsoft MIND dataset.
+> 基于公开 Microsoft MIND 数据集构建了个性化新闻推荐系统。
 
 可以说明选择 MIND 与自己在 Microsoft 实习期间对推荐系统产生兴趣有关，但不得暗示：
 
@@ -640,8 +640,7 @@ Pointwise：
 
 如果 ML arm 没有超过 baseline，保留负结果，并把结论写成：
 
-> The staged system made retrieval and ranking measurable; the tested model did not
-> establish a reliable lift over the strongest baseline.
+> 分阶段系统使检索和排序变得可度量；已测试模型尚未证明其相对最强基线具有可靠提升。
 
 不得为了简历叙事删除负结果或更换指标。
 
@@ -688,10 +687,9 @@ Pointwise：
 
 推荐主线：
 
-> I rebuilt a content recommendation prototype around the public Microsoft MIND
-> dataset. The key engineering change was separating a large offline impression-aware
-> training pipeline from a small deterministic serving world, while keeping online
-> search and click events in the same profile feedback loop.
+> 我围绕公开 Microsoft MIND 数据集重建了内容推荐原型。核心工程变化是将大型、
+> 感知曝光的离线训练流水线与小型确定性在线服务世界分离，同时让在线搜索和点击事件
+> 继续使用同一条画像反馈回路。
 
 可讲的 trade-off：
 

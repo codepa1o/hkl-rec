@@ -1,1 +1,1 @@
-"""API routers for the NewsIntentRec backend."""
+"""NewsIntentRec 后端的 API 路由。"""

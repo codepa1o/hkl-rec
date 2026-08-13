@@ -1,21 +1,15 @@
-# NewsIntentRec Product Walkthrough
+# NewsIntentRec 产品演示
 
-The React product presents a compact English news feed rather than a generic community
-clone.
+React 产品呈现的是紧凑的英文新闻信息流，而非通用社区产品的仿制界面。
 
-- Cards show a real MIND headline and abstract.
-- Category/subcategory chips explain content grouping.
-- `Source: <domain>` is explicitly a URL hostname, not a publisher attribution claim.
-- Sponsored cards remain visibly labeled.
-- Personas are named from dominant category preferences and do not expose raw user-ID
-  meaning.
-- Feed reasons identify profile category, recent query category, ALS, or fallback
-  contribution.
-- Search accepts category aliases and real headline/abstract terms. No-result input
-  returns an explicit error.
-- Search and click events update the local profile; the next feed debug payload can
-  show `recent_query_topic`.
+- 卡片展示真实的 MIND 标题和摘要。
+- 类别/子类别标签用于解释内容分组。
+- `Source: <domain>` 明确表示 URL 主机名，并非媒体发布方归属声明。
+- 赞助卡片始终保留清晰标签。
+- 用户画像依据主要类别偏好命名，不暴露原始用户 ID 的含义。
+- 信息流推荐理由会标明画像类别、近期查询类别、ALS 或回退方案的贡献。
+- 搜索支持类别别名以及真实标题/摘要中的词语；无结果输入会返回明确错误。
+- 搜索和点击事件会更新本地画像；下一次信息流调试载荷可显示 `recent_query_topic`。
 
-The demo is deliberately small and deterministic. It demonstrates interaction and
-system behavior; full-data recommendation conclusions come from normalized MIND-small,
-not from the three demo personas.
+演示刻意保持小规模和确定性，用于展示交互与系统行为。
+全量数据的推荐结论来自规范化 MIND-small，而非三个演示画像。

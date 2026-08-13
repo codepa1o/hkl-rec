@@ -1,6 +1,9 @@
-import { Newspaper, Share2 } from "lucide-react";
+import { Check, Newspaper, Share2 } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { trackEvent } from "../api/client";
 import type { FeedItem, SearchItem } from "../api/types";
+import { localizeCategoryName, localizeRecommendationReason } from "../localization";
 import VoteActions from "./VoteActions";
 
 interface Props {
@@ -26,73 +29,100 @@ export default function PostCard({
   onTrackClick,
   onProfileChanged,
 }: Props) {
+  const [shared, setShared] = useState(false);
   const mainCategory = item.categories?.[0];
-  const categoryName = mainCategory?.display_name ?? "News";
+  const categoryName = localizeCategoryName(mainCategory?.display_name);
+
+  const handleShare = async () => {
+    const url = `${window.location.origin}/articles/${item.article_id}`;
+    if (navigator.share) {
+      await navigator.share({ title: item.headline, url });
+    } else {
+      await navigator.clipboard.writeText(url);
+    }
+    setShared(true);
+    window.setTimeout(() => setShared(false), 1600);
+    await trackEvent({
+      user_id: userId,
+      event_type: "share",
+      surface,
+      article_id: item.article_id,
+      request_id: requestId ?? null,
+    });
+  };
 
   return (
-    <div className="zr-card">
-      <VoteActions
-        articleId={item.article_id}
-        userId={userId}
-        requestId={requestId}
-        surface={surface}
-        onVoted={onProfileChanged}
-      />
-
+    <article className="zr-card">
       <div className="zr-card__body">
         <div className="zr-card__meta">
           <span className="zr-card__community">
-            <span
-              className="zr-card__avatar"
-              style={{
-                background: `linear-gradient(135deg, hsl(${(mainCategory?.topic_id ?? 1) * 47 % 360}, 60%, 55%), hsl(${(mainCategory?.topic_id ?? 1) * 83 % 360}, 70%, 65%))`,
-              }}
-            />
+            <span className="zr-category-dot" aria-hidden="true" />
             {categoryName}
           </span>
           {isFeedItem(item) && item.content_type === "sponsored" && (
-            <span className="zr-card__sponsored">{item.sponsored?.label ?? "Sponsored"}</span>
+            <span className="zr-card__sponsored">
+              {item.sponsored?.label
+                ? localizeCategoryName(item.sponsored.label)
+                : "赞助内容"}
+            </span>
           )}
-          <span>Source: {item.source_domain}</span>
+            <span className="zr-card__source">来源：{item.source_domain}</span>
         </div>
 
-        <h3 className="zr-card__title">
+        <h2 className="zr-card__title">
           <Link to={`/articles/${item.article_id}`} onClick={onTrackClick}>
             {item.headline}
           </Link>
-        </h3>
+        </h2>
 
         <p className="zr-card__summary">{item.abstract}</p>
 
         {item.categories.length > 0 && (
-          <div className="zr-card__chips">
-            {item.categories.map((t) => (
-              <span key={t.topic_id} className="zr-chip">
-                {t.display_name}
+          <div className="zr-card__chips" aria-label="文章分类">
+            {item.categories.map((topic) => (
+              <span key={topic.topic_id} className="zr-chip">
+                {localizeCategoryName(topic.display_name)}
               </span>
             ))}
           </div>
         )}
 
         {showReason && isFeedItem(item) && item.selected_reason && (
-          <div className="zr-card__reason">{item.selected_reason}</div>
+          <div className="zr-card__reason">
+            <span>推荐理由</span>
+            {localizeRecommendationReason(item.selected_reason)}
+          </div>
         )}
 
-        <div className="zr-card__actions">
-          <Link
-            to={`/articles/${item.article_id}`}
-            className="zr-action"
-            onClick={onTrackClick}
-          >
-            <Newspaper size={16} />
-            Details
-          </Link>
-          <button className="zr-action">
-            <Share2 size={16} />
-            Share
-          </button>
+        <div className="zr-card__footer">
+          <VoteActions
+            articleId={item.article_id}
+            userId={userId}
+            requestId={requestId}
+            surface={surface}
+            onVoted={onProfileChanged}
+          />
+          <div className="zr-card__actions">
+            <Link
+              to={`/articles/${item.article_id}`}
+              className="zr-action"
+              onClick={onTrackClick}
+            >
+              <Newspaper size={15} />
+              查看详情
+            </Link>
+            <button
+              type="button"
+              className="zr-action"
+              aria-label="分享文章"
+              onClick={() => void handleShare()}
+            >
+              {shared ? <Check size={15} /> : <Share2 size={15} />}
+              {shared ? "已复制" : "分享"}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </article>
   );
 }

@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { getArticleCard, trackEvent } from "../api/client";
 import type { ArticleCardResponse } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
+import { localizeCategoryName, localizeInterfaceError } from "../localization";
 
 export default function ArticleDetailPage() {
   const { articleId: articleIdParam } = useParams<{ articleId: string }>();
@@ -49,7 +50,7 @@ export default function ArticleDetailPage() {
   if (isNaN(articleId)) {
     return (
       <main className="zr-center">
-        <div className="zr-status">Invalid article ID.</div>
+        <div className="zr-status">文章编号无效。</div>
       </main>
     );
   }
@@ -57,7 +58,7 @@ export default function ArticleDetailPage() {
   if (loading) {
     return (
       <main className="zr-center">
-        <div className="zr-status">Loading article...</div>
+        <div className="zr-status">正在加载文章…</div>
       </main>
     );
   }
@@ -65,7 +66,7 @@ export default function ArticleDetailPage() {
   if (error) {
     return (
       <main className="zr-center">
-        <div className="zr-status">Failed to load article: {error}</div>
+        <div className="zr-status">文章加载失败：{localizeInterfaceError(error)}</div>
       </main>
     );
   }
@@ -73,7 +74,7 @@ export default function ArticleDetailPage() {
   if (!data) {
     return (
       <main className="zr-center">
-        <div className="zr-status">Article not found.</div>
+        <div className="zr-status">未找到该文章。</div>
       </main>
     );
   }
@@ -81,26 +82,21 @@ export default function ArticleDetailPage() {
   const mainCategory = data.categories?.[0];
 
   return (
-    <main className="zr-center">
+    <main className="zr-center zr-article-page">
       <div className="zr-post-detail">
         <Link to="/" className="zr-back-link">
           <ArrowLeft size={14} />
-          Back to feed
+          返回信息流
         </Link>
 
         <div className="zr-card__meta">
           {mainCategory && (
             <span className="zr-card__community">
-              <span
-                className="zr-card__avatar"
-                style={{
-                  background: `linear-gradient(135deg, hsl(${mainCategory.topic_id * 47 % 360}, 60%, 55%), hsl(${mainCategory.topic_id * 83 % 360}, 70%, 65%))`,
-                }}
-              />
-              {mainCategory.display_name}
+              <span className="zr-category-dot" aria-hidden="true" />
+              {localizeCategoryName(mainCategory.display_name)}
             </span>
           )}
-          <span>Source: {data.source_domain}</span>
+          <span>来源：{data.source_domain}</span>
         </div>
 
         <h1 className="zr-post-detail__title">{data.headline}</h1>
@@ -109,13 +105,16 @@ export default function ArticleDetailPage() {
           <div className="zr-card__chips">
             {data.categories.map((t) => (
               <span key={t.topic_id} className="zr-chip">
-                {t.display_name}
+                {localizeCategoryName(t.display_name)}
               </span>
             ))}
           </div>
         )}
 
-        <div className="zr-post-detail__summary">{data.abstract}</div>
+        <div className="zr-post-detail__content">
+          <span className="zr-eyebrow">文章摘要</span>
+          <div className="zr-post-detail__summary">{data.abstract}</div>
+        </div>
       </div>
     </main>
   );

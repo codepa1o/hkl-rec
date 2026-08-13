@@ -1,4 +1,5 @@
-import { ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
+import { useState } from "react";
 import { trackEvent } from "../api/client";
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   onVoted?: () => void;
 }
 
+type VoteDirection = "upvote" | "downvote";
+
 export default function VoteActions({
   articleId,
   userId,
@@ -16,8 +19,11 @@ export default function VoteActions({
   surface = "feed",
   onVoted,
 }: Props) {
-  const handleVote = (direction: "upvote" | "downvote") => {
-    trackEvent({
+  const [selected, setSelected] = useState<VoteDirection | null>(null);
+
+  const handleVote = (direction: VoteDirection) => {
+    setSelected(direction);
+    void trackEvent({
       user_id: userId,
       event_type: direction,
       surface,
@@ -27,21 +33,25 @@ export default function VoteActions({
   };
 
   return (
-    <div className="zr-card__votes">
+    <div className="zr-vote-actions" aria-label="文章反馈">
       <button
-        className="zr-vote-btn zr-vote-btn--up"
-        aria-label="Upvote"
+        type="button"
+        className={`zr-vote-btn${selected === "upvote" ? " zr-vote-btn--active" : ""}`}
+        aria-label="赞同"
+        aria-pressed={selected === "upvote"}
         onClick={() => handleVote("upvote")}
       >
-        <ArrowUp size={18} />
+        <ArrowUp size={16} />
       </button>
-      <span className="zr-vote-count">0</span>
+      <span className="zr-vote-divider" aria-hidden="true" />
       <button
-        className="zr-vote-btn zr-vote-btn--down"
-        aria-label="Downvote"
+        type="button"
+        className={`zr-vote-btn${selected === "downvote" ? " zr-vote-btn--active" : ""}`}
+        aria-label="不赞同"
+        aria-pressed={selected === "downvote"}
         onClick={() => handleVote("downvote")}
       >
-        <ArrowDown size={18} />
+        <ArrowDown size={16} />
       </button>
     </div>
   );

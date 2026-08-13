@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Render MySQL seed SQL from the MIND demo-world import pack.
+"""根据 MIND 演示世界导入包生成 MySQL 种子 SQL。
 
-This script keeps the V1 runtime boundary explicit:
-- build/mind_demo_world is an offline import pack
-- MySQL is the only runtime source of truth
+此脚本明确保持 V1 的运行时边界：
+- build/mind_demo_world 是离线导入包
+- MySQL 是唯一的运行时事实来源
 
-It does not talk to MySQL directly. Instead, it emits a SQL file that can be
-applied after `sql/schema.sql` has created the target tables.
+它不会直接连接 MySQL，而是生成一个 SQL 文件；在 `sql/schema.sql`
+创建目标表后即可应用该文件。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ REQUIRED_INPUTS = [
     "demo_event_replay.jsonl",
 ]
 
-# Optional inputs (multi-persona); the importer falls back to single-persona behaviour when absent.
+# 可选输入（多画像）；缺失时导入器回退到单画像行为。
 OPTIONAL_INPUTS = [
     "demo_persona_profile_seeds.json",
     "demo_personas.json",

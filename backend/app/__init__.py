@@ -1,1 +1,1 @@
-"""NewsIntentRec backend application package."""
+"""NewsIntentRec 后端应用包。"""

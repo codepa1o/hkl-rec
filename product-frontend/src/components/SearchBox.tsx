@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listSearchSuggestions } from "../api/client";
 import type { SuggestionItem } from "../api/types";
+import { localizeCategoryName } from "../localization";
 
 interface Props {
   initialQuery?: string;
@@ -70,7 +71,7 @@ export default function SearchBox({ initialQuery }: Props) {
         <Search size={18} color="var(--zr-text-muted)" />
         <input
           className="zr-searchbox__input"
-          placeholder="Search news"
+          placeholder="搜索新闻"
           value={query}
           onChange={(e) => handleChange(e.target.value)}
           onFocus={() => setOpen(true)}
@@ -88,8 +89,8 @@ export default function SearchBox({ initialQuery }: Props) {
               className="zr-searchbox__suggestion"
               onClick={() => handleSubmit(s.query_key)}
             >
-              <span>{s.label}</span>
-              <span className="zr-searchbox__suggestion-key">{s.topic_count} topics</span>
+              <span>{localizeCategoryName(s.label)}</span>
+              <span className="zr-searchbox__suggestion-key">{s.topic_count} 个主题</span>
             </button>
           ))}
         </div>

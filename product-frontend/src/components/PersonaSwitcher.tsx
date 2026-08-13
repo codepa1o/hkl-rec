@@ -1,6 +1,7 @@
 import { ChevronDown, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePersona } from "../context/PersonaContext";
+import { localizePersonaName } from "../localization";
 
 export default function PersonaSwitcher() {
   const { personas, selectedPersona, selectPersona, loading } = usePersona();
@@ -21,7 +22,7 @@ export default function PersonaSwitcher() {
     return (
       <div className="zr-persona-switcher">
         <User size={20} />
-        <span style={{ color: "var(--zr-text-muted)" }}>Loading...</span>
+        <span style={{ color: "var(--zr-text-muted)" }}>加载中…</span>
       </div>
     );
   }
@@ -35,7 +36,7 @@ export default function PersonaSwitcher() {
             background: `linear-gradient(135deg, hsl(${(selectedPersona?.user_id ?? 1) * 47 % 360}, 60%, 55%), hsl(${(selectedPersona?.user_id ?? 1) * 83 % 360}, 70%, 65%))`,
           }}
         />
-        <span>{selectedPersona?.display_name ?? "Select persona"}</span>
+        <span>{localizePersonaName(selectedPersona?.display_name)}</span>
         <ChevronDown size={14} />
       </button>
 
@@ -56,7 +57,7 @@ export default function PersonaSwitcher() {
                   background: `linear-gradient(135deg, hsl(${p.user_id * 47 % 360}, 60%, 55%), hsl(${p.user_id * 83 % 360}, 70%, 65%))`,
                 }}
               />
-              <span>{p.display_name}</span>
+              <span>{localizePersonaName(p.display_name)}</span>
             </button>
           ))}
         </div>

@@ -1,60 +1,57 @@
-# MIND-small Data Analysis
+# MIND-small 数据分析
 
-Generated from normalized public MIND data. Fingerprint:
-`643c53b0ce5fddf5e08a8d6f8e491ddec607a3f56c335c44d872e6e74cbd4b52`.
+本报告由规范化后的公开 MIND 数据生成。数据指纹：
+`643c53b0ce5fddf5e08a8d6f8e491ddec607a3f56c335c44d872e6e74cbd4b52`。
 
-## Scale
+## 规模
 
-| Split | Requests | Candidates | Positives | Users | Mean candidates/request | Mean positives/request |
+| 数据集 | 请求数 | 候选项数 | 正样本数 | 用户数 | 每请求平均候选项 | 每请求平均正样本 |
 |---|---:|---:|---:|---:|---:|---:|
-| Train | 156,965 | 5,843,444 | 236,344 | 50,000 | 37.23 | 1.51 |
-| Dev | 73,152 | 2,740,998 | 111,383 | 50,000 | 37.47 | 1.52 |
+| 训练集 | 156,965 | 5,843,444 | 236,344 | 50,000 | 37.23 | 1.51 |
+| 开发集 | 73,152 | 2,740,998 | 111,383 | 50,000 | 37.47 | 1.52 |
 
-Median history length is 19 for train and
-19 for dev. Every normalized candidate is a real exposure;
-no random unexposed negative is introduced.
+训练集和开发集的历史长度中位数均为 19。每个规范化候选项都是真实曝光项，
+没有引入随机的未曝光负样本。
 
-## Content
+## 内容
 
-- 65,238 unique articles;
-- 18 categories and 270 subcategories;
-- empty abstract ratio: 5.23%;
-- headline, category, and subcategory are present for every normalized article.
+- 65,238 篇唯一文章；
+- 18 个类别和 270 个子类别；
+- 空摘要占比为 5.23%；
+- 每篇规范化文章都包含标题、类别和子类别。
 
-| Top category | Articles |
+| 主要类别 | 文章数 |
 |---|---:|
-| news | 20,039 |
-| sports | 19,368 |
-| finance | 3,786 |
-| foodanddrink | 3,123 |
-| travel | 3,013 |
-| lifestyle | 2,991 |
-| video | 2,712 |
-| weather | 2,601 |
-| health | 2,207 |
-| autos | 2,076 |
+| 新闻 | 20,039 |
+| 体育 | 19,368 |
+| 财经 | 3,786 |
+| 餐饮 | 3,123 |
+| 旅行 | 3,013 |
+| 生活方式 | 2,991 |
+| 视频 | 2,712 |
+| 天气 | 2,601 |
+| 健康 | 2,207 |
+| 汽车 | 2,076 |
 
-## Exposure and CTR
+## 曝光与点击率
 
-- median article CTR: 0.0000;
-- 95th-percentile article CTR: 0.2143;
-- top 1% of exposed articles receive 32.52% of train exposures;
-- top 10% receive 90.54%.
+- 文章点击率中位数：0.0000；
+- 文章点击率第 95 百分位：0.2143；
+- 曝光量最高的 1% 文章获得训练集 32.52% 的曝光；
+- 曝光量最高的 10% 文章获得 90.54% 的曝光。
 
-These are empirical dataset-window statistics, not online product CTR.
+这些是数据集时间窗口内的经验统计值，并非在线产品点击率。
 
-## Train/dev overlap and cold start
+## 训练集/开发集重叠与冷启动
 
-- overlapping users: 5,943
-  (11.89% of dev users);
-- overlapping exposed articles: 2,886;
-- dev cold-article ratio: 46.25%.
+- 重叠用户数：5,943（占开发集用户的 11.89%）；
+- 重叠曝光文章数：2,886；
+- 开发集冷启动文章比例：46.25%。
 
-Because dev known-user coverage is low, collaborative retrieval is evaluated with a
-chronological holdout inside train. Official dev is reported as a separate cold-start
-content/category surface.
+由于开发集已知用户覆盖率较低，协同检索采用训练集内部的时间顺序留出法评估。
+官方开发集则作为独立的冷启动内容/类别评估场景报告。
 
-## Demo world versus model evidence
+## 演示世界与模型证据
 
-The serving demo contains 3 personas, 15 requests, and
-174 articles. The demo world is a deterministic serving slice and is not model evidence.
+在线演示包含 3 个用户画像、15 个请求和 174 篇文章。
+演示世界是确定性的在线服务切片，不属于模型证据。

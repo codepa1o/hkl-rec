@@ -92,3 +92,5 @@ Desktop.ini
 *.toc
 *.bbl
 *.blg
+.runtime/
+.superpowers/

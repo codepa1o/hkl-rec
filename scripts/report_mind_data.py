@@ -150,62 +150,61 @@ def render_markdown(summary: dict[str, Any]) -> str:
     top_categories = "\n".join(
         f"| {category} | {count:,} |" for category, count in content["top_categories"].items()
     )
-    return f"""# MIND-small Data Analysis
+    return f"""# MIND-small 数据分析
 
-Generated from normalized public MIND data. Fingerprint:
+本报告由规范化后的公开 MIND 数据生成。数据指纹：
 `{summary["normalized_fingerprint"]}`.
 
-## Scale
+## 规模
 
-| Split | Requests | Candidates | Positives | Users | Mean candidates/request | Mean positives/request |
+| 数据集 | 请求数 | 候选项数 | 正样本数 | 用户数 | 每请求平均候选项 | 每请求平均正样本 |
 |---|---:|---:|---:|---:|---:|---:|
-| Train | {train["requests"]:,} | {train["candidates"]:,} | {train["positives"]:,} | {train["users"]:,} | {train["mean_candidates_per_request"]:.2f} | {train["mean_positives_per_request"]:.2f} |
-| Dev | {dev["requests"]:,} | {dev["candidates"]:,} | {dev["positives"]:,} | {dev["users"]:,} | {dev["mean_candidates_per_request"]:.2f} | {dev["mean_positives_per_request"]:.2f} |
+| 训练集 | {train["requests"]:,} | {train["candidates"]:,} | {train["positives"]:,} | {train["users"]:,} | {train["mean_candidates_per_request"]:.2f} | {train["mean_positives_per_request"]:.2f} |
+| 开发集 | {dev["requests"]:,} | {dev["candidates"]:,} | {dev["positives"]:,} | {dev["users"]:,} | {dev["mean_candidates_per_request"]:.2f} | {dev["mean_positives_per_request"]:.2f} |
 
-Median history length is {train["median_history_length"]} for train and
-{dev["median_history_length"]} for dev. Every normalized candidate is a real exposure;
-no random unexposed negative is introduced.
+训练集的历史长度中位数为 {train["median_history_length"]}，开发集为
+{dev["median_history_length"]}。每个规范化候选项都是真实曝光项，
+没有引入随机的未曝光负样本。
 
-## Content
+## 内容
 
-- {content["unique_articles"]:,} unique articles;
-- {content["categories"]} categories and {content["subcategories"]} subcategories;
-- empty abstract ratio: {content["empty_abstract_ratio"]:.2%};
-- headline, category, and subcategory are present for every normalized article.
+- {content["unique_articles"]:,} 篇唯一文章；
+- {content["categories"]} 个类别和 {content["subcategories"]} 个子类别；
+- 空摘要比例：{content["empty_abstract_ratio"]:.2%}；
+- 每篇规范化文章都包含标题、类别和子类别。
 
-| Top category | Articles |
+| 主要类别 | 文章数 |
 |---|---:|
 {top_categories}
 
-## Exposure and CTR
+## 曝光与点击率
 
-- median article CTR: {exposure["ctr_quantiles"]["0.5"]:.4f};
-- 95th-percentile article CTR: {exposure["ctr_quantiles"]["0.95"]:.4f};
-- top 1% of exposed articles receive {exposure["top_1_percent_exposure_share"]:.2%} of train exposures;
-- top 10% receive {exposure["top_10_percent_exposure_share"]:.2%}.
+- 文章点击率中位数：{exposure["ctr_quantiles"]["0.5"]:.4f}；
+- 文章点击率第 95 百分位：{exposure["ctr_quantiles"]["0.95"]:.4f}；
+- 曝光量最高的 1% 文章获得训练集 {exposure["top_1_percent_exposure_share"]:.2%} 的曝光；
+- 曝光量最高的 10% 文章获得 {exposure["top_10_percent_exposure_share"]:.2%} 的曝光。
 
-These are empirical dataset-window statistics, not online product CTR.
+这些是数据集时间窗口内的经验统计值，并非在线产品点击率。
 
-## Train/dev overlap and cold start
+## 训练集/开发集重叠与冷启动
 
-- overlapping users: {overlap["train_dev_user_overlap"]:,}
-  ({overlap["dev_known_user_ratio"]:.2%} of dev users);
-- overlapping exposed articles: {overlap["train_dev_article_overlap"]:,};
-- dev cold-article ratio: {overlap["dev_cold_article_ratio"]:.2%}.
+- 重叠用户数：{overlap["train_dev_user_overlap"]:,}
+  （占开发集用户的 {overlap["dev_known_user_ratio"]:.2%}）；
+- 重叠曝光文章数：{overlap["train_dev_article_overlap"]:,}；
+- 开发集冷启动文章比例：{overlap["dev_cold_article_ratio"]:.2%}。
 
-Because dev known-user coverage is low, collaborative retrieval is evaluated with a
-chronological holdout inside train. Official dev is reported as a separate cold-start
-content/category surface.
+由于开发集已知用户覆盖率较低，协同检索采用训练集内部的时间顺序留出法评估。
+官方开发集则作为独立的冷启动内容/类别评估场景报告。
 
-## Demo world versus model evidence
+## 演示世界与模型证据
 
-The serving demo contains {demo["personas"]} personas, {demo["requests"]} requests, and
-{demo["articles"]} articles. {demo["difference_from_full_data"]}
+在线演示包含 {demo["personas"]} 个用户画像、{demo["requests"]} 个请求和
+{demo["articles"]} 篇文章。演示世界是确定性的在线服务切片，不属于模型证据。
 """
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate aggregate MIND data reports.")
+    parser = argparse.ArgumentParser(description="生成 MIND 数据汇总报告。")
     parser.add_argument(
         "--normalized-dir",
         type=Path,

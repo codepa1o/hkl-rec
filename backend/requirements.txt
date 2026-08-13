@@ -2,8 +2,10 @@
 # Bump deliberately; rerun the smoke test after each upgrade.
 fastapi==0.115.0
 uvicorn==0.34.0
+python-dotenv==1.2.2
 pydantic==2.12.5
 pymysql==1.1.3
+cryptography>=44,<47
 DBUtils>=3.1,<4
 prometheus-client>=0.21,<1
 confluent-kafka>=2.6,<3

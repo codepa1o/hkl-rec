@@ -1,1 +1,1 @@
-"""Pydantic schemas for the NewsIntentRec backend."""
+"""NewsIntentRec 后端的 Pydantic 数据模型。"""

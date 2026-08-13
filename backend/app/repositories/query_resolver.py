@@ -27,12 +27,11 @@ def _match_display_query(
     *,
     exact_only: bool = False,
 ) -> str | None:
-    """Try to resolve ``text`` against ``query_topic_map.display_query``.
+    """尝试使用 ``query_topic_map.display_query`` 解析 ``text``。
 
-    Runs three SQL passes (exact case-insensitive, prefix, contains) and
-    returns the first non-empty hit, ordered deterministically by the row
-    count of each candidate ``query_key`` (a proxy for "best/widest match")
-    then ``query_key`` ascending.
+    依次执行三轮 SQL（不区分大小写的精确匹配、前缀匹配、包含匹配），
+    返回第一组非空结果。结果先按各候选 ``query_key`` 的记录数
+    （作为“最佳/最宽匹配”的近似值）确定性排序，再按 ``query_key`` 升序排序。
     """
     like_prefix = f"{text.lower()}%"
     like_contains = f"%{text.lower()}%"
@@ -68,12 +67,11 @@ def _match_topic_display_name(
     *,
     exact_only: bool = False,
 ) -> str | None:
-    """Try to resolve ``text`` via ``topic.display_name`` → best query_key.
+    """尝试通过 ``topic.display_name`` 将 ``text`` 解析为最佳 query_key。
 
-    Same three-stage chain (exact → prefix → contains). At each stage we
-    gather matching ``topic_id`` values, then pick the ``query_key`` from
-    ``query_topic_map`` with the highest ``MAX(score)`` covering any of
-    those topics.
+    同样依次执行精确、前缀和包含三阶段匹配。每个阶段先收集匹配的
+    ``topic_id``，再从 ``query_topic_map`` 中选择覆盖这些主题且
+    ``MAX(score)`` 最高的 ``query_key``。
     """
     like_prefix = f"{text.lower()}%"
     like_contains = f"%{text.lower()}%"
@@ -281,16 +279,16 @@ def resolve_query_key(
     query_key: str | None,
     query_text: str | None,
 ) -> str:
-    """Resolve user-typed search input to a numeric ``query_key``.
+    """将用户输入的搜索文本解析为数值型 ``query_key``。
 
-    Resolution chain:
+    解析流程：
 
-    1. If ``query_key`` already looks numeric, normalize and return.
-    2. Otherwise pick the candidate text (``query_text`` first, else
-       ``query_key``) and try matching ``query_topic_map.display_query``.
-    3. Fall back to matching ``topic.display_name``.
-    4. Fall back to real article headline/abstract lexical matches.
-    5. If nothing matches, raise :class:`UnresolvedQueryError`.
+    1. 若 ``query_key`` 已是数值形式，则规范化后直接返回。
+    2. 否则选择候选文本（优先 ``query_text``，其次 ``query_key``），
+       尝试匹配 ``query_topic_map.display_query``。
+    3. 回退到匹配 ``topic.display_name``。
+    4. 再回退到真实文章标题/摘要的词法匹配。
+    5. 若均未匹配，则抛出 :class:`UnresolvedQueryError`。
     """
     return resolve_search_query(
         connection,

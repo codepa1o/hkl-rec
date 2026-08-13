@@ -26,7 +26,7 @@ export default function TopicWeightChart({ topicWeights, limit = 8 }: Props) {
         .slice(0, limit)
         .map((item) => ({
           topicId: item.topic_id,
-          label: `T${item.topic_id}`,
+          label: `主题${item.topic_id}`,
           weight: item.weight,
         })),
     [topicWeights, limit],
@@ -105,11 +105,11 @@ export default function TopicWeightChart({ topicWeights, limit = 8 }: Props) {
   }, [chartData]);
 
   if (chartData.length === 0) {
-    return <div className="zr-topic-chart__empty">No topic signal yet</div>;
+    return <div className="zr-topic-chart__empty">暂无主题信号</div>;
   }
 
   return (
-    <div className="zr-topic-chart" aria-label="D3 topic weight bar chart">
+    <div className="zr-topic-chart" aria-label="主题权重柱状图">
       <svg ref={svgRef} role="img" />
     </div>
   );

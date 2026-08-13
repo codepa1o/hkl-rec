@@ -1,6 +1,8 @@
+import { Activity, BookOpen, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getDebugProfile } from "../api/client";
 import type { DebugProfileResponse } from "../api/types";
+import { localizeInterfaceError } from "../localization";
 import TopicWeightChart from "./TopicWeightChart";
 
 interface Props {
@@ -18,17 +20,14 @@ export default function ProfileDebugPanel({ userId, refreshTick }: Props) {
     setLoading(true);
     setError(null);
     getDebugProfile(userId)
-      .then((res) => {
-        if (cancelled) return;
-        setData(res);
+      .then((response) => {
+        if (!cancelled) setData(response);
       })
-      .catch((err: Error) => {
-        if (cancelled) return;
-        setError(err.message);
+      .catch((requestError: Error) => {
+        if (!cancelled) setError(requestError.message);
       })
       .finally(() => {
-        if (cancelled) return;
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -36,63 +35,61 @@ export default function ProfileDebugPanel({ userId, refreshTick }: Props) {
   }, [userId, refreshTick]);
 
   if (loading && !data) {
-    return <div className="zr-status">Loading profile...</div>;
+    return <div className="zr-rail-card zr-status">正在整理你的兴趣…</div>;
   }
   if (error) {
-    return <div className="zr-status">Profile: {error}</div>;
+    return (
+      <div className="zr-rail-card zr-status">
+        兴趣画像加载失败：{localizeInterfaceError(error)}
+      </div>
+    );
   }
   if (!data) return null;
 
   const sortedWeights = [...data.topic_weights].sort((a, b) => b.weight - a.weight);
 
   return (
-    <div className="zr-rail-card">
-      <div className="zr-rail-card__title">Profile Debug</div>
-      <div className="zr-profile-debug__row">
-        <span>Behavior</span>
-        <span className="zr-profile-debug__weight">{data.behavior_score.toFixed(1)}</span>
-      </div>
-      <div className="zr-profile-debug__row zr-profile-debug__row--muted">
-        <span>Cold start</span>
-        <span>{data.cold_start_seed_key}</span>
-      </div>
-      <div className="zr-profile-debug__row zr-profile-debug__row--muted">
-        <span>Vector keys</span>
-        <span>{data.vector_summary?.vector_key_count ?? sortedWeights.length}</span>
+    <section className="zr-rail-card zr-interest-card" aria-labelledby="interest-title">
+      <div className="zr-rail-card__heading">
+        <div>
+          <span className="zr-eyebrow">个性化推荐</span>
+          <h2 id="interest-title">你的兴趣</h2>
+        </div>
+        <Sparkles size={18} aria-hidden="true" />
       </div>
 
-      <div style={{ marginTop: 8 }}>
-        <div className="zr-profile-debug__row zr-profile-debug__row--muted" style={{ fontWeight: 600 }}>
-          <span>Topic Weights</span>
-        </div>
-        <TopicWeightChart topicWeights={sortedWeights} />
-        {sortedWeights.slice(0, 8).map((tw) => (
-          <div key={tw.topic_id} className="zr-profile-debug__row">
-            <span>Topic {tw.topic_id}</span>
-            <span className="zr-profile-debug__weight">{tw.weight.toFixed(2)}</span>
-          </div>
-        ))}
-        {sortedWeights.length === 0 && (
-          <div className="zr-profile-debug__row zr-profile-debug__row--muted">No weights yet</div>
-        )}
+      <div className="zr-interest-score">
+        <span className="zr-interest-score__icon">
+          <Activity size={17} />
+        </span>
+        <span>
+          <small>兴趣活跃度</small>
+          <strong>{data.behavior_score.toFixed(1)}</strong>
+        </span>
+      </div>
+
+      <div className="zr-interest-section">
+        <div className="zr-interest-section__title">关注主题</div>
+        <TopicWeightChart topicWeights={sortedWeights} limit={5} />
+        {sortedWeights.length === 0 && <p className="zr-muted-copy">阅读后将逐渐形成兴趣画像。</p>}
       </div>
 
       {data.recent_clicked_articles.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div className="zr-profile-debug__row zr-profile-debug__row--muted" style={{ fontWeight: 600 }}>
-            <span>Recent Clicks</span>
+        <div className="zr-interest-section">
+          <div className="zr-interest-section__title">
+            <BookOpen size={15} />
+            最近阅读
           </div>
-          {data.recent_clicked_articles.slice(0, 5).map((rc, i) => (
-            <div
-              key={`${rc.article_id}-${i}`}
-              className="zr-profile-debug__row zr-profile-debug__row--muted"
-            >
-              <span>Article {rc.article_id}</span>
-              <span>{new Date(rc.click_ts * 1000).toLocaleDateString()}</span>
-            </div>
-          ))}
+          <div className="zr-recent-list">
+            {data.recent_clicked_articles.slice(0, 4).map((article, index) => (
+              <div key={`${article.article_id}-${index}`} className="zr-recent-row">
+                <span>文章 {article.article_id}</span>
+                <time>{new Date(article.click_ts * 1000).toLocaleDateString("zh-CN")}</time>
+              </div>
+            ))}
+          </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }

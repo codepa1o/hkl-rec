@@ -12,11 +12,11 @@ from backend.app.search_retrieval import HybridHit, HybridSearchResult
 
 
 class FakeCursor:
-    """Tiny SQL cursor stub.
+    """轻量 SQL 游标桩。
 
-    A test supplies a sequence of canned result sets (``script``); each call
-    to ``execute`` pops the next set and ``fetchone``/``fetchall`` reads it.
-    A ``predicate`` optionally inspects each ``execute`` call.
+    测试提供一系列预设结果集（``script``）；每次调用 ``execute`` 都会取出
+    下一组结果，再由 ``fetchone``/``fetchall`` 读取。可选的 ``predicate``
+    用于检查每次 ``execute`` 调用。
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class FakeHybridIndex:
         return self.result
 
 
-# ── is_numeric_query_key ────────────────────────────────────────────────────
+# ── is_numeric_query_key 测试 ───────────────────────────────────────────────
 
 
 def test_is_numeric_query_key_accepts_space_separated_ints():
@@ -87,7 +87,7 @@ def test_is_numeric_query_key_rejects_text_and_blank():
     assert is_numeric_query_key("248 abc") is False
 
 
-# ── numeric pass-through ────────────────────────────────────────────────────
+# ── 数值直接传递 ───────────────────────────────────────────────────────────
 
 
 def test_resolve_passes_numeric_query_key_through_without_db_lookup():
@@ -103,7 +103,7 @@ def test_resolve_normalizes_numeric_query_key_whitespace():
     assert resolved == "248 12125"
 
 
-# ── display_query exact / prefix / contains ────────────────────────────────
+# ── display_query 精确/前缀/包含匹配 ───────────────────────────────────────
 
 
 def test_resolve_matches_display_query_exact():
@@ -118,8 +118,8 @@ def test_resolve_matches_display_query_exact():
 def test_resolve_matches_display_query_prefix_after_exact_miss():
     connection = FakeConnection(
         script=[
-            [],  # exact display_query miss
-            [{"query_key": "300", "row_count": 2}],  # prefix hit
+            [],  # display_query 精确匹配未命中
+            [{"query_key": "300", "row_count": 2}],  # 前缀匹配命中
         ]
     )
     resolved = resolve_query_key(connection, None, query_text="Fala")
@@ -140,17 +140,17 @@ def test_resolve_matches_display_query_contains_after_prefix_miss():
     assert connection._cursor.executed[2][1] == ("%alaf%",)
 
 
-# ── topic.display_name fallback chain ──────────────────────────────────────
+# ── topic.display_name 回退链 ──────────────────────────────────────────────
 
 
 def test_resolve_falls_back_to_topic_display_name_exact():
     connection = FakeConnection(
         script=[
-            [],  # display_query exact
-            [],  # display_query prefix
-            [],  # display_query contains
-            [{"topic_id": 9}],  # topic.display_name exact
-            [{"query_key": "555", "best_score": 0.9}],  # topic → query_key
+            [],  # display_query 精确匹配
+            [],  # display_query 前缀匹配
+            [],  # display_query 包含匹配
+            [{"topic_id": 9}],  # topic.display_name 精确匹配
+            [{"query_key": "555", "best_score": 0.9}],  # topic 映射到 query_key
         ]
     )
     resolved = resolve_query_key(connection, None, query_text="Falafel")
@@ -166,9 +166,9 @@ def test_resolve_uses_topic_display_name_contains_match():
             [],
             [],
             [],
-            [],  # topic exact miss
-            [],  # topic prefix miss
-            [{"topic_id": 12}],  # topic contains hit
+            [],  # topic 精确匹配未命中
+            [],  # topic 前缀匹配未命中
+            [{"topic_id": 12}],  # topic 包含匹配命中
             [{"query_key": "888", "best_score": 0.5}],
         ]
     )
@@ -176,7 +176,7 @@ def test_resolve_uses_topic_display_name_contains_match():
     assert resolved == "888"
 
 
-# ── article headline/abstract fallback ─────────────────────────────────────
+# ── 文章标题/摘要回退 ──────────────────────────────────────────────────────
 
 
 def test_resolve_falls_back_to_real_article_text():
@@ -209,7 +209,7 @@ def test_resolve_does_not_lexically_match_short_text():
     assert len(connection._cursor.executed) == 6
 
 
-# ── unresolved → 422 path ──────────────────────────────────────────────────
+# ── 无法解析时的 422 路径 ──────────────────────────────────────────────────
 
 
 def test_resolve_raises_when_nothing_matches():
@@ -225,11 +225,11 @@ def test_resolve_raises_when_topic_match_has_no_query_key():
             [],
             [],
             [],
-            [{"topic_id": 999}],  # topic exact hit
-            [],  # but no query_topic_map row covers it
-            [],  # prefix
-            [],  # contains
-            [],  # article text
+            [{"topic_id": 999}],  # topic 精确匹配命中
+            [],  # 但没有 query_topic_map 记录覆盖该主题
+            [],  # 前缀匹配
+            [],  # 包含匹配
+            [],  # 文章文本匹配
         ]
     )
     with pytest.raises(UnresolvedQueryError):
@@ -243,7 +243,7 @@ def test_resolve_raises_when_inputs_are_blank():
     assert connection._cursor.executed == []
 
 
-# ── input precedence: query_text wins over a non-numeric query_key ─────────
+# ── 输入优先级：query_text 优先于非数值 query_key ─────────────────────────
 
 
 def test_resolve_prefers_query_text_when_query_key_is_text():
@@ -260,12 +260,12 @@ def test_resolve_uses_query_key_as_text_when_query_text_absent():
     assert connection._cursor.executed[0][1] == ("Falafel",)
 
 
-# ── tiebreaker: deterministic ordering ─────────────────────────────────────
+# ── 平分决胜规则：确定性排序 ───────────────────────────────────────────────
 
 
 def test_resolve_display_query_tiebreaker_picks_lowest_query_key():
-    # The resolver only LIMIT-1s, so the SQL ORDER BY clause is what
-    # enforces tiebreakers. Verify the clause appears in the executed SQL.
+    # 解析器只取 LIMIT 1，因此由 SQL ORDER BY 子句执行平分决胜规则。
+    # 验证执行的 SQL 中包含该子句。
     connection = FakeConnection(script=[[{"query_key": "100", "row_count": 5}]])
     resolve_query_key(connection, None, query_text="Falafel")
     sql, _ = connection._cursor.executed[0]

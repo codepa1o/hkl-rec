@@ -14,7 +14,7 @@ fi
 if [[ -z "${NEWSREC_KAFKA_BOOTSTRAP_SERVERS:-}" && -n "${ZHIHUREC_KAFKA_BOOTSTRAP_SERVERS:-}" ]]; then
   echo "deprecated environment variable ZHIHUREC_KAFKA_BOOTSTRAP_SERVERS; use NEWSREC_KAFKA_BOOTSTRAP_SERVERS" >&2
 fi
-database_url="${NEWSREC_DATABASE_URL:-${ZHIHUREC_DATABASE_URL:-mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo}}"
+database_url="${NEWSREC_DATABASE_URL:-${ZHIHUREC_DATABASE_URL:-mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo}}"
 backend_port="${NEWSREC_BACKEND_PORT:-${ZHIHUREC_BACKEND_PORT:-8000}}"
 product_frontend_port="${NEWSREC_PRODUCT_FRONTEND_PORT:-${ZHIHUREC_PRODUCT_FRONTEND_PORT:-5174}}"
 smoke_test=0
@@ -27,10 +27,10 @@ declare -a started_pids=()
 usage() {
   cat <<'EOF'
 Usage: scripts/init_local.sh [options]
-  --smoke-test          Verify the stack and stop child processes.
-  --product-frontend    Start the React/Vite frontend.
-  --with-kafka          Start Kafka, profile consumer, and outbox publisher.
-  --event-mode MODE     kafka_dual_write or kafka_async (default dual write).
+  --smoke-test          验证整个技术栈并停止子进程。
+  --product-frontend    启动 React/Vite 前端。
+  --with-kafka          启动 Kafka、画像消费者和 Outbox 发布器。
+  --event-mode MODE     kafka_dual_write 或 kafka_async（默认双写）。
 EOF
 }
 

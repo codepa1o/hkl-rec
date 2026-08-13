@@ -15,10 +15,9 @@ PY = sys.executable
 
 @pytest.fixture
 def unwired_client() -> TestClient:
-    """TestClient forced onto UnwiredRuntimeRepository.
+    """强制使用 UnwiredRuntimeRepository 的 TestClient。
 
-    Bypasses any configured database URL so the test
-    is hermetic regardless of environment.
+    绕过所有已配置的数据库 URL，使测试不受环境影响并保持封闭性。
     """
     from backend.app.config import Settings, get_settings
     from backend.app.dependencies import (
@@ -60,7 +59,7 @@ def _database_url() -> str:
 
 @pytest.fixture
 def mysql_demo_user() -> int:
-    """Reset the configured first demo persona so mutable state is predictable."""
+    """重置已配置的第一个演示画像，使可变状态保持可预测。"""
     if not _database_url():
         pytest.skip("NEWSREC_DATABASE_URL not set")
     subprocess.run(
@@ -80,9 +79,9 @@ def mysql_demo_user() -> int:
 
 @pytest.fixture
 def mysql_client() -> TestClient:
-    """TestClient backed by the real MysqlRuntimeRepository.
+    """由真实 MysqlRuntimeRepository 支持的 TestClient。
 
-    Requires NEWSREC_DATABASE_URL to be set when the test process starts.
+    测试进程启动时必须设置 NEWSREC_DATABASE_URL。
     """
     if not _database_url():
         pytest.skip("NEWSREC_DATABASE_URL not set")

@@ -13,7 +13,7 @@ from backend.app.evaluate import (
     time_split,
 )
 
-# ---------------------------- recall_at_k ----------------------------
+# ---------------------------- recall_at_k 测试 ----------------------------
 
 
 def test_recall_returns_zero_when_relevant_is_empty():
@@ -37,7 +37,7 @@ def test_recall_single_relevant_miss_at_rank_k_plus_one():
 
 
 def test_recall_multiple_relevant_partial_hit():
-    # 2 of 3 relevant items in top 5
+    # 3 个相关项中有 2 个进入前 5 名
     assert recall_at_k([1, 2, 3, 4, 5], [1, 3, 99], k=5) == pytest.approx(2 / 3)
 
 
@@ -45,7 +45,7 @@ def test_recall_k_larger_than_predicted_uses_all_predicted():
     assert recall_at_k([1, 2], [1, 2, 3], k=10) == pytest.approx(2 / 3)
 
 
-# ---------------------------- ndcg_at_k ----------------------------
+# ---------------------------- ndcg_at_k 测试 ----------------------------
 
 
 def test_ndcg_single_relevant_at_rank_one_is_one():
@@ -53,7 +53,7 @@ def test_ndcg_single_relevant_at_rank_one_is_one():
 
 
 def test_ndcg_single_relevant_at_rank_two_is_log_based():
-    # rank=2 -> DCG = 1/log2(3), IDCG = 1/log2(2) = 1
+    # 排名为 2 时：DCG = 1/log2(3)，IDCG = 1/log2(2) = 1
     expected = 1.0 / math.log2(3)
     assert ndcg_at_k([9, 5, 3], [5], k=3) == pytest.approx(expected)
 
@@ -63,7 +63,7 @@ def test_ndcg_single_relevant_outside_top_k_is_zero():
 
 
 def test_ndcg_multiple_relevant_in_ideal_order_is_one():
-    # All 3 relevants take the top 3 slots in ideal order -> NDCG = 1.0
+    # 3 个相关项按理想顺序占据前 3 位时，NDCG = 1.0
     assert ndcg_at_k([1, 2, 3, 99, 100], [1, 2, 3], k=5) == pytest.approx(1.0)
 
 
@@ -87,7 +87,7 @@ def test_mrr_at_k_uses_first_relevant_rank():
     assert mrr_at_k([9, 8, 3, 2], [2, 3], k=2) == 0.0
 
 
-# ---------------------------- time_split ----------------------------
+# ---------------------------- time_split 测试 ----------------------------
 
 
 def test_time_split_80_20_on_monotonic_ts():
@@ -101,7 +101,7 @@ def test_time_split_80_20_on_monotonic_ts():
     assert s.train[-1]["n"] == 80
     assert s.test[0]["n"] == 81
     assert s.split_ts_train_val == 80
-    assert s.split_ts_val_test == 80  # val empty -> mirrors train boundary
+    assert s.split_ts_val_test == 80  # 验证集为空，沿用训练集边界
 
 
 def test_time_split_60_20_20_with_val():
@@ -130,7 +130,7 @@ def test_time_split_sorts_unordered_input():
 
 def test_time_split_rejects_invalid_ratios():
     with pytest.raises(ValueError):
-        time_split([], train_ratio=0.6, val_ratio=0.5)  # sum > 1.0
+        time_split([], train_ratio=0.6, val_ratio=0.5)  # 比例之和大于 1.0
     with pytest.raises(ValueError):
         time_split([], train_ratio=-0.1)
 

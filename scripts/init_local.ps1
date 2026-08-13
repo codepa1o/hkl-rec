@@ -1,8 +1,8 @@
-<# One-shot local bootstrap for the NewsIntentRec demo environment. #>
+<# NewsIntentRec 演示环境的一键式本地初始化脚本。 #>
 [CmdletBinding()]
 param(
     [string]$Python = 'C:\ProgramData\anaconda3\python.exe',
-    [string]$DatabaseUrl = 'mysql+pymysql://root:root@localhost:3306/newsrec_demo',
+    [string]$DatabaseUrl = 'mysql+pymysql://root:root@localhost:3307/newsrec_demo',
     [int]$BackendPort = 8000,
     [int]$ProductFrontendPort = 5174,
     [int]$MysqlHealthTimeoutSeconds = 120,
@@ -18,7 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $PSBoundParameters.ContainsKey('DatabaseUrl')) {
-    $DatabaseUrl = 'mysql+pymysql://root:root@localhost:3306/newsrec_demo'
+    $DatabaseUrl = 'mysql+pymysql://root:root@localhost:3307/newsrec_demo'
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path

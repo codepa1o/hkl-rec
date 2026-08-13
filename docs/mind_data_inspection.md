@@ -1,45 +1,42 @@
-# MIND-small Data Inspection
+# MIND-small 数据检查
 
-Verified on 2026-07-21 with `scripts/inspect_mind.py`.
+已于 2026-07-21 使用 `scripts/inspect_mind.py` 完成验证。
 
-The official Azure Blob URLs no longer allow public access, and the download currently
-linked by the official MIND page requires gated Hugging Face access. With explicit user
-approval, this inspection used the public `huyva/MIND-small` mirror. The mirror exposes
-the original `news.tsv` and `behaviors.tsv` files. The local download manifest records
-the source URLs and SHA256 checksums; raw files and manifests remain ignored.
+Azure Blob 官方 URL 已不再允许公开访问，MIND 官方页面当前链接的下载入口需要
+Hugging Face 授权。经用户明确批准，本次检查使用公开镜像 `huyva/MIND-small`。
+该镜像提供原始 `news.tsv` 和 `behaviors.tsv` 文件。本地下载清单会记录来源 URL
+与 SHA256 校验和；原始文件和清单仍被 Git 忽略。
 
-## Scale and quality
+## 规模与质量
 
-| Split | News | Requests | Candidates | Positives | Users |
+| 数据集 | 新闻数 | 请求数 | 候选项数 | 正样本数 | 用户数 |
 |---|---:|---:|---:|---:|---:|
-| Train | 51,282 | 156,965 | 5,843,444 | 236,344 | 50,000 |
-| Dev | 42,416 | 73,152 | 2,740,998 | 111,383 | 50,000 |
+| 训练集 | 51,282 | 156,965 | 5,843,444 | 236,344 | 50,000 |
+| 开发集 | 42,416 | 73,152 | 2,740,998 | 111,383 | 50,000 |
 
-- All news, user, timestamp, and candidate-label formats passed validation.
-- Candidate and history metadata coverage is 100% in both splits.
-- Empty abstracts: 5.20% train and 4.76% dev.
-- Empty title, category, subcategory, and URL rates are 0%.
-- Median candidates per request: 24 train and 23 dev.
-- Median positives per request: 1 in both splits; multi-positive requests are retained.
-- Raw impression IDs overlap across splits, so canonical request IDs must include the
-  split namespace: `mind:{split}:{impression_id}`.
+- 所有新闻、用户、时间戳和候选项标签格式均通过验证。
+- 两个数据集中的候选项与历史元数据覆盖率均为 100%。
+- 空摘要比例：训练集 5.20%，开发集 4.76%。
+- 空标题、类别、子类别和 URL 比例均为 0%。
+- 每请求候选项中位数：训练集 24，开发集 23。
+- 两个数据集的每请求正样本中位数均为 1；多正样本请求会保留。
+- 原始曝光 ID 在不同数据集间存在重叠，因此规范请求 ID 必须包含数据集命名空间：
+  `mind:{split}:{impression_id}`。
 
-## ALS evaluation decision
+## ALS 评估决策
 
-Only 5,943 users overlap between train and dev, which is 11.89% of each split. That is
-not sufficient to present the official dev set as a general known-user collaborative
-retrieval benchmark.
+训练集与开发集仅有 5,943 个重叠用户，占各数据集的 11.89%。
+这一覆盖率不足以将官方开发集作为通用的已知用户协同检索基准。
 
-The migration will therefore:
+因此迁移流程将：
 
-1. evaluate known-user ALS with a request-level chronological holdout inside train;
-2. keep official dev as a separate cold-start/content/category evaluation surface;
-3. report known-user coverage explicitly;
-4. never return a success-shaped default collaborative vector for unknown users.
+1. 在训练集内部采用请求级时间顺序留出法评估已知用户 ALS；
+2. 将官方开发集保留为独立的冷启动/内容/类别评估场景；
+3. 明确报告已知用户覆盖率；
+4. 对未知用户绝不返回伪装成成功结果的默认协同向量。
 
-## Timestamp semantics
+## 时间戳语义
 
-Train covers 2019-11-09 through 2019-11-14 UTC, and dev covers 2019-11-15 UTC. File
-order is not chronological, so normalization must sort by parsed timestamp and stable
-request/candidate tie-breakers. Article freshness uses the first selected impression in
-the normalized data window, not publication time.
+训练集覆盖 2019-11-09 至 2019-11-14（UTC），开发集覆盖 2019-11-15（UTC）。
+文件顺序并非时间顺序，因此规范化必须按解析后的时间戳排序，并使用稳定的请求/候选项
+决胜规则。文章新鲜度使用规范化数据窗口内首次选中的曝光时间，而非发布时间。

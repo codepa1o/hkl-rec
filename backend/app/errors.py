@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 class RepositoryNotReadyError(RuntimeError):
-    """Raised when an online operation has no configured runtime repository."""
+    """在线操作没有配置运行时仓储时抛出。"""
 
     def __init__(self, operation: str) -> None:
         super().__init__(
@@ -13,7 +13,7 @@ class RepositoryNotReadyError(RuntimeError):
 
 
 class UnresolvedQueryError(ValueError):
-    """Raised when a search input cannot be mapped to a known query_key."""
+    """搜索输入无法映射到已知 query_key 时抛出。"""
 
     def __init__(self, query_input: str) -> None:
         super().__init__("No matching query found. Try a suggested query.")
@@ -21,7 +21,7 @@ class UnresolvedQueryError(ValueError):
 
 
 class SearchIndexNotReadyError(RuntimeError):
-    """Raised when hybrid search is configured without compatible artifacts."""
+    """启用混合搜索但缺少兼容制品时抛出。"""
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"Hybrid search index is unavailable: {detail}")
@@ -29,4 +29,4 @@ class SearchIndexNotReadyError(RuntimeError):
 
 
 class IdempotencyConflictError(ValueError):
-    """Raised when one event ID is reused for different semantic payloads."""
+    """同一事件 ID 被用于语义不同的载荷时抛出。"""

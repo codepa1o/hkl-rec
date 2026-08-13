@@ -222,7 +222,7 @@ def load_search_documents(path: Path) -> list[SearchDocument]:
 
 
 class LexicalBaselineIndex:
-    """Offline equivalent of the pre-hybrid MySQL free-text search path."""
+    """混合搜索启用前 MySQL 自由文本搜索路径的离线等价实现。"""
 
     def __init__(self, documents: list[SearchDocument]) -> None:
         self._documents = tuple(documents)

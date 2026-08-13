@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeedPage from "./FeedPage";
 import { getFeed, trackEvent } from "../api/client";
@@ -114,6 +114,17 @@ describe("FeedPage impressions", () => {
         request_id: "feed-request-1",
       }),
     );
+  });
+
+  it("只呈现真实的个性化信息流，不展示未接入后端的伪排序", async () => {
+    render(<FeedPage />);
+
+    expect(screen.getByRole("heading", { name: "为你推荐" })).toBeInTheDocument();
+    expect(screen.getByText("根据你的阅读兴趣持续更新")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "最佳" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "热门" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "最新" })).not.toBeInTheDocument();
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledTimes(2));
   });
 
   it("tracks the same articles again for a different persona", async () => {

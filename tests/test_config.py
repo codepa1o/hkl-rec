@@ -5,6 +5,33 @@ import logging
 from pathlib import Path
 
 
+def test_project_dotenv_is_loaded_automatically(monkeypatch, tmp_path: Path):
+    from backend.app import config
+
+    monkeypatch.setattr(
+        config,
+        "_DOTENV_VALUES",
+        {
+            "NEWSREC_DATABASE_URL": "mysql://from-dotenv",
+            "NEWSREC_SEARCH_RETRIEVAL_MODE": "lexical_v1",
+        },
+        raising=False,
+    )
+    monkeypatch.delenv("NEWSREC_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ZHIHUREC_DATABASE_URL", raising=False)
+    monkeypatch.delenv("NEWSREC_SEARCH_RETRIEVAL_MODE", raising=False)
+    monkeypatch.delenv("ZHIHUREC_SEARCH_RETRIEVAL_MODE", raising=False)
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+    finally:
+        config.get_settings.cache_clear()
+
+    assert settings.database_url == "mysql://from-dotenv"
+    assert settings.search_retrieval_mode == "lexical_v1"
+
+
 def test_newsrec_environment_takes_precedence_and_reads_demo_user(
     monkeypatch,
     tmp_path: Path,

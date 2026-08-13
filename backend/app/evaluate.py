@@ -1,9 +1,8 @@
-"""Offline ranking metrics for V1.
+"""V1 的离线排序指标。
 
-Pure functions only - no DB, no HTTP, no settings. Drivers in scripts/ are
-responsible for collecting per-event prediction / ground-truth pairs and
-feeding them to these functions. Tested in tests/test_evaluate.py against
-the default (non-mysql) pytest layer.
+这里只包含纯函数，不访问数据库、HTTP 或配置。scripts/ 中的驱动脚本负责
+收集逐事件的预测值/真实值对，并将其传入这些函数。相关测试位于
+tests/test_evaluate.py，使用默认的非 MySQL pytest 测试层。
 """
 
 from __future__ import annotations
@@ -16,12 +15,11 @@ from typing import Any
 
 @dataclass(frozen=True)
 class TimeSplit:
-    """Result of a chronological train / val / test split.
+    """按时间顺序划分训练集、验证集和测试集的结果。
 
-    `split_ts_train_val` is the event_ts of the last train event, and
-    `split_ts_val_test` is the event_ts of the last val event (falling back
-    to the train boundary when val is empty). Both are None when the input
-    is empty.
+    `split_ts_train_val` 是最后一个训练事件的 event_ts；`split_ts_val_test`
+    是最后一个验证事件的 event_ts（验证集为空时回退到训练集边界）。
+    输入为空时二者均为 None。
     """
 
     train: list[dict[str, Any]]
@@ -38,10 +36,10 @@ def time_split(
     val_ratio: float = 0.0,
     ts_key: str = "event_ts",
 ) -> TimeSplit:
-    """Sort events by ts_key, then cut by cumulative-count fraction.
+    """按 ts_key 对事件排序，再依据累计数量比例切分。
 
-    With val_ratio == 0.0 the val list is empty and the split degenerates
-    to train / test only. Ties on ts_key preserve sorted-stable order.
+    当 val_ratio == 0.0 时验证集为空，切分退化为仅包含训练集和测试集。
+    ts_key 相同时保持稳定排序顺序。
     """
     if train_ratio < 0 or val_ratio < 0 or train_ratio + val_ratio > 1.0:
         raise ValueError("ratios must be in [0,1] and sum to <= 1.0")
@@ -66,11 +64,11 @@ def time_split(
 
 
 def recall_at_k(predicted: Sequence[int], relevant: Iterable[int], k: int) -> float:
-    """|relevant intersect predicted[:k]| / |relevant|.
+    """计算 |relevant 与 predicted[:k] 的交集| / |relevant|。
 
-    Returns 0.0 when k <= 0 or `relevant` is empty. For single-relevant-per-query
-    evaluation callers should pass `relevant=[article_id]`; the returned value is
-    then 1.0 if hit, 0.0 otherwise, and per-query averages give Hit Rate @K.
+    当 k <= 0 或 `relevant` 为空时返回 0.0。对于每个查询只有一个相关项的评估，
+    调用方应传入 `relevant=[article_id]`；命中时返回 1.0，否则返回 0.0，
+    对各查询结果取平均即可得到 Hit Rate@K。
     """
     if k <= 0:
         return 0.0
@@ -83,12 +81,11 @@ def recall_at_k(predicted: Sequence[int], relevant: Iterable[int], k: int) -> fl
 
 
 def ndcg_at_k(predicted: Sequence[int], relevant: Iterable[int], k: int) -> float:
-    """Standard binary-gain NDCG@k.
+    """计算标准二元增益 NDCG@k。
 
-    DCG = sum_{i=1..k} rel_i / log2(i + 1) over 1-indexed positions.
-    IDCG = sum_{i=1..min(|relevant|, k)} 1 / log2(i + 1).
-    Returns 0.0 when k <= 0, `relevant` is empty, or no relevant items
-    appear in `predicted[:k]`.
+    对从 1 开始计数的位置，DCG = sum_{i=1..k} rel_i / log2(i + 1)。
+    IDCG = sum_{i=1..min(|relevant|, k)} 1 / log2(i + 1)。
+    当 k <= 0、`relevant` 为空，或 `predicted[:k]` 中没有相关项时返回 0.0。
     """
     if k <= 0:
         return 0.0

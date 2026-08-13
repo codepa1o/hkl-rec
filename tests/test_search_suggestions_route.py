@@ -24,7 +24,7 @@ def test_search_suggestions_returns_submit_ready_query_keys(mysql_client, mysql_
         assert isinstance(item["label"], str) and item["label"]
         assert item["topic_count"] >= 1
 
-    # The first suggestion's query_key must be usable as-is by POST /search.
+    # 第一个建议项的 query_key 必须可由 POST /search 直接使用。
     query_key = body["items"][0]["query_key"]
     search = mysql_client.post(
         "/search",

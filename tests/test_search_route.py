@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 
 def _make_client(search_impl) -> TestClient:
-    """Build a TestClient with a stub repository whose ``search()`` is overridden."""
+    """构建使用仓储桩的 TestClient，并覆写其 ``search()``。"""
     from backend.app.config import Settings, get_settings
     from backend.app.dependencies import (
         get_app_settings,

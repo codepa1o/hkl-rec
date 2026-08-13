@@ -1,8 +1,8 @@
-# NewsIntentRec tooling configuration.
-# This file intentionally does NOT declare [project]: the repo is run as scripts,
-# not installed as a package. V2 may add [project] when shared eval code becomes a real package.
+# NewsIntentRec 工具配置。
+# 此文件有意不声明 [project]：仓库以脚本形式运行，不作为包安装。
+# 当共享评估代码成为正式软件包时，V2 可再添加 [project]。
 
-# -------------------- Ruff --------------------
+# -------------------- Ruff 配置 --------------------
 [tool.ruff]
 line-length = 100
 target-version = "py313"
@@ -14,37 +14,40 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# Explicit rule selection. Avoid `select = ["ALL"]`: preview rules are noisy.
+# 显式选择规则。避免使用 `select = ["ALL"]`，因为预览规则会产生较多噪声。
 select = [
-    "E",   # pycodestyle errors
-    "F",   # pyflakes
-    "W",   # pycodestyle warnings
+    "E",   # pycodestyle 错误
+    "F",   # pyflakes 检查
+    "W",   # pycodestyle 警告
     "I",   # isort
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
-    "SIM", # flake8-simplify
-    "RUF", # ruff-specific
+    "UP",  # pyupgrade 升级建议
+    "B",   # flake8-bugbear 常见缺陷检查
+    "SIM", # flake8-simplify 简化建议
+    "RUF", # Ruff 专属规则
 ]
 ignore = [
-    "E501", # line-length is enforced by formatter, not lint
-    "B008", # FastAPI Depends() in defaults is intentional
+    "E501", # 行长度由格式化器而非代码检查器约束
+    "B008", # 有意在默认参数中使用 FastAPI Depends()
+    "RUF001", # 中文字符串会使用全角标点
+    "RUF002", # 中文文档字符串会使用全角标点
+    "RUF003", # 中文注释会使用全角标点
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Scripts are one-shot tooling; allow selected style drift.
+# 脚本属于一次性工具，允许部分风格差异。
 "scripts/*.py" = ["B", "SIM", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
-# -------------------- Mypy --------------------
+# -------------------- Mypy 配置 --------------------
 [tool.mypy]
 python_version = "3.13"
 files = ["backend/app"]
 plugins = ["pydantic.mypy"]
 explicit_package_bases = true
-# Backend application strictness.
+# 后端应用的严格检查设置。
 disallow_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
@@ -57,7 +60,7 @@ exclude = [
     "^build/",
 ]
 
-# -------------------- Pytest --------------------
+# -------------------- Pytest 配置 --------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

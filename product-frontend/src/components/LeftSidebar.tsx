@@ -1,47 +1,51 @@
-import { Home, Flame, Compass, Plus } from "lucide-react";
-import { Link } from "react-router-dom";
+import { CircleUserRound, FlaskConical, Home, Search } from "lucide-react";
+import { NavLink } from "react-router-dom";
+
+const categories = [
+  { label: "体育", query: "sports" },
+  { label: "财经", query: "finance" },
+  { label: "科学", query: "science" },
+];
+
+function navClass({ isActive }: { isActive: boolean }) {
+  return `zr-left__item${isActive ? " zr-left__item--active" : ""}`;
+}
 
 export default function LeftSidebar() {
   return (
-    <nav className="zr-left">
-      <div className="zr-left__section">
-        <Link to="/" className="zr-left__item zr-left__item--active">
-          <Home size={20} />
-          <span>Home</span>
-        </Link>
-        <Link to="/" className="zr-left__item">
-          <Flame size={20} />
-          <span>Popular</span>
-        </Link>
-        <Link to="/" className="zr-left__item">
-          <Compass size={20} />
-          <span>Explore</span>
-        </Link>
+    <nav className="zr-left" aria-label="主导航">
+      <div className="zr-left__section zr-left__section--primary">
+        <NavLink to="/" end className={navClass}>
+          <Home size={19} />
+          <span>首页</span>
+        </NavLink>
+        <NavLink to="/search" className={navClass}>
+          <Search size={19} />
+          <span>搜索</span>
+        </NavLink>
+        <a href="#your-interests" className="zr-left__item">
+          <CircleUserRound size={19} />
+          <span>兴趣画像</span>
+        </a>
       </div>
 
-      <div className="zr-left__section">
-        <div className="zr-left__section-title">Custom Feeds</div>
-        <Link to="/" className="zr-left__item">
-          <Plus size={20} />
-          <span>Create a custom feed</span>
-        </Link>
-      </div>
-
-      <div className="zr-left__section">
-        <div className="zr-left__section-title">News Categories</div>
-        {["Sports", "Finance", "Science"].map((category, index) => (
-          <Link key={category} to="/" className="zr-left__item">
-            <span
-              className="zr-card__avatar"
-              style={{
-                width: 24,
-                height: 24,
-                background: `linear-gradient(135deg, hsl(${(index + 1) * 47 % 360}, 60%, 55%), hsl(${(index + 1) * 83 % 360}, 70%, 65%))`,
-              }}
-            />
-            <span>{category}</span>
-          </Link>
+      <div className="zr-left__section zr-left__section--categories">
+        <div className="zr-left__section-title">新闻分类</div>
+        {categories.map((category) => (
+          <NavLink
+            key={category.query}
+            to={`/search?q=${category.query}`}
+            className="zr-left__item"
+          >
+            <span className="zr-category-dot" aria-hidden="true" />
+            <span>{category.label}</span>
+          </NavLink>
         ))}
+      </div>
+
+      <div className="zr-left__footer">
+        <FlaskConical size={16} />
+        <span>由个性化推荐模型驱动</span>
       </div>
     </nav>
   );

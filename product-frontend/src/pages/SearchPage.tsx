@@ -5,6 +5,7 @@ import type { SearchItem } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
 import PostCard from "../components/PostCard";
 import SearchBox from "../components/SearchBox";
+import { localizeInterfaceError } from "../localization";
 
 export default function SearchPage() {
   const { selectedPersona, bumpProfile } = usePersona();
@@ -45,9 +46,9 @@ export default function SearchPage() {
       .catch((err: Error) => {
         if (cancelled) return;
         if (err.message.startsWith("422")) {
-          setError("No matching query found. Try a suggested query.");
+          setError("未找到匹配内容，请尝试搜索建议中的关键词。");
         } else {
-          setError(err.message);
+          setError(localizeInterfaceError(err.message));
         }
       })
       .finally(() => {
@@ -78,28 +79,40 @@ export default function SearchPage() {
   if (!selectedPersona) {
     return (
       <main className="zr-center">
-        <div className="zr-status">Select a persona to search.</div>
+        <div className="zr-status">请选择一个用户画像后再搜索。</div>
       </main>
     );
   }
 
   return (
-    <main className="zr-center">
-      <div style={{ marginBottom: 16 }}>
+    <main className="zr-center zr-search-page">
+      <header className="zr-page-header">
+        <span className="zr-eyebrow">发现内容</span>
+        <h1>搜索</h1>
+        <p>查找你关心的新闻、主题与领域</p>
+      </header>
+
+      <div className="zr-search-page__box">
         <SearchBox initialQuery={rawQuery} />
       </div>
 
       {rawQuery && (
-        <div style={{ fontSize: 13, color: "var(--zr-text-muted)", marginBottom: 12 }}>
-          Results for <strong>{rawQuery}</strong>
+        <div className="zr-search-page__result-label">
+          “<strong>{rawQuery}</strong>”的搜索结果
         </div>
       )}
 
-      {loading && <div className="zr-status">Searching...</div>}
-      {error && <div className="zr-status">Search failed: {error}</div>}
+      {!rawQuery && (
+        <div className="zr-status zr-status--spacious">
+          输入关键词，开始探索你的下一篇阅读。
+        </div>
+      )}
+
+      {loading && <div className="zr-status">正在搜索…</div>}
+      {error && <div className="zr-status">搜索失败：{error}</div>}
 
       {!loading && !error && rawQuery && items.length === 0 && (
-        <div className="zr-status">No results for "{rawQuery}".</div>
+        <div className="zr-status">未找到与“{rawQuery}”相关的结果。</div>
       )}
 
       {items.map((item) => (

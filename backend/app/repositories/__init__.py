@@ -1,1 +1,1 @@
-"""Repository implementations for the NewsIntentRec backend."""
+"""NewsIntentRec 后端的数据仓储实现。"""

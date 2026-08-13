@@ -135,7 +135,7 @@ def apply_sql_file(connection, sql_path: Path) -> int:
         for index, statement in enumerate(statements, start=1):
             try:
                 cursor.execute(statement)
-            except Exception as exc:  # pragma: no cover - diagnostic path
+            except Exception as exc:  # pragma: no cover - 诊断路径
                 preview = " ".join(statement.split())[:240]
                 raise RuntimeError(f"failed at {sql_path} statement {index}: {preview}") from exc
     return len(statements)

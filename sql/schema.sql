@@ -1,6 +1,6 @@
--- MySQL 8.0 schema for the configured NewsIntentRec runtime database.
--- Raw MIND files and normalized/model artifacts remain offline inputs only.
--- Online services must read MySQL tables below as the single runtime source of truth.
+-- 为已配置的 NewsIntentRec 运行时数据库定义 MySQL 8.0 模式。
+-- 原始 MIND 文件及规范化/模型制品仅作为离线输入。
+-- 在线服务必须将下列 MySQL 表作为唯一的运行时事实来源。
 
 DROP TABLE IF EXISTS event_outbox;
 DROP TABLE IF EXISTS user_event;

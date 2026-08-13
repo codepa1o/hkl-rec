@@ -4,6 +4,7 @@ import { getFeed, stableClientId, trackEvent } from "../api/client";
 import type { FeedItem } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
 import PostCard from "../components/PostCard";
+import { localizeInterfaceError } from "../localization";
 
 export default function FeedPage() {
   const { selectedPersona, refreshTick, bumpProfile } = usePersona();
@@ -14,7 +15,6 @@ export default function FeedPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trackingError, setTrackingError] = useState<string | null>(null);
-  const [sort, setSort] = useState<"best" | "hot" | "new">("best");
   const trackedRef = useRef<Set<string>>(new Set());
   const loadRequestId = useMemo(
     () =>
@@ -93,7 +93,7 @@ export default function FeedPage() {
         }
       });
       if (failedKeys.length > 0) {
-        setTrackingError(`Failed to record ${failedKeys.length} feed impression(s).`);
+        setTrackingError(`有 ${failedKeys.length} 条内容的曝光记录失败，请稍后重试。`);
       }
     });
   }, [selectedPersona, feedUserId, requestId, items]);
@@ -118,37 +118,31 @@ export default function FeedPage() {
           setTrackingError(null);
           bumpProfile();
         })
-        .catch((err: Error) => setTrackingError(`Failed to record click: ${err.message}`));
+        .catch((err: Error) => setTrackingError(`点击记录失败：${localizeInterfaceError(err.message)}`));
     },
     [selectedPersona, requestId, bumpProfile],
   );
 
   if (!selectedPersona) {
-    return <div className="zr-status">Select a persona to see your feed.</div>;
+    return <div className="zr-status">请选择一个用户画像以查看推荐信息流。</div>;
   }
   if (error) {
-    return <div className="zr-status">Failed to load feed: {error}</div>;
+    return <div className="zr-status">信息流加载失败：{localizeInterfaceError(error)}</div>;
   }
 
   return (
     <main className="zr-center">
-      <div className="zr-sort-tabs">
-        {(["best", "hot", "new"] as const).map((s) => (
-          <button
-            key={s}
-            className={`zr-sort-tab${sort === s ? " zr-sort-tab--active" : ""}`}
-            onClick={() => setSort(s)}
-          >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
+      <header className="zr-page-header">
+        <span className="zr-eyebrow">你的每日阅读</span>
+        <h1>为你推荐</h1>
+        <p>根据你的阅读兴趣持续更新</p>
+      </header>
 
-      {loading && visibleItems.length === 0 && <div className="zr-status">Loading feed...</div>}
+      {loading && visibleItems.length === 0 && <div className="zr-status">正在加载信息流…</div>}
       {trackingError && <div className="zr-status">{trackingError}</div>}
 
       {!loading && visibleItems.length === 0 && (
-        <div className="zr-status">No articles in feed. Try selecting a different persona.</div>
+        <div className="zr-status">当前信息流暂无文章，请尝试选择其他用户画像。</div>
       )}
 
       {visibleItems.map((item) => (

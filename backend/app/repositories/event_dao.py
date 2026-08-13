@@ -242,9 +242,9 @@ def record_log_only_event(
     creative_id: int | None = None,
     dwell_ms: int | None = None,
 ) -> bool:
-    """Insert a user_event row without mutating user_profile.
+    """插入一条 user_event 记录，但不修改 user_profile。
 
-    Used by log-only product events that do not update behavior score or category weights.
+    用于仅记录日志、不更新行为分数或类别权重的产品事件。
     """
     with connection.cursor() as cursor:
         cursor.execute(

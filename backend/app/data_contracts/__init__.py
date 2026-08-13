@@ -1,1 +1,1 @@
-"""Dataset adapters shared by offline tooling and runtime code."""
+"""离线工具与运行时代码共用的数据集适配器。"""

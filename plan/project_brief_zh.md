@@ -1,4 +1,4 @@
-# Superseded
+# 已被取代
 
 本文档保留为最初 ZhihuRec 项目边界的历史记录。当前项目已迁移为使用公开 MIND
 数据集的个人英文新闻推荐系统 NewsIntentRec；当前运行方式、API 和指标以根目录
@@ -71,30 +71,30 @@
 - 数据分析叙事框架
 - 面试中的项目讲述
 
-### Progressive Logic of the Project
+### 项目的渐进式逻辑
 
 为了避免这个项目在表达上停留于“search 比 click 更重要”，这里需要把递进逻辑写清楚：
 
-> conceptually large, operationally small
+> 概念范围大，实施切口小
 
 也就是：
 
 > 叙事可以开大，但第一版工程改动必须做小、做稳、做得可验证
 
-Our project follows a progressive logic from problem framing to minimal implementation.
+本项目遵循从问题界定到最小实现的渐进式逻辑。
 
-#### Step 1: Problem Framing
+#### 第一步：问题界定
 
-We treat feed-to-search transition as a potential signal that the current recommendation state fails to satisfy the user's immediate intent.
+我们将“从信息流转向搜索”视为一个潜在信号，表示当前推荐状态未能满足用户的即时意图。
 
 换句话说：
 
 - 用户从刷推荐转向主动搜索，不只是说明兴趣更强
 - 也可能说明当前推荐流没有满足他此刻的具体需求
 
-#### Step 2: Mechanism Hypothesis
+#### 第二步：机制假设
 
-This transition is modeled as a possible mode shift from passive consumption to active intent resolution.
+我们将这一转变建模为从被动消费切换到主动解决意图的潜在模式变化。
 
 也就是说：
 
@@ -102,9 +102,9 @@ This transition is modeled as a possible mode shift from passive consumption to 
 - 而是把这种行为看作用户状态的一次切换
 - 用户可能从“随便刷刷”的被动消费模式，切到“我要解决一个具体问题”的主动意图模式
 
-#### Step 3: System Implication
+#### 第三步：系统含义
 
-In principle, such a transition should affect both retrieval seed policy and user representation, since the system may need to move away from a recommendation state dominated by long-term preference.
+原则上，这一转变应同时影响检索种子策略与用户表示，因为系统可能需要摆脱由长期偏好主导的推荐状态。
 
 这一步的含义是：
 
@@ -112,22 +112,20 @@ In principle, such a transition should affect both retrieval seed policy and use
 - 它原则上应同时影响召回 seed 的选择方式，以及用户表征的解释方式
 - 因为系统可能需要暂时偏离“长期兴趣主导”的推荐状态，转而响应用户的即时任务
 
-#### Step 4: Minimal First-Step Implementation
+#### 第四步：最小化的首步实现
 
-For the first implementation, we do not fully reconstruct the user model.
-Instead, we only make a minimal intervention in retrieval seed selection:
+首次实现不完整重建用户模型，而只对检索种子的选择做最小干预：
 
-- downweight shallow click-based seeds
-- upweight search-aligned seeds
+- 降低浅层点击种子的权重
+- 提高与搜索一致的种子权重
 
 这就是第一版最小落地点：
 
 - 降低浅层 click item 作为召回 seed 的权重
 - 提高与近期 search 更对齐的 item 作为召回 seed 的权重
 
-We start from retrieval seed selection because it is the smallest controllable intervention point.
-It allows us to test whether feed-to-search transition carries useful corrective information,
-without immediately introducing the complexity of rebuilding the entire user representation.
+我们从检索种子选择入手，因为它是最小的可控干预点。这样无需立即引入重建完整用户表示的复杂度，
+便可检验从信息流转向搜索是否携带有用的纠偏信息。
 
 这一步的重要性在于：
 
@@ -292,7 +290,7 @@ ZhihuRec **不只是**一个前端内容来源。
 
 主要的推荐实体应该是：
 
-> **Answer**
+> **回答**
 
 ### 辅助实体
 
