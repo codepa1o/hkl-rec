@@ -4,12 +4,14 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.app.repositories.connection import connect, parse_database_url  # noqa: E402
 
 
 def environment_value(name: str, legacy_name: str, default: str = "") -> str:
@@ -19,15 +21,6 @@ def environment_value(name: str, legacy_name: str, default: str = "") -> str:
         print(f"deprecated environment variable {legacy_name}; use {name}", file=sys.stderr)
         return os.environ[legacy_name]
     return default
-
-
-@dataclass(frozen=True)
-class MysqlUrl:
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,40 +57,6 @@ def parse_args() -> argparse.Namespace:
 def repo_path(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
-
-
-def parse_database_url(database_url: str) -> MysqlUrl:
-    parsed = urlparse(database_url)
-    if parsed.scheme not in {"mysql", "mysql+pymysql"}:
-        raise ValueError("NEWSREC_DATABASE_URL must start with mysql:// or mysql+pymysql://")
-    if not parsed.hostname or not parsed.username:
-        raise ValueError("NEWSREC_DATABASE_URL must include host and username")
-    database = parsed.path.lstrip("/")
-    if not database:
-        raise ValueError("NEWSREC_DATABASE_URL must include a database name")
-    return MysqlUrl(
-        host=parsed.hostname,
-        port=parsed.port or 3306,
-        user=unquote(parsed.username),
-        password=unquote(parsed.password or ""),
-        database=unquote(database),
-    )
-
-
-def connect(config: MysqlUrl):
-    import pymysql
-    import pymysql.cursors
-
-    return pymysql.connect(
-        host=config.host,
-        port=config.port,
-        user=config.user,
-        password=config.password,
-        database=config.database,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True,
-    )
 
 
 def json_text(value) -> str:
@@ -162,15 +121,15 @@ def reset_one(cursor, seed: dict) -> tuple[int, int, int]:
           last_event_ts
         )
         VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s)
-        ON DUPLICATE KEY UPDATE
-          cold_start_seed_key = VALUES(cold_start_seed_key),
-          topic_weights_json = VALUES(topic_weights_json),
-          recent_clicked_answers_json = VALUES(recent_clicked_answers_json),
-          recent_queries_json = VALUES(recent_queries_json),
-          behavior_score = VALUES(behavior_score),
-          user_vector_json = VALUES(user_vector_json),
-          notes = VALUES(notes),
-          last_event_ts = VALUES(last_event_ts)
+        ON CONFLICT (user_id) DO UPDATE SET
+          cold_start_seed_key = EXCLUDED.cold_start_seed_key,
+          topic_weights_json = EXCLUDED.topic_weights_json,
+          recent_clicked_answers_json = EXCLUDED.recent_clicked_answers_json,
+          recent_queries_json = EXCLUDED.recent_queries_json,
+          behavior_score = EXCLUDED.behavior_score,
+          user_vector_json = EXCLUDED.user_vector_json,
+          notes = EXCLUDED.notes,
+          last_event_ts = EXCLUDED.last_event_ts
         """,
         (
             seed["user_id"],
@@ -188,7 +147,7 @@ def reset_one(cursor, seed: dict) -> tuple[int, int, int]:
         SELECT external_event_id
         FROM user_event
         WHERE user_id = %s
-          AND derived_from_raw = 0
+          AND derived_from_raw IS FALSE
           AND external_event_id IS NOT NULL
         """,
         (seed["user_id"],),
@@ -203,7 +162,7 @@ def reset_one(cursor, seed: dict) -> tuple[int, int, int]:
             tuple(runtime_event_ids),
         )
     cursor.execute(
-        "DELETE FROM user_event WHERE user_id = %s AND derived_from_raw = 0",
+        "DELETE FROM user_event WHERE user_id = %s AND derived_from_raw IS FALSE",
         (seed["user_id"],),
     )
     cursor.execute(
@@ -221,8 +180,9 @@ def reset_one(cursor, seed: dict) -> tuple[int, int, int]:
           budget_date,
           SUM(expected_spend_micros) AS expected_spend_micros,
           COUNT(*) AS served_impression_count,
-          SUM(confirmed_impression_ts IS NOT NULL) AS confirmed_impression_count,
-          SUM(clicked_ts IS NOT NULL) AS click_count
+          COUNT(*) FILTER (WHERE confirmed_impression_ts IS NOT NULL)
+            AS confirmed_impression_count,
+          COUNT(*) FILTER (WHERE clicked_ts IS NOT NULL) AS click_count
         FROM sponsored_delivery
         WHERE user_id = %s
         GROUP BY campaign_id, budget_date
@@ -285,7 +245,7 @@ def main() -> None:
 
     connection = connect(config)
     try:
-        with connection.cursor() as cursor:
+        with connection.transaction(), connection.cursor() as cursor:
             for seed in seeds:
                 user_id, click_count, query_count = reset_one(cursor, seed)
                 print(f"reset user_profile user_id={user_id}")

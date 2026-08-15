@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from "react";
 import { listPersonas } from "../api/client";
 import type { PersonaCard } from "../api/types";
+import { useAuth } from "./AuthContext";
 
 interface PersonaContextValue {
   personas: PersonaCard[];
@@ -16,6 +17,7 @@ interface PersonaContextValue {
 const PersonaContext = createContext<PersonaContextValue | null>(null);
 
 export function PersonaProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [personas, setPersonas] = useState<PersonaCard[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,8 +30,19 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
     listPersonas(10)
       .then((res) => {
         if (cancelled) return;
-        setPersonas(res.items);
-        setSelectedId((prev) => prev ?? res.items[0]?.user_id ?? null);
+        const accountPersona: PersonaCard | null = user
+          ? {
+              user_id: user.user_id,
+              display_name: user.display_name,
+              behavior_score: 0,
+              top_topics: [],
+            }
+          : null;
+        const items = accountPersona
+          ? [accountPersona, ...res.items.filter((item) => item.user_id !== accountPersona.user_id)]
+          : res.items;
+        setPersonas(items);
+        setSelectedId(accountPersona?.user_id ?? items[0]?.user_id ?? null);
         setError(null);
       })
       .catch((err: Error) => {
@@ -43,7 +56,7 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user]);
 
   const selectPersona = useCallback((userId: number) => {
     setSelectedId(userId);

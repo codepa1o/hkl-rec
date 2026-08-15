@@ -20,7 +20,7 @@ from backend.app.repositories._utils import (
 )
 from backend.app.repositories.als_recall import get_als_recall
 from backend.app.repositories.base import RuntimeRepository
-from backend.app.repositories.connection import MysqlConnectionPool, parse_database_url
+from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
 from backend.app.repositories.content_dao import (
     load_answer_event_counts_as_of,
     load_answer_ids_created_as_of,
@@ -114,25 +114,22 @@ from backend.app.search_retrieval import (
 )
 
 
-class MysqlRuntimeRepository(RuntimeRepository):
-    backend_name = "mysql"
+class PostgresRuntimeRepository(RuntimeRepository):
+    backend_name = "postgresql"
 
     def __init__(
         self,
         settings: Settings,
     ) -> None:
         if not settings.database_url.strip():
-            raise ValueError("NEWSREC_DATABASE_URL is required for MysqlRuntimeRepository")
+            raise ValueError("NEWSREC_DATABASE_URL is required for PostgresRuntimeRepository")
         self._settings = settings
         self._connection_config = parse_database_url(settings.database_url)
-        self._connection_pool = MysqlConnectionPool(
+        self._connection_pool = PostgresConnectionPool(
             self._connection_config,
-            connect_timeout=settings.mysql_connect_timeout_seconds,
-            read_timeout=settings.mysql_read_timeout_seconds,
-            write_timeout=settings.mysql_write_timeout_seconds,
-            min_cached=settings.mysql_pool_min_cached,
-            max_cached=settings.mysql_pool_max_cached,
-            max_connections=settings.mysql_pool_max_connections,
+            connect_timeout=settings.postgres_connect_timeout_seconds,
+            min_size=settings.postgres_pool_min_size,
+            max_connections=settings.postgres_pool_max_connections,
         )
 
     # ── 公共 API ────────────────────────────────────────────────
@@ -965,7 +962,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                       up.topic_weights_json
                     FROM app_user au
                     JOIN user_profile up ON up.user_id = au.user_id
-                    WHERE au.is_demo_user = 1
+                    WHERE au.is_demo_user IS TRUE
                     ORDER BY up.behavior_score DESC, au.user_id ASC
                     LIMIT %s
                     """,

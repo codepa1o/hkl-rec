@@ -48,14 +48,14 @@ def load_answer_ids_for_topics(
             LEFT JOIN (
               SELECT
                 answer_id,
-                SUM(event_type = 'feed_impression') AS impression_count,
-                SUM(event_type IN (
+                COUNT(*) FILTER (WHERE event_type = 'feed_impression') AS impression_count,
+                COUNT(*) FILTER (WHERE event_type IN (
                   'recommendation_click',
                   'search_result_click',
                   'upvote'
                 )) AS click_count
               FROM user_event
-              WHERE derived_from_raw = 1
+              WHERE derived_from_raw IS TRUE
                 AND event_ts < %s
                 AND answer_id IS NOT NULL
               GROUP BY answer_id
@@ -98,19 +98,19 @@ def load_hot_fallback_rows(
                 LEFT JOIN (
                   SELECT
                     answer_id,
-                    SUM(event_type = 'feed_impression') AS impression_count,
-                    SUM(event_type IN (
+                    COUNT(*) FILTER (WHERE event_type = 'feed_impression') AS impression_count,
+                    COUNT(*) FILTER (WHERE event_type IN (
                       'recommendation_click',
                       'search_result_click',
                       'upvote'
                     )) AS click_count
                   FROM user_event
-                  WHERE derived_from_raw = 1
+                  WHERE derived_from_raw IS TRUE
                     AND event_ts < %s
                     AND answer_id IS NOT NULL
                   GROUP BY answer_id
                 ) stats ON stats.answer_id = a.answer_id
-                WHERE a.is_demo_selected = 1
+                WHERE a.is_demo_selected IS TRUE
                   AND (a.create_ts IS NULL OR a.create_ts <= %s)
                 ORDER BY hot_score DESC, a.answer_id ASC
                 LIMIT %s
@@ -149,14 +149,14 @@ def load_answer_event_counts_as_of(
             f"""
             SELECT
               answer_id,
-              SUM(event_type = 'feed_impression') AS impression_count,
-              SUM(event_type IN (
+              COUNT(*) FILTER (WHERE event_type = 'feed_impression') AS impression_count,
+              COUNT(*) FILTER (WHERE event_type IN (
                 'recommendation_click',
                 'search_result_click',
                 'upvote'
               )) AS click_count
             FROM user_event
-            WHERE derived_from_raw = 1
+            WHERE derived_from_raw IS TRUE
               AND event_ts < %s
               AND answer_id IN ({ph})
             GROUP BY answer_id

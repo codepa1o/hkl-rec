@@ -1,17 +1,32 @@
 import type {
   ArticleCardResponse,
+  AuthUser,
   DebugProfileResponse,
   EventTrackRequest,
   EventTrackResponse,
   FeedResponse,
   PersonaListResponse,
+  LoginInput,
+  RegisterInput,
   SearchResponse,
   SuggestionListResponse,
 } from "./types";
 
 const BASE_URL: string =
   (import.meta.env.VITE_NEWSREC_API_BASE as string | undefined)?.trim() ||
-  "http://127.0.0.1:8000";
+  `${globalThis.location?.protocol ?? "http:"}//${globalThis.location?.hostname || "127.0.0.1"}:8000`;
+
+export const UNAUTHORIZED_EVENT = "newsrec:unauthorized";
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export function newClientId(prefix: string): string {
   const randomPart =
@@ -44,14 +59,39 @@ async function request<T>(
   }
   const { params: _params, ...rest } = init ?? {};
   const response = await fetch(url.toString(), {
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...rest,
   });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${response.status} ${response.statusText}: ${text}`);
+    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    if (response.status === 401) globalThis.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw new ApiError(body?.detail || `请求失败（${response.status}）`, response.status);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export function register(payload: RegisterInput): Promise<AuthUser> {
+  return request<AuthUser>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function login(payload: LoginInput): Promise<AuthUser> {
+  return request<AuthUser>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getCurrentUser(): Promise<AuthUser> {
+  return request<AuthUser>("/auth/me");
+}
+
+export function logout(): Promise<void> {
+  return request<void>("/auth/logout", { method: "POST" });
 }
 
 export function listPersonas(limit = 10): Promise<PersonaListResponse> {

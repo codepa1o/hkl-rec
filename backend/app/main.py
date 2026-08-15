@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -24,6 +24,12 @@ from backend.app.observability import (
     configure_logging,
 )
 from backend.app.routers.articles import router as articles_router
+from backend.app.routers.auth import (
+    require_current_user_when_auth_enabled,
+)
+from backend.app.routers.auth import (
+    router as auth_router,
+)
 from backend.app.routers.debug import router as debug_router
 from backend.app.routers.event import router as event_router
 from backend.app.routers.event_track import router as event_track_router
@@ -114,7 +120,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
@@ -192,14 +198,16 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health_router)
-    app.include_router(feed_router)
-    app.include_router(search_router)
-    app.include_router(event_router)
-    app.include_router(debug_router)
-    app.include_router(personas_router)
-    app.include_router(suggestions_router)
-    app.include_router(articles_router)
-    app.include_router(event_track_router)
+    app.include_router(auth_router)
+    auth_dependency = [Depends(require_current_user_when_auth_enabled)]
+    app.include_router(feed_router, dependencies=auth_dependency)
+    app.include_router(search_router, dependencies=auth_dependency)
+    app.include_router(event_router, dependencies=auth_dependency)
+    app.include_router(debug_router, dependencies=auth_dependency)
+    app.include_router(personas_router, dependencies=auth_dependency)
+    app.include_router(suggestions_router, dependencies=auth_dependency)
+    app.include_router(articles_router, dependencies=auth_dependency)
+    app.include_router(event_track_router, dependencies=auth_dependency)
 
     return app
 

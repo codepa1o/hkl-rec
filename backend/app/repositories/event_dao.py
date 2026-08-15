@@ -25,8 +25,7 @@ def claim_event_id(connection: Any, event: UserEventMessage) -> bool:
               event_type
             )
             VALUES (%s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-              external_event_id = VALUES(external_event_id)
+            ON CONFLICT (external_event_id) DO NOTHING
             """,
             (
                 event.event_id,

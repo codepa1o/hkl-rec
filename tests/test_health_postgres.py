@@ -9,7 +9,7 @@ from backend.app.config import Settings
 from backend.app.health import check_readiness
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
         reason="NEWSREC_DATABASE_URL not set",

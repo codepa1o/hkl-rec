@@ -16,7 +16,7 @@ from backend.app.events.schema import (
 )
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.kafka,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
@@ -29,7 +29,7 @@ pytestmark = [
 ]
 
 
-def test_raw_event_reaches_mysql_and_training_topic(mysql_client, mysql_demo_user):
+def test_raw_event_reaches_postgres_and_training_topic(mysql_client, mysql_demo_user):
     from confluent_kafka import Consumer, Producer
     from confluent_kafka.admin import AdminClient, NewTopic
 

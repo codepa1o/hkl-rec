@@ -85,7 +85,7 @@ def load_default_seed_topic_weights(
     if row is None:
         raise RuntimeError(
             f"system_profile_seed[{seed_key!r}] missing — "
-            "apply_demo_mysql.py must populate the cold-start seed before /feed"
+            "the PostgreSQL migration must populate the cold-start seed before /feed"
         )
     weights = parse_topic_weights(row.get("topic_weights_json"))
     return {item.topic_id: item.weight for item in weights}

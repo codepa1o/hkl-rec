@@ -13,12 +13,12 @@ def test_livez_reports_process_health_without_dependencies(unwired_client):
     assert isinstance(body["app_version"], str)
 
 
-def test_healthz_fails_when_mysql_is_not_configured(unwired_client):
+def test_healthz_fails_when_postgres_is_not_configured(unwired_client):
     response = unwired_client.get("/healthz")
     assert response.status_code == 503, response.text
     body = response.json()
     assert body["status"] == "error"
-    assert body["dependencies"]["mysql"]["status"] == "error"
+    assert body["dependencies"]["postgresql"]["status"] == "error"
 
 
 def test_metrics_endpoint_exposes_prometheus_text(unwired_client):
@@ -27,21 +27,21 @@ def test_metrics_endpoint_exposes_prometheus_text(unwired_client):
     assert "newsrec_http_requests_total" in response.text
 
 
-def test_livez_does_not_open_mysql_connection():
+def test_livez_does_not_open_postgres_connection():
     from fastapi.testclient import TestClient
 
     from backend.app.config import Settings
     from backend.app.dependencies import get_app_settings
     from backend.app.main import create_app
 
-    settings = Settings(database_url="mysql+pymysql://root:root@127.0.0.1:1/unreachable")
+    settings = Settings(database_url="postgresql://newsrec:newsrec@127.0.0.1:1/unreachable")
     app = create_app()
     app.dependency_overrides[get_app_settings] = lambda: settings
 
     response = TestClient(app).get("/livez")
 
     assert response.status_code == 200
-    assert response.json()["repository_backend"] == "mysql"
+    assert response.json()["repository_backend"] == "postgresql"
 
 
 def test_unmatched_paths_use_bounded_metrics_label(unwired_client):

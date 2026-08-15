@@ -1,27 +1,25 @@
 name: newsintentrec
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: newsrec-mysql
+  postgres:
+    image: postgres:16-alpine
+    container_name: newsrec-postgres
     restart: unless-stopped
     ports:
-      - "3307:3306"
+      - "5432:5432"
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: newsrec_demo
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_0900_ai_ci
-      - --default-authentication-plugin=caching_sha2_password
+      POSTGRES_USER: newsrec
+      POSTGRES_PASSWORD: newsrec
+      POSTGRES_DB: newsrec_demo
     volumes:
-      - newsrec_mysql_data:/var/lib/mysql
+      - newsrec_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      test: ["CMD-SHELL", "pg_isready -U newsrec -d newsrec_demo"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 20s
+      start_period: 10s
 
 volumes:
-  newsrec_mysql_data:
+  newsrec_postgres_data:
+    name: newsrec_postgres_data

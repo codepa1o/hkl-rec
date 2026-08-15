@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_event_mode_defaults_to_sync_mysql():
+def test_event_mode_defaults_to_sync_postgres():
     from backend.app.config import Settings
 
     settings = Settings()
 
-    assert settings.event_mode == "sync_mysql"
+    assert settings.event_mode == "sync_postgres"
     assert settings.kafka_enabled is False
 
 

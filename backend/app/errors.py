@@ -6,7 +6,7 @@ class RepositoryNotReadyError(RuntimeError):
 
     def __init__(self, operation: str) -> None:
         super().__init__(
-            f"MySQL runtime repository is unavailable for `{operation}`. "
+            f"PostgreSQL runtime repository is unavailable for `{operation}`. "
             "Configure NEWSREC_DATABASE_URL and wait for readiness."
         )
         self.operation = operation

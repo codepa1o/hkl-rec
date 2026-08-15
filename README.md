@@ -15,8 +15,9 @@ MIND 提供真实的文章曝光、已曝光未点击项、点击项以及请求
 - LightGBM 排序、热度/类别基线，以及如实记录的正负消融实验；
 - 位于非默认信息流实验分组后的 ALS/主题混合 MMR 重排；
 - 精确别名 + BM25 + sentence-transformer/FAISS 混合搜索，并带校准后的拒绝机制；
-- FastAPI + MySQL 在线服务、Outbox/Kafka、幂等消费者、健康检查与指标；
+- FastAPI + PostgreSQL 在线服务、Alembic 迁移、Outbox/Kafka、幂等消费者、健康检查与指标；
 - React 信息流/搜索界面、来源/类别标签、用户画像与推荐解释；
+- Argon2 密码哈希、HttpOnly Cookie 会话、登录注册和受保护前端路由；
 - 相互独立的全量数据模型证据与紧凑、确定性的在线服务/CI 数据世界。
 
 ## 当前证据
@@ -101,6 +102,36 @@ python -m pip install -r backend/requirements-dev.txt
 PYTHON=.venv/bin/python scripts/init_local.sh --product-frontend
 ```
 
+`docker-compose.yml` 默认启动 PostgreSQL 16，应用启动前必须把 Alembic 升级到最新版本：
+
+```bash
+docker compose up -d --wait postgres
+python -m alembic upgrade head
+```
+
+旧 MySQL 只作为一次性历史数据源保留在 `docker-compose.mysql-legacy.yml`。首次切换时，在空的
+PostgreSQL 目标库执行以下命令；脚本会在单一目标事务内迁移全部表，并逐表核对行数与内容摘要：
+
+```bash
+docker compose -f docker-compose.mysql-legacy.yml up -d --wait mysql
+NEWSREC_MYSQL_SOURCE_URL='mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo' \
+NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo' \
+python scripts/migrate_mysql_to_postgres.py
+```
+
+随后生成至少 32 字符的随机鉴权密钥并写入 `.env`：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+NEWSREC_AUTH_SECRET_KEY='<generated-secret>'
+```
+
+生产环境通过 HTTPS 提供服务时还必须设置 `NEWSREC_AUTH_COOKIE_SECURE=1`。登录注册接口为
+`POST /auth/register`、`POST /auth/login`、`GET /auth/me` 和 `POST /auth/logout`；浏览器会话
+使用 HttpOnly Cookie，前端不保存或读取 JWT。设置鉴权密钥后，推荐、搜索、文章、画像和
+  事件业务接口也会要求有效会话。未设置密钥时默认拒绝业务 API；仅离线研究脚本可显式设置
+  `NEWSREC_ALLOW_UNAUTHENTICATED_RESEARCH_API=1` 临时兼容，产品部署禁止开启。
+
 添加 `--smoke-test` 可执行一次性检查，添加 `--with-kafka` 可启动 Kafka 工作进程。
 默认数据库为 `newsrec_demo`，种子目录为 `build/mind_demo_world`，
 公共 API 使用文章字段和 `/articles/{article_id}`。
@@ -118,7 +149,7 @@ npm test -- --run
 npm run build
 ```
 
-MySQL 和 Kafka 集成任务在 `.github/workflows/ci.yml` 中运行。
+PostgreSQL、MySQL→PostgreSQL 历史迁移和 Kafka 集成任务在 `.github/workflows/ci.yml` 中运行。
 
 ## 文档
 

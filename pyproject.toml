@@ -65,10 +65,10 @@ exclude = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
-addopts = ["-m", "not mysql"]
+addopts = ["-m", "not postgres"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
-    "mysql: tests that require a running NEWSREC_DATABASE_URL backend (skip by default).",
-    "kafka: tests that require a running Kafka broker (also require MySQL).",
+    "postgres: tests that require a running PostgreSQL NEWSREC_DATABASE_URL (skip by default).",
+    "kafka: tests that require a running Kafka broker (also require PostgreSQL).",
 ]

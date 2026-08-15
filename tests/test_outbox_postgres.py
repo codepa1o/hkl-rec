@@ -11,11 +11,11 @@ from backend.app.events.consumer import ProfileEventApplier
 from backend.app.events.outbox import OutboxPublisherWorker, enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage
 from backend.app.repositories.connection import connect, parse_database_url
-from backend.app.repositories.mysql import MysqlRuntimeRepository
+from backend.app.repositories.postgres import PostgresRuntimeRepository
 from backend.app.schemas.event_track import EventTrackRequest
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
         reason="NEWSREC_DATABASE_URL not set",
@@ -45,7 +45,7 @@ def _fetch_count(connection, sql: str, params: tuple[object, ...]) -> int:
 
 def test_dual_write_stages_raw_event_in_same_database(mysql_client, mysql_demo_user):
     settings = _settings("kafka_dual_write")
-    repository = MysqlRuntimeRepository(settings)
+    repository = PostgresRuntimeRepository(settings)
     answer_id = _first_answer_id(mysql_client, mysql_demo_user)
     event_id = f"dual-outbox-{time.time_ns()}"
 
@@ -81,7 +81,7 @@ def test_dual_write_stages_raw_event_in_same_database(mysql_client, mysql_demo_u
 
 def test_kafka_async_ack_requires_durable_raw_outbox(mysql_client, mysql_demo_user):
     settings = _settings("kafka_async")
-    repository = MysqlRuntimeRepository(settings)
+    repository = PostgresRuntimeRepository(settings)
     answer_id = _first_answer_id(mysql_client, mysql_demo_user)
     event_id = f"async-outbox-{time.time_ns()}"
     before = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
@@ -136,7 +136,7 @@ def test_kafka_async_rejects_conflicting_duplicate_event_id(
     mysql_demo_user,
 ):
     settings = _settings("kafka_async")
-    repository = MysqlRuntimeRepository(settings)
+    repository = PostgresRuntimeRepository(settings)
     feed = mysql_client.get(
         "/feed",
         params={
@@ -245,13 +245,14 @@ def test_failed_outbox_batch_remains_retryable(mysql_client):
     event_id = f"retry-outbox-{time.time_ns()}"
     connection = connect(parse_database_url(settings.database_url))
     try:
-        enqueue_outbox_message(
-            connection,
-            event_id=event_id,
-            topic=settings.kafka_training_topic,
-            message_key="7248",
-            payload_json='{"example_id":"retry"}',
-        )
+        with connection.transaction():
+            enqueue_outbox_message(
+                connection,
+                event_id=event_id,
+                topic=settings.kafka_training_topic,
+                message_key="7248",
+                payload_json='{"example_id":"retry"}',
+            )
     finally:
         connection.close()
 

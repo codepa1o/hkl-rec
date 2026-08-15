@@ -87,3 +87,23 @@ def test_explicit_demo_user_does_not_read_invalid_seed(monkeypatch, tmp_path: Pa
     get_settings.cache_clear()
 
     assert get_settings().default_demo_user_id == 99
+
+
+def test_auth_secret_can_be_loaded_from_file(monkeypatch, tmp_path: Path):
+    from backend.app import config
+
+    secret = "a" * 44
+    secret_path = tmp_path / "auth-secret.txt"
+    secret_path.write_text(secret + "\n", encoding="utf-8")
+    monkeypatch.setattr(config, "_DOTENV_VALUES", {}, raising=False)
+    monkeypatch.delenv("NEWSREC_AUTH_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ZHIHUREC_AUTH_SECRET_KEY", raising=False)
+    monkeypatch.setenv("NEWSREC_AUTH_SECRET_KEY_FILE", str(secret_path))
+    config.get_settings.cache_clear()
+
+    try:
+        settings = config.get_settings()
+    finally:
+        config.get_settings.cache_clear()
+
+    assert settings.auth_secret_key == secret

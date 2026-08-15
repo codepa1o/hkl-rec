@@ -23,7 +23,7 @@ from backend.app.observability import (
     CONSUMER_RETRIES,
 )
 from backend.app.repositories._utils import json_text
-from backend.app.repositories.connection import MysqlConnectionPool, parse_database_url
+from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
 from backend.app.repositories.content_dao import load_answer_topic_ids, load_query_topics
 from backend.app.repositories.event_dao import (
     append_recent_query,
@@ -55,14 +55,11 @@ class ProfileEventApplier:
         if not self._settings.database_url.strip():
             raise ValueError("NEWSREC_DATABASE_URL is required for the profile consumer")
         self._connection_config = parse_database_url(self._settings.database_url)
-        self._connection_pool = MysqlConnectionPool(
+        self._connection_pool = PostgresConnectionPool(
             self._connection_config,
-            connect_timeout=self._settings.mysql_connect_timeout_seconds,
-            read_timeout=self._settings.mysql_read_timeout_seconds,
-            write_timeout=self._settings.mysql_write_timeout_seconds,
-            min_cached=self._settings.mysql_pool_min_cached,
-            max_cached=self._settings.mysql_pool_max_cached,
-            max_connections=self._settings.mysql_pool_max_connections,
+            connect_timeout=self._settings.postgres_connect_timeout_seconds,
+            min_size=self._settings.postgres_pool_min_size,
+            max_connections=self._settings.postgres_pool_max_connections,
         )
 
     def apply_event(self, event: UserEventMessage) -> bool:

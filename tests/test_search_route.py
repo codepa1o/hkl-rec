@@ -28,7 +28,7 @@ def _make_client(search_impl) -> TestClient:
 
     get_settings.cache_clear()
     get_runtime_repository.cache_clear()
-    settings = Settings()
+    settings = Settings(allow_unauthenticated_research_api=True)
     repo = UnwiredRuntimeRepository(settings)
     repo.search = search_impl  # type: ignore[method-assign]
     app = create_app()

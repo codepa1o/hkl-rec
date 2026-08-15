@@ -72,7 +72,7 @@ def claim_feed_request(
               as_of_ts
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE request_id = VALUES(request_id)
+            ON CONFLICT (request_id) DO NOTHING
             """,
             (
                 request_id,
@@ -150,7 +150,10 @@ def load_sponsored_deliveries_for_request(
               scr.bid_micros,
               scr.predicted_ctr,
               scr.quality_score,
-              GROUP_CONCAT(DISTINCT sct.topic_id ORDER BY sct.topic_id) AS target_topic_ids
+              STRING_AGG(
+                DISTINCT sct.topic_id::text,
+                ',' ORDER BY sct.topic_id::text
+              ) AS target_topic_ids
             FROM sponsored_delivery sd
             JOIN sponsored_campaign sc ON sc.campaign_id = sd.campaign_id
             JOIN sponsored_creative scr ON scr.creative_id = sd.creative_id
@@ -223,7 +226,10 @@ def load_sponsored_candidates(
               scr.bid_micros,
               scr.predicted_ctr,
               scr.quality_score,
-              GROUP_CONCAT(DISTINCT sct.topic_id ORDER BY sct.topic_id) AS target_topic_ids
+              STRING_AGG(
+                DISTINCT sct.topic_id::text,
+                ',' ORDER BY sct.topic_id::text
+              ) AS target_topic_ids
             FROM sponsored_campaign sc
             JOIN sponsored_campaign_topic sct
               ON sct.campaign_id = sc.campaign_id
@@ -337,7 +343,7 @@ def reserve_sponsored_delivery(
             """
             INSERT INTO sponsored_campaign_daily_state (campaign_id, budget_date)
             VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE campaign_id = VALUES(campaign_id)
+            ON CONFLICT (campaign_id, budget_date) DO NOTHING
             """,
             (candidate.campaign_id, budget_date),
         )
@@ -360,7 +366,7 @@ def reserve_sponsored_delivery(
               budget_date
             )
             VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE campaign_id = VALUES(campaign_id)
+            ON CONFLICT (campaign_id, user_id, budget_date) DO NOTHING
             """,
             (candidate.campaign_id, user_id, budget_date),
         )

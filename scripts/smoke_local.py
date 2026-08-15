@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import http.cookiejar
 import json
 import sys
 import time
@@ -10,10 +11,11 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 
 def get_json(base_url: str, path: str, **params: Any) -> dict[str, Any]:
     query = f"?{urlencode(params)}" if params else ""
-    with urlopen(f"{base_url}{path}{query}", timeout=5) as response:
+    with _opener.open(f"{base_url}{path}{query}", timeout=5) as response:
         return json.loads(response.read())
 
 
@@ -37,8 +39,23 @@ def post_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=10) as response:
+    with _opener.open(request, timeout=10) as response:
         return json.loads(response.read())
+
+
+def ensure_smoke_session(base_url: str) -> None:
+    from backend.app.config import get_settings
+
+    if not get_settings().auth_secret_key:
+        return
+    email = "local-smoke@example.com"
+    payload = {"email": email, "display_name": "Local Smoke", "password": "local-smoke-password"}
+    try:
+        post_json(base_url, "/auth/register", payload)
+    except HTTPError as exc:
+        if exc.code != 409:
+            raise
+        post_json(base_url, "/auth/login", {"email": email, "password": payload["password"]})
 
 
 def wait_for_readiness(base_url: str, timeout_seconds: int) -> dict[str, Any]:
@@ -94,6 +111,7 @@ def main() -> None:
     readiness = wait_for_readiness(args.base_url, args.timeout_seconds)
     if readiness.get("status") != "ok":
         raise SystemExit(f"readiness failed: {readiness}")
+    ensure_smoke_session(args.base_url)
 
     profile = get_json(args.base_url, "/debug/profile", user_id=user_id)
     feed = get_json(
@@ -137,7 +155,7 @@ def main() -> None:
             training_topic=settings.kafka_training_topic,
         )
         profile_applied = float(final_profile["behavior_score"]) > baseline_score
-        if readiness["event_mode"] == "sync_mysql":
+        if readiness["event_mode"] == "sync_postgres":
             if profile_applied and state["event_count"] == 1:
                 break
         else:

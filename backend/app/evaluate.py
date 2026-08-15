@@ -2,7 +2,7 @@
 
 这里只包含纯函数，不访问数据库、HTTP 或配置。scripts/ 中的驱动脚本负责
 收集逐事件的预测值/真实值对，并将其传入这些函数。相关测试位于
-tests/test_evaluate.py，使用默认的非 MySQL pytest 测试层。
+tests/test_evaluate.py，使用默认的非 PostgreSQL pytest 测试层。
 """
 
 from __future__ import annotations

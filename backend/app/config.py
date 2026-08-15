@@ -11,7 +11,7 @@ from typing import Literal, cast
 
 from dotenv import dotenv_values
 
-EventMode = Literal["sync_mysql", "kafka_dual_write", "kafka_async"]
+EventMode = Literal["sync_postgres", "kafka_dual_write", "kafka_async"]
 SearchRetrievalMode = Literal["lexical_v1", "hybrid_v1"]
 logger = logging.getLogger(__name__)
 _DEPRECATED_ENV_WARNINGS: set[str] = set()
@@ -22,9 +22,17 @@ _DOTENV_VALUES: Mapping[str, str | None] = dotenv_values(_DOTENV_PATH)
 
 def parse_event_mode(value: str) -> EventMode:
     normalized = value.strip().lower()
-    if normalized in {"sync_mysql", "kafka_dual_write", "kafka_async"}:
+    if normalized == "sync_mysql":
+        logger.warning(
+            "deprecated event mode used",
+            extra={"deprecated_mode": "sync_mysql", "replacement_mode": "sync_postgres"},
+        )
+        normalized = "sync_postgres"
+    if normalized in {"sync_postgres", "kafka_dual_write", "kafka_async"}:
         return cast(EventMode, normalized)
-    raise ValueError("NEWSREC_EVENT_MODE must be one of: sync_mysql, kafka_dual_write, kafka_async")
+    raise ValueError(
+        "NEWSREC_EVENT_MODE must be one of: sync_postgres, kafka_dual_write, kafka_async"
+    )
 
 
 def parse_search_retrieval_mode(value: str) -> SearchRetrievalMode:
@@ -70,6 +78,25 @@ def environment_value(name: str, default: str = "") -> str:
     return _env(name, default)
 
 
+def _auth_secret_key() -> str:
+    secret = _env("NEWSREC_AUTH_SECRET_KEY", "").strip()
+    if secret:
+        return secret
+    configured_path = _env("NEWSREC_AUTH_SECRET_KEY_FILE", "").strip()
+    if not configured_path:
+        return ""
+    path = Path(configured_path).expanduser()
+    if not path.is_absolute():
+        path = _DOTENV_PATH.parent / path
+    try:
+        secret = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError(f"Unable to read NEWSREC_AUTH_SECRET_KEY_FILE {path}: {exc}") from exc
+    if not secret:
+        raise ValueError(f"NEWSREC_AUTH_SECRET_KEY_FILE is empty: {path}")
+    return secret
+
+
 def _seed_demo_user_id(seed_dir: str) -> int:
     path = Path(seed_dir) / "demo_user_profile_seed.json"
     if path.is_file():
@@ -99,13 +126,18 @@ class Settings:
     app_version: str = "0.1.0"
     default_demo_user_id: int = 7001
     database_url: str = ""
+    auth_secret_key: str = ""
+    auth_access_token_minutes: int = 60
+    auth_cookie_name: str = "newsrec_session"
+    auth_cookie_secure: bool = False
+    environment: str = "development"
+    allow_unauthenticated_research_api: bool = False
+    auth_rate_limit_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 60
     demo_seed_dir: str = "build/mind_demo_world"
-    mysql_connect_timeout_seconds: int = 5
-    mysql_read_timeout_seconds: int = 10
-    mysql_write_timeout_seconds: int = 10
-    mysql_pool_min_cached: int = 1
-    mysql_pool_max_cached: int = 5
-    mysql_pool_max_connections: int = 10
+    postgres_connect_timeout_seconds: int = 5
+    postgres_pool_min_size: int = 1
+    postgres_pool_max_connections: int = 10
     request_id_prefix: str = "newsrec"
     search_query_behavior_delta: float = 1.0
     recommendation_click_behavior_delta: float = 3.0
@@ -123,7 +155,7 @@ class Settings:
     search_retrieval_mode: SearchRetrievalMode = "hybrid_v1"
     search_index_dir: str = "build/mind_search/demo"
     search_source_fingerprint: str | None = None
-    event_mode: EventMode = "sync_mysql"
+    event_mode: EventMode = "sync_postgres"
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
     kafka_client_id: str = "newsrec-api"
     kafka_profile_group_id: str = "newsrec-profile-consumer"
@@ -182,13 +214,20 @@ def get_settings() -> Settings:
             else _seed_demo_user_id(demo_seed_dir)
         ),
         database_url=_env("NEWSREC_DATABASE_URL", ""),
+        auth_secret_key=_auth_secret_key(),
+        auth_access_token_minutes=int(_env("NEWSREC_AUTH_ACCESS_TOKEN_MINUTES", "60")),
+        auth_cookie_name=_env("NEWSREC_AUTH_COOKIE_NAME", "newsrec_session"),
+        auth_cookie_secure=_env_bool("NEWSREC_AUTH_COOKIE_SECURE", "0"),
+        environment=_env("NEWSREC_ENVIRONMENT", "development").strip().lower(),
+        allow_unauthenticated_research_api=_env_bool(
+            "NEWSREC_ALLOW_UNAUTHENTICATED_RESEARCH_API", "0"
+        ),
+        auth_rate_limit_attempts=int(_env("NEWSREC_AUTH_RATE_LIMIT_ATTEMPTS", "10")),
+        auth_rate_limit_window_seconds=int(_env("NEWSREC_AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")),
         demo_seed_dir=demo_seed_dir,
-        mysql_connect_timeout_seconds=int(_env("NEWSREC_MYSQL_CONNECT_TIMEOUT_SECONDS", "5")),
-        mysql_read_timeout_seconds=int(_env("NEWSREC_MYSQL_READ_TIMEOUT_SECONDS", "10")),
-        mysql_write_timeout_seconds=int(_env("NEWSREC_MYSQL_WRITE_TIMEOUT_SECONDS", "10")),
-        mysql_pool_min_cached=int(_env("NEWSREC_MYSQL_POOL_MIN_CACHED", "1")),
-        mysql_pool_max_cached=int(_env("NEWSREC_MYSQL_POOL_MAX_CACHED", "5")),
-        mysql_pool_max_connections=int(_env("NEWSREC_MYSQL_POOL_MAX_CONNECTIONS", "10")),
+        postgres_connect_timeout_seconds=int(_env("NEWSREC_POSTGRES_CONNECT_TIMEOUT_SECONDS", "5")),
+        postgres_pool_min_size=int(_env("NEWSREC_POSTGRES_POOL_MIN_SIZE", "1")),
+        postgres_pool_max_connections=int(_env("NEWSREC_POSTGRES_POOL_MAX_CONNECTIONS", "10")),
         request_id_prefix=_env("NEWSREC_REQUEST_ID_PREFIX", "newsrec"),
         search_query_behavior_delta=float(_env("NEWSREC_SEARCH_QUERY_BEHAVIOR_DELTA", "1.0")),
         recommendation_click_behavior_delta=float(
@@ -222,7 +261,7 @@ def get_settings() -> Settings:
         ),
         search_index_dir=_env("NEWSREC_SEARCH_INDEX_DIR", "build/mind_search/demo"),
         search_source_fingerprint=_seed_source_fingerprint(demo_seed_dir),
-        event_mode=parse_event_mode(_env("NEWSREC_EVENT_MODE", "sync_mysql")),
+        event_mode=parse_event_mode(_env("NEWSREC_EVENT_MODE", "sync_postgres")),
         kafka_bootstrap_servers=_env(
             "NEWSREC_KAFKA_BOOTSTRAP_SERVERS",
             "127.0.0.1:9092",

@@ -20,6 +20,8 @@ DROP TABLE IF EXISTS answer_topic;
 DROP TABLE IF EXISTS question_topic;
 DROP TABLE IF EXISTS answer;
 DROP TABLE IF EXISTS question;
+DROP TABLE IF EXISTS user_account;
+DROP TABLE IF EXISTS auth_user_id_sequence;
 DROP TABLE IF EXISTS app_user;
 DROP TABLE IF EXISTS author;
 DROP TABLE IF EXISTS topic;
@@ -64,6 +66,28 @@ CREATE TABLE app_user (
   source VARCHAR(32) NOT NULL DEFAULT 'mind_small',
   PRIMARY KEY (user_id)
 ) ENGINE=InnoDB COMMENT='MIND-derived demo users and compatibility records.';
+
+CREATE TABLE auth_user_id_sequence (
+  sequence_key VARCHAR(64) NOT NULL,
+  next_user_id BIGINT NOT NULL,
+  PRIMARY KEY (sequence_key)
+) ENGINE=InnoDB COMMENT='Locked ID allocation for users created by the application.';
+
+INSERT INTO auth_user_id_sequence (sequence_key, next_user_id)
+VALUES ('registered_user', 1000000000);
+
+CREATE TABLE user_account (
+  user_id BIGINT NOT NULL,
+  email VARCHAR(254) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+    ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (user_id),
+  UNIQUE KEY uq_user_account_email (email),
+  CONSTRAINT fk_user_account_user FOREIGN KEY (user_id) REFERENCES app_user (user_id)
+) ENGINE=InnoDB COMMENT='Login credentials linked one-to-one with recommendation users.';
 
 CREATE TABLE event_idempotency (
   external_event_id VARCHAR(128) NOT NULL,

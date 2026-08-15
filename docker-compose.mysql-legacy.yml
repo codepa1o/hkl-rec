@@ -1,0 +1,30 @@
+name: newsintentrec-legacy
+
+# This service is retained only as the source for the one-time historical-data
+# migration. The application runtime uses PostgreSQL from docker-compose.yml.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: newsrec-mysql
+    restart: unless-stopped
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: newsrec_demo
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-authentication-plugin=caching_sha2_password
+    volumes:
+      - newsrec_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  newsrec_mysql_data:
+    name: newsrec_mysql_data

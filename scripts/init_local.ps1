@@ -2,15 +2,17 @@
 [CmdletBinding()]
 param(
     [string]$Python = 'C:\ProgramData\anaconda3\python.exe',
-    [string]$DatabaseUrl = 'mysql+pymysql://root:root@localhost:3307/newsrec_demo',
+    [string]$DatabaseUrl = 'postgresql+psycopg://newsrec:newsrec@localhost:5432/newsrec_demo',
+    [string]$MysqlSourceUrl = 'mysql+pymysql://root:root@localhost:3307/newsrec_demo',
     [int]$BackendPort = 8000,
     [int]$ProductFrontendPort = 5174,
-    [int]$MysqlHealthTimeoutSeconds = 120,
+    [int]$PostgresHealthTimeoutSeconds = 120,
     [int]$ConsumerMetricsPort = 9101,
     [int]$OutboxMetricsPort = 9102,
     [switch]$SkipBackend,
     [switch]$ProductFrontend,
     [switch]$WithKafka,
+    [switch]$MigrateLegacyMysql,
     [ValidateSet('kafka_dual_write', 'kafka_async')]
     [string]$EventMode = 'kafka_dual_write',
     [switch]$SmokeTest
@@ -18,11 +20,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $PSBoundParameters.ContainsKey('DatabaseUrl')) {
-    $DatabaseUrl = 'mysql+pymysql://root:root@localhost:3307/newsrec_demo'
+    $DatabaseUrl = 'postgresql+psycopg://newsrec:newsrec@localhost:5432/newsrec_demo'
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $runtimeDir = Join-Path $repoRoot '.runtime\init_local'
+$authSecretPath = Join-Path $runtimeDir 'auth-secret.txt'
 $startedProcesses = New-Object System.Collections.Generic.List[object]
 
 function Write-Step {
@@ -49,24 +52,24 @@ function Test-ListeningPort {
     return $listeners.Count -gt 0
 }
 
-function Wait-MysqlHealthy {
+function Wait-PostgresHealthy {
     param([int]$TimeoutSeconds)
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        $status = (& docker inspect -f '{{.State.Health.Status}}' newsrec-mysql 2>$null)
+        $status = (& docker inspect -f '{{.State.Health.Status}}' newsrec-postgres 2>$null)
         if ($LASTEXITCODE -ne 0) {
             $status = ''
         }
         if ($status -eq 'healthy') {
-            Write-Host '  MySQL is healthy' -ForegroundColor Green
+            Write-Host '  PostgreSQL is healthy' -ForegroundColor Green
             return
         }
-        Write-Host "  mysql health: $status"
+        Write-Host "  postgres health: $status"
         Start-Sleep -Seconds 3
     } while ((Get-Date) -lt $deadline)
 
-    throw "MySQL did not become healthy within $TimeoutSeconds seconds"
+    throw "PostgreSQL did not become healthy within $TimeoutSeconds seconds"
 }
 
 function Wait-KafkaHealthy {
@@ -193,6 +196,23 @@ function Wait-HttpEndpoint {
 
 Set-Location $repoRoot
 New-Item -ItemType Directory -Force $runtimeDir | Out-Null
+if (-not $env:NEWSREC_AUTH_SECRET_KEY) {
+    if (-not (Test-Path -LiteralPath $authSecretPath)) {
+        $secretBytes = New-Object byte[] 32
+        $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try {
+            $random.GetBytes($secretBytes)
+        } finally {
+            $random.Dispose()
+        }
+        [System.IO.File]::WriteAllText(
+            $authSecretPath,
+            [Convert]::ToBase64String($secretBytes),
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
+    $env:NEWSREC_AUTH_SECRET_KEY = (Get-Content -LiteralPath $authSecretPath -Raw).Trim()
+}
 
 Write-Step '[1/6] Checking prerequisites'
 if (($Python.Contains('\') -or $Python.Contains(':')) -and -not (Test-Path $Python)) {
@@ -202,9 +222,9 @@ Invoke-External -FilePath $Python -Arguments @('--version') -Label 'Python check
 Invoke-External -FilePath 'docker' -Arguments @('--version') -Label 'Docker check'
 Invoke-External -FilePath 'docker' -Arguments @('compose', 'version') -Label 'Docker Compose check'
 
-Write-Step '[2/6] Starting MySQL via docker compose'
-Invoke-External -FilePath 'docker' -Arguments @('compose', 'up', '-d') -Label 'docker compose up'
-Wait-MysqlHealthy -TimeoutSeconds $MysqlHealthTimeoutSeconds
+Write-Step '[2/6] Starting PostgreSQL via docker compose'
+Invoke-External -FilePath 'docker' -Arguments @('compose', 'up', '-d', '--wait', 'postgres') -Label 'docker compose up'
+Wait-PostgresHealthy -TimeoutSeconds $PostgresHealthTimeoutSeconds
 
 if ($WithKafka) {
     Write-Step '[2.5/6] Starting Kafka via docker compose'
@@ -212,20 +232,34 @@ if ($WithKafka) {
         -FilePath 'docker' `
         -Arguments @('compose', '-f', 'docker-compose.kafka.yml', 'up', '-d') `
         -Label 'docker compose kafka up'
-    Wait-KafkaHealthy -TimeoutSeconds $MysqlHealthTimeoutSeconds
+    Wait-KafkaHealthy -TimeoutSeconds $PostgresHealthTimeoutSeconds
     $env:NEWSREC_EVENT_MODE = $EventMode
     $env:NEWSREC_KAFKA_BOOTSTRAP_SERVERS = '127.0.0.1:9092'
 } else {
-    $env:NEWSREC_EVENT_MODE = 'sync_mysql'
+    $env:NEWSREC_EVENT_MODE = 'sync_postgres'
 }
 
 Write-Step '[3/6] Setting NEWSREC_DATABASE_URL for child processes'
 $env:NEWSREC_DATABASE_URL = $DatabaseUrl
 $env:NEWSREC_DEMO_SEED_DIR = 'build/mind_demo_world'
 $env:NEWSREC_SPONSORED_ENABLED = '1'
+$env:NEWSREC_ENVIRONMENT = 'development'
 
-Write-Step '[4/6] Applying schema and demo seed'
-Invoke-External -FilePath $Python -Arguments @('scripts\apply_demo_mysql.py') -Label 'apply_demo_mysql.py'
+Write-Step '[4/6] Applying Alembic migrations'
+Invoke-External -FilePath $Python -Arguments @('-m', 'alembic', 'upgrade', 'head') -Label 'alembic upgrade head'
+
+if ($MigrateLegacyMysql) {
+    Write-Step '[4.5/6] Migrating historical MySQL data into PostgreSQL'
+    $env:NEWSREC_MYSQL_SOURCE_URL = $MysqlSourceUrl
+    Invoke-External `
+        -FilePath 'docker' `
+        -Arguments @('compose', '-f', 'docker-compose.mysql-legacy.yml', 'up', '-d', '--wait', 'mysql') `
+        -Label 'legacy MySQL compose up'
+    Invoke-External `
+        -FilePath $Python `
+        -Arguments @('scripts\migrate_mysql_to_postgres.py') `
+        -Label 'migrate_mysql_to_postgres.py'
+}
 
 Write-Step '[5/6] Resetting demo user profile'
 Invoke-External -FilePath $Python -Arguments @('scripts\reset_demo_user.py') -Label 'reset_demo_user.py'
@@ -320,12 +354,12 @@ try {
     if ($ProductFrontend) {
         Write-Host "  Product frontend: http://127.0.0.1:$ProductFrontendPort"
     }
-    Write-Host "  MySQL:            $DatabaseUrl"
+    Write-Host "  PostgreSQL:       $DatabaseUrl"
 
     if ($SmokeTest) {
         Write-Host 'Smoke test passed. Stopping backend/frontend started by this script.' -ForegroundColor Green
     } else {
-        Write-Host 'Press Ctrl+C to stop backend/frontend. MySQL is left running; use docker compose down to stop it.' -ForegroundColor Yellow
+        Write-Host 'Press Ctrl+C to stop backend/frontend. PostgreSQL is left running; use docker compose down to stop it.' -ForegroundColor Yellow
         while ($startedProcesses.Count -gt 0) {
             foreach ($entry in $startedProcesses) {
                 if ($entry.Process.HasExited) {
