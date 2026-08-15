@@ -1,0 +1,71 @@
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listPersonas } from "../api/client";
+import { PersonaProvider, usePersona } from "./PersonaContext";
+
+vi.mock("../api/client", () => ({ listPersonas: vi.fn() }));
+const authState = vi.hoisted(() => ({
+  user: { user_id: 1_000_000_000, email: "reader@example.com", display_name: "新闻读者" },
+}));
+vi.mock("./AuthContext", () => ({
+  useAuth: () => authState,
+}));
+
+function Probe() {
+  const { selectedPersona, personas } = usePersona();
+  return (
+    <div>
+      <span>当前：{selectedPersona?.user_id ?? "无"}</span>
+      <span>账号：{personas[0]?.display_name ?? "无"}</span>
+    </div>
+  );
+}
+
+describe("PersonaProvider", () => {
+  beforeEach(() => {
+    authState.user = {
+      user_id: 1_000_000_000,
+      email: "reader@example.com",
+      display_name: "新闻读者",
+    };
+    vi.mocked(listPersonas).mockResolvedValue({
+      items: [
+        { user_id: 7001, display_name: "演示用户", behavior_score: 3, top_topics: [] },
+      ],
+    });
+  });
+
+  it("切换登录账号后自动选择新账号画像", async () => {
+    const view = render(
+      <PersonaProvider>
+        <Probe />
+      </PersonaProvider>,
+    );
+    expect(await screen.findByText("当前：1000000000")).toBeInTheDocument();
+
+    authState.user = {
+      user_id: 1_000_000_001,
+      email: "second@example.com",
+      display_name: "第二位读者",
+    };
+    view.rerender(
+      <PersonaProvider>
+        <Probe />
+      </PersonaProvider>,
+    );
+
+    expect(await screen.findByText("当前：1000000001")).toBeInTheDocument();
+    expect(screen.getByText("账号：第二位读者")).toBeInTheDocument();
+  });
+
+  it("优先使用登录账号绑定的推荐画像，同时保留演示 persona", async () => {
+    render(
+      <PersonaProvider>
+        <Probe />
+      </PersonaProvider>,
+    );
+
+    expect(await screen.findByText("当前：1000000000")).toBeInTheDocument();
+    expect(screen.getByText("账号：新闻读者")).toBeInTheDocument();
+  });
+});

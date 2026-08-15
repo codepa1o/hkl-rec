@@ -10,6 +10,13 @@ vi.mock("../context/PersonaContext", () => ({
   usePersona: () => ({ personas: [], selectedPersona: null, loading: true }),
 }));
 
+vi.mock("../context/AuthContext", () => ({
+  useAuth: () => ({
+    user: { user_id: 7004, email: "reader@example.com", display_name: "新闻读者" },
+    logout: vi.fn(),
+  }),
+}));
+
 vi.mock("../api/client", () => ({
   listSearchSuggestions: vi.fn().mockResolvedValue({ items: [] }),
 }));

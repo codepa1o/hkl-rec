@@ -7,10 +7,10 @@ import pytest
 from backend.app.config import get_settings
 from backend.app.repositories.connection import connect, parse_database_url
 from backend.app.repositories.content_dao import load_answer_event_counts_as_of
-from backend.app.repositories.mysql import MysqlRuntimeRepository
+from backend.app.repositories.postgres import PostgresRuntimeRepository
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
         reason="NEWSREC_DATABASE_URL not set",
@@ -27,7 +27,7 @@ def test_as_of_popularity_excludes_future_impressions():
                 """
                 SELECT answer_id, event_ts
                 FROM user_event
-                WHERE derived_from_raw = 1
+                WHERE derived_from_raw IS TRUE
                   AND event_type = 'feed_impression'
                   AND answer_id IS NOT NULL
                 ORDER BY event_ts ASC, event_id ASC
@@ -56,7 +56,7 @@ def test_as_of_popularity_excludes_future_impressions():
 
 def test_as_of_feed_excludes_future_created_answers():
     settings = get_settings()
-    repository = MysqlRuntimeRepository(settings)
+    repository = PostgresRuntimeRepository(settings)
     response = repository.get_feed(
         user_id=settings.default_demo_user_id,
         page_size=50,

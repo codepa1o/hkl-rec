@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, Query
 
+from backend.app.auth.service import AuthenticatedUser, AuthService
 from backend.app.dependencies import get_feed_service
+from backend.app.routers.auth import (
+    authorize_user_access,
+    get_auth_service_factory,
+    require_current_user_when_auth_enabled,
+)
 from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
 from backend.app.services.feed import FeedService
 
@@ -34,7 +42,10 @@ def get_feed(
         description="Evaluation-only event-time boundary for popularity features.",
     ),
     service: FeedService = Depends(get_feed_service),
+    current_user: AuthenticatedUser | None = Depends(require_current_user_when_auth_enabled),
+    auth_service_factory: Callable[[], AuthService] = Depends(get_auth_service_factory),
 ) -> FeedResponse:
+    authorize_user_access(user_id, current_user, auth_service_factory)
     return service.get_feed(
         user_id=user_id,
         page_size=page_size,

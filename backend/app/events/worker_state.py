@@ -23,20 +23,20 @@ def update_worker_heartbeat(
             )
             VALUES (
               %s,
-              NOW(6),
-              CASE WHEN %s THEN NOW(6) ELSE NULL END,
+              CURRENT_TIMESTAMP,
+              CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE NULL END,
               %s,
               %s
             )
-            ON DUPLICATE KEY UPDATE
-              last_seen_at = NOW(6),
+            ON CONFLICT (worker_name) DO UPDATE SET
+              last_seen_at = CURRENT_TIMESTAMP,
               last_progress_at = CASE
-                WHEN VALUES(last_progress_at) IS NOT NULL
-                THEN VALUES(last_progress_at)
-                ELSE last_progress_at
+                WHEN EXCLUDED.last_progress_at IS NOT NULL
+                THEN EXCLUDED.last_progress_at
+                ELSE worker_heartbeat.last_progress_at
               END,
-              lag_messages = VALUES(lag_messages),
-              last_error = VALUES(last_error)
+              lag_messages = EXCLUDED.lag_messages,
+              last_error = EXCLUDED.last_error
             """,
             (
                 worker_name,
@@ -53,8 +53,10 @@ def worker_readiness_rows(connection: Any) -> list[dict[str, Any]]:
             """
             SELECT
               worker_name,
-              TIMESTAMPDIFF(SECOND, last_seen_at, NOW(6)) AS heartbeat_age_seconds,
-              TIMESTAMPDIFF(SECOND, last_progress_at, NOW(6)) AS progress_age_seconds,
+              EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_seen_at))::BIGINT
+                AS heartbeat_age_seconds,
+              EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_progress_at))::BIGINT
+                AS progress_age_seconds,
               lag_messages,
               last_error
             FROM worker_heartbeat
@@ -69,7 +71,7 @@ def oldest_pending_outbox_age_seconds(connection: Any) -> int:
         cursor.execute(
             """
             SELECT COALESCE(
-              MAX(TIMESTAMPDIFF(SECOND, created_at, NOW(6))),
+              MAX(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)))::BIGINT,
               0
             ) AS oldest_age_seconds
             FROM event_outbox

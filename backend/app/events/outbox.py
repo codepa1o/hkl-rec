@@ -16,7 +16,7 @@ from backend.app.observability import (
     OUTBOX_PUBLISHED,
     set_outbox_status_counts,
 )
-from backend.app.repositories.connection import MysqlConnectionPool, parse_database_url
+from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,7 @@ def enqueue_outbox_message(
               payload_json
             )
             VALUES (%s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-              event_id = VALUES(event_id)
+            ON CONFLICT (event_id, topic) DO NOTHING
             """,
             (event_id, topic, message_key, fingerprint, payload_json),
         )
@@ -88,14 +87,14 @@ def recover_stale_claims(connection: Any, stale_after_seconds: int) -> int:
             UPDATE event_outbox
             SET
               status = 'pending',
-              available_at = NOW(6),
+              available_at = CURRENT_TIMESTAMP,
               last_error = CONCAT(
                 COALESCE(last_error, ''),
                 CASE WHEN last_error IS NULL OR last_error = '' THEN '' ELSE '; ' END,
                 'recovered stale publishing claim'
               )
             WHERE status = 'publishing'
-              AND updated_at < TIMESTAMPADD(SECOND, -%s, NOW(6))
+              AND updated_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')
             """,
             (stale_after_seconds,),
         )
@@ -117,7 +116,7 @@ def claim_outbox_batch(connection: Any, batch_size: int) -> list[OutboxMessage]:
                   attempt_count
                 FROM event_outbox
                 WHERE status = 'pending'
-                  AND available_at <= NOW(6)
+                  AND available_at <= CURRENT_TIMESTAMP
                 ORDER BY outbox_id ASC
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
@@ -170,7 +169,7 @@ def mark_outbox_published(connection: Any, outbox_ids: list[int]) -> None:
             UPDATE event_outbox
             SET
               status = 'published',
-              published_at = NOW(6),
+              published_at = CURRENT_TIMESTAMP,
               last_error = NULL
             WHERE outbox_id IN ({placeholders})
             """,
@@ -194,7 +193,7 @@ def mark_outbox_failed(
                 UPDATE event_outbox
                 SET
                   status = %s,
-                  available_at = TIMESTAMPADD(SECOND, %s, NOW(6)),
+                  available_at = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
                   last_error = %s
                 WHERE outbox_id = %s
                 """,
@@ -232,14 +231,11 @@ class OutboxPublisherWorker:
         if not self._settings.kafka_enabled:
             raise ValueError("outbox publisher requires kafka_dual_write or kafka_async mode")
         config = parse_database_url(self._settings.database_url)
-        self._connection_pool = MysqlConnectionPool(
+        self._connection_pool = PostgresConnectionPool(
             config,
-            connect_timeout=self._settings.mysql_connect_timeout_seconds,
-            read_timeout=self._settings.mysql_read_timeout_seconds,
-            write_timeout=self._settings.mysql_write_timeout_seconds,
-            min_cached=self._settings.mysql_pool_min_cached,
-            max_cached=self._settings.mysql_pool_max_cached,
-            max_connections=self._settings.mysql_pool_max_connections,
+            connect_timeout=self._settings.postgres_connect_timeout_seconds,
+            min_size=self._settings.postgres_pool_min_size,
+            max_connections=self._settings.postgres_pool_max_connections,
         )
         self._publisher = publisher or build_event_publisher(
             self._settings,

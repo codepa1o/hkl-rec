@@ -19,11 +19,13 @@ PYTHON=.venv/bin/python scripts/init_local.sh --product-frontend
 ```
 
 使用 `--smoke-test` 执行一次性检查；使用 `--with-kafka` 启动 Kafka、
-画像消费者和 Outbox 发布器。
+画像消费者和 Outbox 发布器。仅在首次从旧库迁移且 PostgreSQL 业务表为空时使用
+`--migrate-legacy-mysql`。
 
 关键变量：
 
 - `NEWSREC_DATABASE_URL`
+- `NEWSREC_MYSQL_SOURCE_URL`（仅历史数据迁移使用）
 - `NEWSREC_DEMO_SEED_DIR`（默认值 `build/mind_demo_world`）
 - `NEWSREC_MODEL_DIR`（默认值 `build/mind_models`）
 - `NEWSREC_SEARCH_RETRIEVAL_MODE`（默认值 `hybrid_v1`）
@@ -64,9 +66,9 @@ python scripts/report_mind_data.py
 ## 手动启动服务
 
 ```bash
-docker compose up -d
-export NEWSREC_DATABASE_URL='mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo'
-python scripts/apply_demo_mysql.py
+docker compose up -d --wait postgres
+export NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo'
+python -m alembic upgrade head
 python scripts/build_search_index.py \
   --corpus demo \
   --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
@@ -74,6 +76,18 @@ python scripts/build_search_index.py \
   --online-config evaluation/search_relevance/online_demo_config.json
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+
+## 一次性迁移旧 MySQL 历史数据
+
+```bash
+docker compose -f docker-compose.mysql-legacy.yml up -d --wait mysql
+export NEWSREC_MYSQL_SOURCE_URL='mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo'
+export NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo'
+python -m alembic upgrade head
+python scripts/migrate_mysql_to_postgres.py
+```
+
+迁移器以一致性快照读取 MySQL，在单一 PostgreSQL 事务中写入 24 张表，并逐表校验源/目标行数和 SHA-256 内容摘要。失败时 PostgreSQL 整体回滚；MySQL 始终保持只读且不会删除。
 
 使用 Kafka 时：
 

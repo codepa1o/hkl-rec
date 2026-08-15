@@ -19,7 +19,7 @@ from backend.app.search_retrieval import (
 
 
 def repository_backend_name(settings: Settings) -> str:
-    return "mysql" if settings.database_configured else "unwired"
+    return "postgresql" if settings.database_configured else "unwired"
 
 
 def build_liveness(settings: Settings) -> HealthResponse:
@@ -32,7 +32,7 @@ def build_liveness(settings: Settings) -> HealthResponse:
         event_mode=settings.event_mode,
         dependencies={
             "process": DependencyHealth(status="ok"),
-            "mysql": DependencyHealth(status="disabled"),
+            "postgresql": DependencyHealth(status="disabled"),
             "kafka": DependencyHealth(status="disabled"),
             "outbox": DependencyHealth(status="disabled"),
             "search_index": DependencyHealth(status="disabled"),
@@ -74,13 +74,13 @@ def check_readiness(settings: Settings) -> HealthResponse:
         dependencies["search_index"] = DependencyHealth(status="disabled")
 
     if not settings.database_configured:
-        dependencies["mysql"] = DependencyHealth(
+        dependencies["postgresql"] = DependencyHealth(
             status="error",
             detail="NEWSREC_DATABASE_URL is not configured",
         )
         dependencies["outbox"] = DependencyHealth(
             status="disabled",
-            detail="requires MySQL",
+            detail="requires PostgreSQL",
         )
         ready = False
     else:
@@ -89,8 +89,6 @@ def check_readiness(settings: Settings) -> HealthResponse:
             connection = connect(
                 config,
                 connect_timeout=max(1, round(settings.readiness_timeout_seconds)),
-                read_timeout=max(1, round(settings.readiness_timeout_seconds)),
-                write_timeout=max(1, round(settings.readiness_timeout_seconds)),
             )
             try:
                 with connection.cursor() as cursor:
@@ -101,10 +99,15 @@ def check_readiness(settings: Settings) -> HealthResponse:
                 oldest_outbox_age = oldest_pending_outbox_age_seconds(connection)
             finally:
                 connection.close()
-            dependencies["mysql"] = DependencyHealth(status="ok")
+            dependencies["postgresql"] = DependencyHealth(status="ok")
             dead_rows = outbox_counts.get("dead", 0)
             backlog = outbox_counts.get("pending", 0) + outbox_counts.get("publishing", 0)
-            if dead_rows > 0:
+            if not settings.kafka_enabled:
+                dependencies["outbox"] = DependencyHealth(
+                    status="disabled",
+                    detail=f"backlog={backlog}; event mode is {settings.event_mode}",
+                )
+            elif dead_rows > 0:
                 dependencies["outbox"] = DependencyHealth(
                     status="error",
                     detail=f"{dead_rows} dead row(s)",
@@ -131,13 +134,13 @@ def check_readiness(settings: Settings) -> HealthResponse:
                     detail=f"backlog={backlog}, oldest_pending_age={oldest_outbox_age}s",
                 )
         except Exception as exc:
-            dependencies["mysql"] = DependencyHealth(
+            dependencies["postgresql"] = DependencyHealth(
                 status="error",
                 detail=f"{type(exc).__name__}: {exc}",
             )
             dependencies["outbox"] = DependencyHealth(
                 status="error",
-                detail="unavailable because MySQL readiness failed",
+                detail="unavailable because PostgreSQL readiness failed",
             )
             ready = False
 

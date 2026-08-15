@@ -19,6 +19,21 @@ export interface PersonaListResponse {
   items: PersonaCard[];
 }
 
+export interface AuthUser {
+  user_id: number;
+  email: string;
+  display_name: string;
+}
+
+export interface LoginInput {
+  email: string;
+  password: string;
+}
+
+export interface RegisterInput extends LoginInput {
+  display_name: string;
+}
+
 export interface SuggestionItem {
   query_key: string;
   label: string;

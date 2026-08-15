@@ -2,7 +2,7 @@
 
 单例模型在首次调用时加载；只读推理是线程安全的。
 
-在 mysql.py 评分循环中的用法：
+在 postgres.py 评分循环中的用法：
     from backend.app.repositories.ranker import build_feature_vector, score_candidates
 
     features = [build_feature_vector(...) for candidate in candidates]

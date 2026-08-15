@@ -14,7 +14,7 @@ from backend.app.repositories.sponsored_dao import (
 )
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
         reason="NEWSREC_DATABASE_URL not set",
@@ -270,7 +270,7 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
     )
     setup = connect(config)
     try:
-        with setup.cursor() as cursor:
+        with setup.transaction(), setup.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO sponsored_campaign (
@@ -312,21 +312,17 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
     def reserve(index: int) -> bool:
         connection = connect(config)
         try:
-            connection.begin()
-            delivery = reserve_sponsored_delivery(
-                connection,
-                candidate=candidate,
-                user_id=mysql_demo_user,
-                request_id=f"concurrent-sponsored-{index}",
-                slot_position=3,
-                now_ts=now_ts,
-                pacing_headroom_seconds=3600,
-            )
-            connection.commit()
+            with connection.transaction():
+                delivery = reserve_sponsored_delivery(
+                    connection,
+                    candidate=candidate,
+                    user_id=mysql_demo_user,
+                    request_id=f"concurrent-sponsored-{index}",
+                    slot_position=3,
+                    now_ts=now_ts,
+                    pacing_headroom_seconds=3600,
+                )
             return delivery is not None
-        except Exception:
-            connection.rollback()
-            raise
         finally:
             connection.close()
 
@@ -337,7 +333,7 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
     finally:
         cleanup = connect(config)
         try:
-            with cleanup.cursor() as cursor:
+            with cleanup.transaction(), cleanup.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM sponsored_delivery WHERE campaign_id = %s",
                     (campaign_id,),

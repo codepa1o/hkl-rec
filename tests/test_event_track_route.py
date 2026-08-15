@@ -7,7 +7,7 @@ import pytest
 from backend.app.config import Settings
 
 pytestmark = [
-    pytest.mark.mysql,
+    pytest.mark.postgres,
     pytest.mark.skipif(
         not os.environ.get("NEWSREC_DATABASE_URL", "").strip(),
         reason="NEWSREC_DATABASE_URL not set; run scripts/init_local.ps1 -SmokeTest first.",

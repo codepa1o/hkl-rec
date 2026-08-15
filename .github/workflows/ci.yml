@@ -34,9 +34,22 @@ jobs:
       - working-directory: product-frontend
         run: npm run build
 
-  mysql-integration:
+  postgres-integration:
     runs-on: ubuntu-latest
     services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: newsrec
+          POSTGRES_PASSWORD: newsrec
+          POSTGRES_DB: newsrec_demo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsrec -d newsrec_demo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
       mysql:
         image: mysql:8.0
         env:
@@ -50,12 +63,14 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     env:
-      NEWSREC_DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo
-      NEWSREC_EVENT_MODE: sync_mysql
+      NEWSREC_DATABASE_URL: postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo
+      NEWSREC_MYSQL_SOURCE_URL: mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo
+      NEWSREC_EVENT_MODE: sync_postgres
       NEWSREC_SPONSORED_ENABLED: "1"
       NEWSREC_DEMO_SEED_DIR: build/mind_demo_fixture
       NEWSREC_SEARCH_RETRIEVAL_MODE: hybrid_v1
       NEWSREC_SEARCH_INDEX_DIR: build/mind_search/demo
+      NEWSREC_ALLOW_UNAUTHENTICATED_RESEARCH_API: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -67,6 +82,8 @@ jobs:
             backend/requirements-dev.txt
       - run: python -m pip install -r backend/requirements-dev.txt
       - run: python scripts/apply_demo_mysql.py
+        env:
+          NEWSREC_DATABASE_URL: ${{ env.NEWSREC_MYSQL_SOURCE_URL }}
       - run: >-
           python scripts/build_search_index.py
           --corpus demo
@@ -74,11 +91,26 @@ jobs:
           --output-dir build/mind_search/demo
           --config evaluation/search_relevance/selected_config.json
           --online-config evaluation/search_relevance/online_demo_config.json
-      - run: python -m pytest -q -m "mysql and not kafka"
+      - run: python -m alembic upgrade head
+      - run: python scripts/migrate_mysql_to_postgres.py
+      - run: python -m pytest -q -m "postgres and not kafka"
 
   kafka-integration:
     runs-on: ubuntu-latest
     services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: newsrec
+          POSTGRES_PASSWORD: newsrec
+          POSTGRES_DB: newsrec_demo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsrec -d newsrec_demo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
       mysql:
         image: mysql:8.0
         env:
@@ -92,10 +124,12 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     env:
-      NEWSREC_DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo
+      NEWSREC_DATABASE_URL: postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo
+      NEWSREC_MYSQL_SOURCE_URL: mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo
       NEWSREC_KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:9092
       NEWSREC_EVENT_MODE: kafka_async
       NEWSREC_SPONSORED_ENABLED: "1"
+      NEWSREC_ALLOW_UNAUTHENTICATED_RESEARCH_API: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,6 +143,10 @@ jobs:
       - run: docker compose -f docker-compose.kafka.yml up -d --wait --wait-timeout 120 kafka
       - run: docker compose -f docker-compose.kafka.yml run --rm kafka-init
       - run: python scripts/apply_demo_mysql.py
+        env:
+          NEWSREC_DATABASE_URL: ${{ env.NEWSREC_MYSQL_SOURCE_URL }}
+      - run: python -m alembic upgrade head
+      - run: python scripts/migrate_mysql_to_postgres.py
       - run: python -m pytest -q -m kafka
       - if: failure()
         run: docker compose -f docker-compose.kafka.yml logs --no-color

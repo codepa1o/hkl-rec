@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def unwired_client() -> TestClient:
 
     get_settings.cache_clear()
     get_runtime_repository.cache_clear()
-    settings = Settings()
+    settings = Settings(allow_unauthenticated_research_api=True)
     unwired = UnwiredRuntimeRepository(settings)
     app = create_app()
     app.dependency_overrides[get_app_settings] = lambda: settings
@@ -78,17 +79,26 @@ def mysql_demo_user() -> int:
 
 
 @pytest.fixture
-def mysql_client() -> TestClient:
-    """由真实 MysqlRuntimeRepository 支持的 TestClient。
+def mysql_client() -> Iterator[TestClient]:
+    """由真实 PostgresRuntimeRepository 支持的 TestClient。
 
     测试进程启动时必须设置 NEWSREC_DATABASE_URL。
     """
     if not _database_url():
         pytest.skip("NEWSREC_DATABASE_URL not set")
     from backend.app.config import get_settings
-    from backend.app.dependencies import get_runtime_repository
+    from backend.app.dependencies import (
+        close_runtime_repository,
+        get_auth_repository,
+        get_runtime_repository,
+    )
     from backend.app.main import create_app
 
     get_settings.cache_clear()
     get_runtime_repository.cache_clear()
-    return TestClient(create_app())
+    get_auth_repository.cache_clear()
+    with TestClient(create_app()) as client:
+        yield client
+    close_runtime_repository()
+    get_runtime_repository.cache_clear()
+    get_auth_repository.cache_clear()
