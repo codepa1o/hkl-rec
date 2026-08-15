@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from json import JSONDecodeError
+from typing import Any
 from urllib.parse import urlparse
 
 NEWS_ID_PATTERN = re.compile(r"^N(?P<value>\d+)$")
@@ -15,17 +18,15 @@ class MindContractError(ValueError):
 
 
 @dataclass(frozen=True)
-class MindArticle:
+class MindNews:
     news_id: str
-    article_id: int
     category: str
     subcategory: str
-    headline: str
+    title: str
     abstract: str
-    source_url: str
-    source_domain: str
-    title_entities: str
-    abstract_entities: str
+    url: str
+    title_entities: list[dict[str, Any]]
+    abstract_entities: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -47,11 +48,17 @@ class MindRequest:
     candidates: tuple[MindCandidate, ...]
 
 
-def parse_news_id(value: str) -> int:
+def parse_news_id(value: str) -> str:
     match = NEWS_ID_PATTERN.fullmatch(value)
     if not match:
         raise MindContractError(f"Invalid MIND news ID: {value!r}")
-    return int(match.group("value"))
+    return value
+
+
+def news_internal_id(value: str) -> int:
+    """Return the numeric component used only by offline artifact mappings."""
+    validated = parse_news_id(value)
+    return int(validated[1:])
 
 
 def parse_user_id(value: str) -> int:
@@ -81,30 +88,41 @@ def normalize_topic(value: str) -> str:
     return normalized
 
 
-def parse_news_row(fields: list[str]) -> MindArticle:
+def _parse_entity_array(value: str, field_name: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(value)
+    except JSONDecodeError as exc:
+        raise MindContractError(f"MIND {field_name} must be valid JSON") from exc
+    if not isinstance(parsed, list):
+        raise MindContractError(f"MIND {field_name} must be a JSON array")
+    if any(not isinstance(entity, dict) for entity in parsed):
+        raise MindContractError(f"MIND {field_name} array members must be objects")
+    return parsed
+
+
+def parse_news_row(row: list[str] | str) -> MindNews:
+    fields = row.rstrip("\r\n").split("\t") if isinstance(row, str) else row
     if len(fields) != 8:
         raise MindContractError(f"Expected 8 MIND news columns, got {len(fields)}")
     (
         news_id,
         category,
         subcategory,
-        headline,
+        title,
         abstract,
-        source_url,
+        url,
         title_entities,
         abstract_entities,
     ) = fields
-    return MindArticle(
-        news_id=news_id,
-        article_id=parse_news_id(news_id),
-        category=normalize_topic(category),
-        subcategory=normalize_topic(subcategory),
-        headline=headline,
+    return MindNews(
+        news_id=parse_news_id(news_id),
+        category=category,
+        subcategory=subcategory,
+        title=title,
         abstract=abstract,
-        source_url=source_url,
-        source_domain=source_domain(source_url),
-        title_entities=title_entities,
-        abstract_entities=abstract_entities,
+        url=url,
+        title_entities=_parse_entity_array(title_entities, "title_entities"),
+        abstract_entities=_parse_entity_array(abstract_entities, "abstract_entities"),
     )
 
 
@@ -117,7 +135,7 @@ def parse_candidate(value: str) -> MindCandidate:
         raise MindContractError(f"Invalid MIND candidate label: {value!r}")
     return MindCandidate(
         news_id=news_id,
-        article_id=parse_news_id(news_id),
+        article_id=news_internal_id(news_id),
         clicked=raw_label == "1",
     )
 
@@ -140,6 +158,6 @@ def parse_behavior_row(fields: list[str], split: str) -> MindRequest:
         raw_user_id=raw_user_id,
         user_id=parse_user_id(raw_user_id),
         event_ts=parse_timestamp(raw_time),
-        history_article_ids=tuple(parse_news_id(value) for value in raw_history.split()),
+        history_article_ids=tuple(news_internal_id(value) for value in raw_history.split()),
         candidates=candidates,
     )

@@ -60,7 +60,7 @@ def _fixture(root: Path) -> None:
 
 
 def test_mind_ids_require_expected_prefixes():
-    assert parse_news_id("N123") == 123
+    assert parse_news_id("N123") == "N123"
     assert parse_user_id("U456") == 456
     with pytest.raises(MindContractError):
         parse_news_id("123")

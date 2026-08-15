@@ -17,11 +17,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app.data_contracts.mind import (  # noqa: E402
-    MindArticle,
     MindContractError,
+    MindNews,
     MindRequest,
+    news_internal_id,
     parse_behavior_row,
     parse_news_row,
+    source_domain,
 )
 
 SPLITS = ("train", "dev")
@@ -95,8 +97,8 @@ def _iter_tsv(path: Path) -> Iterator[list[str]]:
             yield line.rstrip("\n").split("\t")
 
 
-def load_articles(raw_root: Path) -> dict[str, MindArticle]:
-    articles: dict[str, MindArticle] = {}
+def load_articles(raw_root: Path) -> dict[str, MindNews]:
+    articles: dict[str, MindNews] = {}
     article_id_to_news_id: dict[int, str] = {}
     for split in SPLITS:
         path = raw_root / split / "news.tsv"
@@ -118,14 +120,15 @@ def load_articles(raw_root: Path) -> dict[str, MindArticle]:
                     f"Conflicting metadata for {article.news_id} between MIND splits: "
                     f"{differing_fields}"
                 )
-            existing_news_id = article_id_to_news_id.get(article.article_id)
+            article_id = news_internal_id(article.news_id)
+            existing_news_id = article_id_to_news_id.get(article_id)
             if existing_news_id is not None and existing_news_id != article.news_id:
                 raise MindNormalizationError(
                     f"News IDs {existing_news_id} and {article.news_id} map to the same "
-                    f"numeric article ID {article.article_id}"
+                    f"numeric article ID {article_id}"
                 )
             articles[article.news_id] = article
-            article_id_to_news_id[article.article_id] = article.news_id
+            article_id_to_news_id[article_id] = article.news_id
     return articles
 
 
@@ -147,13 +150,13 @@ def _iter_requests(raw_root: Path, split: str) -> Iterator[MindRequest]:
 
 def scan_requests(
     raw_root: Path,
-    articles: dict[str, MindArticle],
+    articles: dict[str, MindNews],
 ) -> tuple[dict[str, dict[int, int]], dict[str, dict[str, int]], dict[str, int]]:
     first_seen = {split: {} for split in SPLITS}
     summaries: dict[str, dict[str, int]] = {}
     user_ids: dict[str, int] = {}
     user_id_to_raw_id: dict[int, str] = {}
-    metadata_ids = {article.article_id for article in articles.values()}
+    metadata_ids = {news_internal_id(article.news_id) for article in articles.values()}
 
     for split in SPLITS:
         request_count = 0
@@ -195,7 +198,7 @@ def scan_requests(
     return first_seen, summaries, user_ids
 
 
-def build_topic_maps(articles: Iterable[MindArticle]) -> dict[str, int]:
+def build_topic_maps(articles: Iterable[MindNews]) -> dict[str, int]:
     topic_keys = {f"category:{article.category}" for article in articles} | {
         f"subcategory:{article.category}/{article.subcategory}" for article in articles
     }
@@ -228,22 +231,23 @@ def _write_rows(
 
 
 def _article_rows(
-    articles: dict[str, MindArticle],
+    articles: dict[str, MindNews],
     topic_ids: dict[str, int],
     first_seen: dict[str, dict[int, int]],
 ) -> Iterator[dict[str, Any]]:
-    for article in sorted(articles.values(), key=lambda value: value.article_id):
-        train_ts = first_seen["train"].get(article.article_id)
-        dev_ts = first_seen["dev"].get(article.article_id)
+    for article in sorted(articles.values(), key=lambda value: news_internal_id(value.news_id)):
+        article_id = news_internal_id(article.news_id)
+        train_ts = first_seen["train"].get(article_id)
+        dev_ts = first_seen["dev"].get(article_id)
         observed_timestamps = [value for value in (train_ts, dev_ts) if value is not None]
         selected_ts = min(observed_timestamps) if observed_timestamps else None
         yield {
-            "article_id": article.article_id,
+            "article_id": article_id,
             "news_id": article.news_id,
-            "headline": article.headline,
+            "headline": article.title,
             "abstract": article.abstract,
-            "source_url": article.source_url,
-            "source_domain": article.source_domain,
+            "source_url": article.url,
+            "source_domain": source_domain(article.url),
             "category": article.category,
             "subcategory": article.subcategory,
             "category_topic_id": topic_ids[f"category:{article.category}"],
@@ -253,8 +257,12 @@ def _article_rows(
             "first_seen_any_split_ts": selected_ts,
             "first_seen_train_ts": train_ts,
             "first_seen_dev_ts": dev_ts,
-            "title_entities": article.title_entities,
-            "abstract_entities": article.abstract_entities,
+            "title_entities": json.dumps(
+                article.title_entities, separators=(",", ":"), ensure_ascii=False
+            ),
+            "abstract_entities": json.dumps(
+                article.abstract_entities, separators=(",", ":"), ensure_ascii=False
+            ),
         }
 
 
@@ -312,8 +320,10 @@ def normalize_dataset(raw_root: Path, output_root: Path) -> dict[str, Any]:
     first_seen, summaries, user_ids = scan_requests(raw_root, articles)
     topic_ids = build_topic_maps(articles.values())
     article_ids = {
-        article.news_id: article.article_id
-        for article in sorted(articles.values(), key=lambda value: value.article_id)
+        article.news_id: news_internal_id(article.news_id)
+        for article in sorted(
+            articles.values(), key=lambda value: news_internal_id(value.news_id)
+        )
     }
     article_count = _write_rows(
         output_root / "articles.parquet",
