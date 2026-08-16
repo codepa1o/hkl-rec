@@ -8,7 +8,14 @@ from backend.app.config import Settings, compute_alpha
 from backend.app.errors import SearchIndexNotReadyError, UnresolvedQueryError
 from backend.app.events.outbox import enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage, UserEventType
-from backend.app.observability import SEARCH_RESOLUTIONS, SEARCH_RETRIEVAL_DURATION
+from backend.app.observability import (
+    PROFILE_V2_LATE_EVENTS,
+    PROFILE_V2_PROJECTION_DURATION,
+    PROFILE_V2_PROJECTION_UPDATES,
+    SEARCH_RESOLUTIONS,
+    SEARCH_RETRIEVAL_DURATION,
+)
+from backend.app.profiles.signals import topic_strengths_for_event
 from backend.app.repositories._utils import (
     add_feed_candidate,
     is_numeric_query_key,
@@ -48,6 +55,11 @@ from backend.app.repositories.profile_dao import (
     load_default_seed_topic_weights,
     load_recent_query_topic_scores,
     profile_from_row,
+)
+from backend.app.repositories.profile_v2_dao import (
+    apply_profile_v2_event_with_outcome,
+    profile_event_is_before_reset,
+    profile_signal_config,
 )
 from backend.app.repositories.query_resolver import resolve_search_query
 from backend.app.repositories.ranker import (
@@ -750,6 +762,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     event_type="recommendation_click",
                     debug=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
@@ -758,7 +777,6 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     article_id=payload.article_id,
                     for_update=True,
                 )
-            profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
             answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
             topic_deltas = {
                 topic_id: self._settings.recommendation_click_topic_delta
@@ -785,25 +803,38 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
-            update = apply_click_profile_update(
-                connection=connection,
-                profile_row=profile_row,
-                article_id=payload.article_id,
-                event_ts=event_ts,
-                topic_deltas=topic_deltas,
-                behavior_delta=self._settings.recommendation_click_behavior_delta,
-                decay_factor=self._settings.profile_topic_decay,
-            )
+            update: dict[str, Any] | None = None
+            if project_profile:
+                profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
+                update = apply_click_profile_update(
+                    connection=connection,
+                    profile_row=profile_row,
+                    article_id=payload.article_id,
+                    event_ts=event_ts,
+                    topic_deltas=topic_deltas,
+                    behavior_delta=self._settings.recommendation_click_behavior_delta,
+                    decay_factor=self._settings.profile_topic_decay,
+                )
+                self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=answer_topic_ids,
+                    ),
+                )
             response = EventAckResponse(
                 ok=True,
                 event_type="recommendation_click",
-                debug=RecommendationClickDebug(
-                    updated_topics=topic_delta_models(topic_deltas),
-                    recent_clicked_articles_tail=update["recent_clicked_answers"],
-                    behavior_score=update["behavior_score"],
-                )
-                if payload.debug
-                else None,
+                debug=(
+                    RecommendationClickDebug(
+                        updated_topics=topic_delta_models(topic_deltas),
+                        recent_clicked_articles_tail=update["recent_clicked_answers"],
+                        behavior_score=update["behavior_score"],
+                    )
+                    if payload.debug and update is not None
+                    else None
+                ),
             )
             self._enqueue_raw_event(connection, event)
             connection.commit()
@@ -859,6 +890,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     event_type="search_result_click",
                     debug=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
@@ -867,7 +905,6 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     article_id=payload.article_id,
                     for_update=True,
                 )
-            profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
             query_topics: list[SearchQueryTopic] = load_query_topics(connection, query_key)
             answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
             query_topic_ids = {topic.topic_id for topic in query_topics}
@@ -895,43 +932,62 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 campaign_id=event.campaign_id,
                 creative_id=event.creative_id,
             )
-            confirm_recent_query(
-                connection,
-                profile_row,
-                query_key=query_key,
-                event_ts=event_ts,
+            profile_row = (
+                fetch_profile_row(connection, payload.user_id, for_update=True)
+                if project_profile
+                else None
             )
+            if profile_row is not None:
+                confirm_recent_query(
+                    connection,
+                    profile_row,
+                    query_key=query_key,
+                    event_ts=event_ts,
+                )
             if sponsored_attribution is not None:
                 record_sponsored_click(
                     connection,
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
-            update = apply_click_profile_update(
-                connection=connection,
-                profile_row=profile_row,
-                article_id=payload.article_id,
-                event_ts=event_ts,
-                topic_deltas=topic_deltas,
-                behavior_delta=self._settings.search_result_click_behavior_delta,
-                decay_factor=self._settings.profile_topic_decay,
-            )
+            update: dict[str, Any] | None = None
+            if profile_row is not None:
+                update = apply_click_profile_update(
+                    connection=connection,
+                    profile_row=profile_row,
+                    article_id=payload.article_id,
+                    event_ts=event_ts,
+                    topic_deltas=topic_deltas,
+                    behavior_delta=self._settings.search_result_click_behavior_delta,
+                    decay_factor=self._settings.profile_topic_decay,
+                )
+                self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=answer_topic_set,
+                        query_topic_ids=query_topic_ids,
+                    ),
+                )
             response = EventAckResponse(
                 ok=True,
                 event_type="search_result_click",
-                debug=SearchResultClickDebug(
-                    query_topics=query_topics,
-                    article_topics=[
-                        ArticleTopic(topic_id=topic_id) for topic_id in answer_topic_ids
-                    ],
-                    overlap_topics=[
-                        OverlapTopic(topic_id=topic_id, boost_type="strong_confirm")
-                        for topic_id in sorted(overlap_topic_ids)
-                    ],
-                    behavior_score=update["behavior_score"],
-                )
-                if payload.debug
-                else None,
+                debug=(
+                    SearchResultClickDebug(
+                        query_topics=query_topics,
+                        article_topics=[
+                            ArticleTopic(topic_id=topic_id) for topic_id in answer_topic_ids
+                        ],
+                        overlap_topics=[
+                            OverlapTopic(topic_id=topic_id, boost_type="strong_confirm")
+                            for topic_id in sorted(overlap_topic_ids)
+                        ],
+                        behavior_score=update["behavior_score"],
+                    )
+                    if payload.debug and update is not None
+                    else None
+                ),
             )
             self._enqueue_raw_event(connection, event)
             connection.commit()
@@ -1147,6 +1203,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         profile_updated=True,
                         behavior_score=None,
                     )
+                project_profile = not profile_event_is_before_reset(
+                    connection,
+                    user_id=payload.user_id,
+                    event_ts=event_ts,
+                )
+                if not project_profile and self._settings.profile_v2_enabled:
+                    PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
                 if payload.sponsored_delivery_id:
                     sponsored_attribution = load_sponsored_attribution(
                         connection,
@@ -1155,7 +1218,6 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         article_id=payload.article_id,
                         for_update=True,
                     )
-                profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
                 answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
                 topic_deltas = {
                     topic_id: self._settings.recommendation_click_topic_delta
@@ -1182,15 +1244,31 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         attribution=sponsored_attribution,
                         event_ts=event_ts,
                     )
-                update = apply_click_profile_update(
-                    connection=connection,
-                    profile_row=profile_row,
-                    article_id=payload.article_id,
-                    event_ts=event_ts,
-                    topic_deltas=topic_deltas,
-                    behavior_delta=self._settings.recommendation_click_behavior_delta,
-                    decay_factor=self._settings.profile_topic_decay,
-                )
+                update: dict[str, Any] | None = None
+                if project_profile:
+                    profile_row = fetch_profile_row(
+                        connection,
+                        payload.user_id,
+                        for_update=True,
+                    )
+                    update = apply_click_profile_update(
+                        connection=connection,
+                        profile_row=profile_row,
+                        article_id=payload.article_id,
+                        event_ts=event_ts,
+                        topic_deltas=topic_deltas,
+                        behavior_delta=self._settings.recommendation_click_behavior_delta,
+                        decay_factor=self._settings.profile_topic_decay,
+                    )
+                    self._project_profile_v2(
+                        connection,
+                        event,
+                        topic_strengths_for_event(
+                            event.event_type,
+                            article_topic_ids=answer_topic_ids,
+                            dwell_ms=event.dwell_ms,
+                        ),
+                    )
                 self._enqueue_raw_event(connection, event)
                 connection.commit()
             except Exception:
@@ -1201,8 +1279,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=True,
                 event_type=payload.event_type,
-                profile_updated=True,
-                behavior_score=update["behavior_score"],
+                profile_updated=update is not None,
+                behavior_score=(float(update["behavior_score"]) if update is not None else None),
             )
 
         # 仅记录日志的事件：feed_impression、detail_view、dwell、downvote、share
@@ -1258,6 +1336,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     profile_updated=False,
                     behavior_score=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
@@ -1292,6 +1377,18 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
+            profile_v2_updated = False
+            if inserted and project_profile and payload.event_type in {"dwell", "downvote"}:
+                answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
+                profile_v2_updated = self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=answer_topic_ids,
+                        dwell_ms=event.dwell_ms,
+                    ),
+                )
             self._enqueue_raw_event(connection, event)
             connection.commit()
         except Exception:
@@ -1302,11 +1399,39 @@ class PostgresRuntimeRepository(RuntimeRepository):
         return EventTrackResponse(
             ok=True,
             event_type=payload.event_type,
-            profile_updated=False,
+            profile_updated=profile_v2_updated,
             behavior_score=None,
         )
 
     # ── 编排辅助方法 ────────────────────────────────────────────
+
+    def _project_profile_v2(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        topic_strengths: dict[int, float],
+    ) -> bool:
+        if not self._settings.profile_v2_enabled:
+            return False
+        started_at = time.perf_counter()
+        try:
+            outcome = apply_profile_v2_event_with_outcome(
+                connection,
+                user_id=event.user_id,
+                event_type=event.event_type,
+                event_ts=event.event_ts,
+                topic_strengths=topic_strengths,
+                config=profile_signal_config(self._settings),
+            )
+        finally:
+            PROFILE_V2_PROJECTION_DURATION.observe(time.perf_counter() - started_at)
+        if outcome.updated:
+            PROFILE_V2_PROJECTION_UPDATES.labels(event_type=event.event_type).inc()
+        if outcome.reason in {"pre_reset", "out_of_order"}:
+            PROFILE_V2_LATE_EVENTS.labels(reason=outcome.reason).inc()
+        elif outcome.late_topic_count:
+            PROFILE_V2_LATE_EVENTS.labels(reason="out_of_order").inc()
+        return outcome.updated
 
     def _artifact_debug(self) -> ArtifactDebug:
         lgb_metadata = loaded_model_metadata()

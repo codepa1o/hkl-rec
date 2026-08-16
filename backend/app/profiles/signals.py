@@ -64,6 +64,25 @@ def event_signal_strength(event_type: str, *, dwell_ms: int | None = None) -> fl
     return fixed_strengths.get(event_type, 0.0)
 
 
+def topic_strengths_for_event(
+    event_type: str,
+    *,
+    article_topic_ids: list[int] | set[int] | tuple[int, ...] = (),
+    query_topic_ids: list[int] | set[int] | tuple[int, ...] = (),
+    dwell_ms: int | None = None,
+) -> dict[int, float]:
+    signal = event_signal_strength(event_type, dwell_ms=dwell_ms)
+    if signal == 0:
+        return {}
+
+    article_topics = {int(topic_id) for topic_id in article_topic_ids}
+    strengths = {topic_id: signal for topic_id in article_topics}
+    if event_type == "search_result_click":
+        for topic_id in {int(value) for value in query_topic_ids} - article_topics:
+            strengths[topic_id] = signal * 0.5
+    return dict(sorted(strengths.items()))
+
+
 def decayed_topic_state(
     state: TopicProfileState,
     *,

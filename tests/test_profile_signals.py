@@ -13,6 +13,7 @@ from backend.app.profiles.signals import (
     event_signal_strength,
     profile_status,
     project_topic_signal,
+    topic_strengths_for_event,
 )
 
 
@@ -196,3 +197,28 @@ def test_confidence_status_and_combined_score_are_stable() -> None:
     )
     expected = 0.70 * math.tanh(1.5) + 0.30 * math.tanh(0.75)
     assert combined_topic_score(state) == pytest.approx(expected)
+
+
+def test_search_click_uses_full_article_topics_and_half_query_only_topics() -> None:
+    assert topic_strengths_for_event(
+        "search_result_click",
+        article_topic_ids=[10, 20],
+        query_topic_ids=[20, 30],
+    ) == {10: 1.25, 20: 1.25, 30: 0.625}
+
+
+def test_non_search_signals_apply_only_to_article_topics() -> None:
+    assert topic_strengths_for_event(
+        "downvote",
+        article_topic_ids=[20, 10, 20],
+        query_topic_ids=[30],
+    ) == {10: -2.0, 20: -2.0}
+    assert topic_strengths_for_event(
+        "dwell",
+        article_topic_ids=[10],
+        dwell_ms=30_000,
+    ) == {10: 0.5}
+    assert topic_strengths_for_event(
+        "feed_impression",
+        article_topic_ids=[10],
+    ) == {}

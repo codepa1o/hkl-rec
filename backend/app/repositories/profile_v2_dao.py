@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from backend.app.config import Settings
@@ -19,6 +20,16 @@ from backend.app.schemas.profile import (
     ProfileTermLayer,
     ProfileTopicEvidence,
 )
+
+ProfileProjectionSkipReason = Literal["no_signal", "pre_reset", "out_of_order"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileProjectionOutcome:
+    updated: bool
+    reason: ProfileProjectionSkipReason | None
+    updated_topic_count: int
+    late_topic_count: int
 
 
 def profile_signal_config(settings: Settings) -> ProfileSignalConfig:
@@ -202,20 +213,61 @@ def apply_profile_v2_event(
     topic_strengths: Mapping[int, float],
     config: ProfileSignalConfig,
 ) -> bool:
+    return apply_profile_v2_event_with_outcome(
+        connection,
+        user_id=user_id,
+        event_type=event_type,
+        event_ts=event_ts,
+        topic_strengths=topic_strengths,
+        config=config,
+    ).updated
+
+
+def profile_event_is_before_reset(
+    connection: Any,
+    *,
+    user_id: int,
+    event_ts: int,
+) -> bool:
+    user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
+    reset_before = user_state.get("profile_reset_before_ts")
+    return reset_before is not None and event_ts <= int(reset_before)
+
+
+def apply_profile_v2_event_with_outcome(
+    connection: Any,
+    *,
+    user_id: int,
+    event_type: str,
+    event_ts: int,
+    topic_strengths: Mapping[int, float],
+    config: ProfileSignalConfig,
+) -> ProfileProjectionOutcome:
     effective_strengths = {
         int(topic_id): float(strength)
         for topic_id, strength in topic_strengths.items()
         if float(strength) != 0.0
     }
     if not effective_strengths:
-        return False
+        return ProfileProjectionOutcome(
+            updated=False,
+            reason="no_signal",
+            updated_topic_count=0,
+            late_topic_count=0,
+        )
 
     user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
     reset_before = user_state.get("profile_reset_before_ts")
     if reset_before is not None and event_ts <= int(reset_before):
-        return False
+        return ProfileProjectionOutcome(
+            updated=False,
+            reason="pre_reset",
+            updated_topic_count=0,
+            late_topic_count=0,
+        )
 
     updated_topics = 0
+    late_topics = 0
     for topic_id, strength in sorted(effective_strengths.items()):
         current = fetch_topic_profile_state(
             connection,
@@ -233,6 +285,7 @@ def apply_profile_v2_event(
             long_term_factor=config.long_term_factor,
         )
         if projected is None:
+            late_topics += 1
             continue
         upsert_topic_profile_state(
             connection,
@@ -243,9 +296,19 @@ def apply_profile_v2_event(
         updated_topics += 1
 
     if updated_topics == 0:
-        return False
+        return ProfileProjectionOutcome(
+            updated=False,
+            reason="out_of_order" if late_topics else "no_signal",
+            updated_topic_count=0,
+            late_topic_count=late_topics,
+        )
     increment_profile_v2_evidence(connection, user_id=user_id, event_ts=event_ts)
-    return True
+    return ProfileProjectionOutcome(
+        updated=True,
+        reason=None,
+        updated_topic_count=updated_topics,
+        late_topic_count=late_topics,
+    )
 
 
 def load_topic_profile_rows(connection: Any, *, user_id: int) -> list[dict[str, Any]]:

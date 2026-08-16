@@ -61,6 +61,29 @@ SEARCH_RETRIEVAL_DURATION = Histogram(
     "Search query resolution and retrieval duration.",
     ("mode",),
 )
+PROFILE_V2_PROJECTION_UPDATES = Counter(
+    "profile_v2_projection_updates_total",
+    "Profile V2 projection updates by source event type.",
+    ("event_type",),
+)
+PROFILE_V2_LATE_EVENTS = Counter(
+    "profile_v2_late_events_total",
+    "Profile events skipped because they are before reset or out of order.",
+    ("reason",),
+)
+PROFILE_V2_READ_FALLBACK = Counter(
+    "profile_v2_read_fallback_total",
+    "Feed requests that rolled back a failed Profile V2 read to a savepoint.",
+)
+PROFILE_V2_RESET = Counter(
+    "profile_v2_reset_total",
+    "Profile V2 reset outcomes.",
+    ("status",),
+)
+PROFILE_V2_PROJECTION_DURATION = Histogram(
+    "profile_v2_projection_seconds",
+    "Profile V2 projection duration in seconds.",
+)
 
 
 class JsonLogFormatter(logging.Formatter):
