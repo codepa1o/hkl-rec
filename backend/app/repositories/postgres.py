@@ -672,11 +672,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             if self._settings.event_mode != "kafka_async":
                 claimed = claim_event_id(connection, event)
                 if claimed:
-                    profile_row = fetch_profile_row(
+                    project_profile = not profile_event_is_before_reset(
                         connection,
-                        payload.user_id,
-                        for_update=True,
+                        user_id=payload.user_id,
+                        event_ts=event_ts,
                     )
+                    if not project_profile and self._settings.profile_v2_enabled:
+                        PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
                     record_search_query(
                         connection=connection,
                         user_id=payload.user_id,
@@ -684,13 +686,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         event_ts=event_ts,
                         external_event_id=event.event_id,
                     )
-                    append_recent_query(
-                        connection=connection,
-                        profile_row=profile_row,
-                        query_key=query_key,
-                        event_ts=event_ts,
-                        behavior_delta=self._settings.search_query_behavior_delta,
-                    )
+                    if project_profile:
+                        profile_row = fetch_profile_row(
+                            connection,
+                            payload.user_id,
+                            for_update=True,
+                        )
+                        append_recent_query(
+                            connection=connection,
+                            profile_row=profile_row,
+                            query_key=query_key,
+                            event_ts=event_ts,
+                            behavior_delta=self._settings.search_query_behavior_delta,
+                        )
 
             matched_topics = load_search_matched_topics(connection, query_key)
             search_candidates = load_search_candidates(

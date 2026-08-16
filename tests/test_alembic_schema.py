@@ -116,7 +116,7 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 3
+    assert len(versions) == 4
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:

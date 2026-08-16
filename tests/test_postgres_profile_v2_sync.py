@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from backend.app.repositories import postgres
 from backend.app.repositories.postgres import PostgresRuntimeRepository
 from backend.app.schemas.event_track import EventTrackRequest
 from backend.app.schemas.profile import ProfileResponse, ProfileTermLayer
+from backend.app.schemas.search import SearchRequest
 
 
 class FakeConnection:
@@ -226,5 +228,73 @@ def test_sync_pre_reset_upvote_records_fact_without_mutating_v1_or_v2(
 
     assert response.profile_updated is False
     assert response.behavior_score is None
+    assert connection.committed is True
+    assert connection.rolled_back is False
+
+
+def test_sync_pre_reset_search_records_fact_without_restoring_v1_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = object.__new__(PostgresRuntimeRepository)
+    repository._settings = Settings(
+        database_url="postgresql://example",
+        event_mode="sync_postgres",
+        profile_v2_enabled=True,
+        search_retrieval_mode="lexical_v1",
+    )
+    connection = FakeConnection()
+    repository._connection_pool = FakePool(connection)
+    repository._enqueue_raw_event = lambda *args, **kwargs: None
+    recorded: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        postgres,
+        "resolve_search_query",
+        lambda *args, **kwargs: SimpleNamespace(
+            query_key="sports",
+            source="deterministic",
+            confidence=1.0,
+            hybrid_hits=[],
+        ),
+    )
+    monkeypatch.setattr(postgres, "claim_event_id", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        postgres,
+        "profile_event_is_before_reset",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        postgres,
+        "fetch_profile_row",
+        lambda *args, **kwargs: pytest.fail("pre-reset search must not lock/update V1"),
+    )
+    monkeypatch.setattr(
+        postgres,
+        "record_search_query",
+        lambda *args, **kwargs: recorded.append(kwargs),
+    )
+    monkeypatch.setattr(
+        postgres,
+        "append_recent_query",
+        lambda *args, **kwargs: pytest.fail("pre-reset search must not update V1"),
+    )
+    monkeypatch.setattr(postgres, "load_search_matched_topics", lambda *args: [])
+    monkeypatch.setattr(postgres, "load_search_candidates", lambda *args, **kwargs: {})
+    monkeypatch.setattr(postgres, "load_answer_rows", lambda *args: {})
+    monkeypatch.setattr(postgres, "load_topics_by_answer", lambda *args: {})
+
+    response = repository.search(
+        SearchRequest(
+            event_id="sync-search-before-reset",
+            user_id=7,
+            query_key="sports",
+            debug=True,
+            replay_event_ts=500,
+        )
+    )
+
+    assert response.query_key == "sports"
+    assert len(recorded) == 1
+    assert recorded[0]["event_ts"] == 500
     assert connection.committed is True
     assert connection.rolled_back is False
