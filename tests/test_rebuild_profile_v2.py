@@ -89,9 +89,7 @@ def test_dry_run_counts_filtered_events_without_writes(
         rebuild_profile_v2,
         "load_reset_cutoff",
         lambda connection_arg, user_id, *, for_update=False: (
-            rebuild_profile_v2.ResetBoundary(event_ts=100, event_id=4)
-            if user_id == 7
-            else None
+            rebuild_profile_v2.ResetBoundary(event_ts=100, event_id=4) if user_id == 7 else None
         ),
     )
     monkeypatch.setattr(

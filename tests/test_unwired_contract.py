@@ -109,7 +109,7 @@ def test_text_plain_beacon_endpoint_accepts_event_payload(unwired_client):
                 "user_id": 7248,
                 "event_type": "dwell",
                 "surface": "article_detail",
-                    "news_id": "N1",
+                "news_id": "N1",
                 "dwell_ms": 12_000,
             }
         ),

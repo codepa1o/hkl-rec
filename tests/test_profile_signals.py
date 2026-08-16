@@ -105,8 +105,8 @@ def test_short_and_long_scores_use_their_own_half_lives() -> None:
     assert projected is not None
     assert projected.short_positive_score == pytest.approx(5.0)
     assert projected.short_negative_score == pytest.approx(2.0)
-    assert projected.long_positive_score == pytest.approx(8.0 * 2 ** -0.5 + 0.25)
-    assert projected.long_negative_score == pytest.approx(4.0 * 2 ** -0.5)
+    assert projected.long_positive_score == pytest.approx(8.0 * 2**-0.5 + 0.25)
+    assert projected.long_negative_score == pytest.approx(4.0 * 2**-0.5)
 
 
 def test_zero_signal_decays_existing_state_without_adding_evidence() -> None:
@@ -131,7 +131,7 @@ def test_zero_signal_decays_existing_state_without_adding_evidence() -> None:
 
     assert projected is not None
     assert projected.short_positive_score == pytest.approx(1.0)
-    assert projected.long_positive_score == pytest.approx(2.0 * 2 ** -0.5)
+    assert projected.long_positive_score == pytest.approx(2.0 * 2**-0.5)
     assert projected.positive_evidence_count == 3
     assert projected.signal_counts == {"upvote": 3}
     assert projected.last_signal_type == "upvote"
@@ -174,7 +174,7 @@ def test_read_time_decay_does_not_change_evidence_metadata() -> None:
     )
 
     assert decayed.short_positive_score == pytest.approx(2.0)
-    assert decayed.long_negative_score == pytest.approx(2.0 * 2 ** -0.5)
+    assert decayed.long_negative_score == pytest.approx(2.0 * 2**-0.5)
     assert decayed.positive_evidence_count == 2
     assert decayed.negative_evidence_count == 1
     assert decayed.signal_counts == state.signal_counts
@@ -218,7 +218,10 @@ def test_non_search_signals_apply_only_to_article_topics() -> None:
         article_topic_ids=[10],
         dwell_ms=30_000,
     ) == {10: 0.5}
-    assert topic_strengths_for_event(
-        "feed_impression",
-        article_topic_ids=[10],
-    ) == {}
+    assert (
+        topic_strengths_for_event(
+            "feed_impression",
+            article_topic_ids=[10],
+        )
+        == {}
+    )

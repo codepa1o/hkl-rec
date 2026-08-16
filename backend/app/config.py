@@ -211,9 +211,7 @@ def get_settings() -> Settings:
         profile_v2_long_half_life_seconds=int(
             _env("NEWSREC_PROFILE_V2_LONG_HALF_LIFE_SECONDS", "2592000")
         ),
-        profile_v2_long_term_factor=float(
-            _env("NEWSREC_PROFILE_V2_LONG_TERM_FACTOR", "0.25")
-        ),
+        profile_v2_long_term_factor=float(_env("NEWSREC_PROFILE_V2_LONG_TERM_FACTOR", "0.25")),
         profile_v2_boost=float(_env("NEWSREC_PROFILE_V2_BOOST", "0.10")),
         recommendation_click_topic_delta=float(
             _env("NEWSREC_RECOMMENDATION_CLICK_TOPIC_DELTA", "0.08")

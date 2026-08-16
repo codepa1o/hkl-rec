@@ -82,10 +82,7 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
             self.connection.profile["profile_v2_last_event_ts"] = int(event_ts)
             self.connection.profile["profile_v2_updated_at"] = datetime.now(UTC)
             return
-        if (
-            "FROM user_topic_profile AS profile" in normalized
-            and normalized.startswith("SELECT")
-        ):
+        if "FROM user_topic_profile AS profile" in normalized and normalized.startswith("SELECT"):
             user_id = int(params[0])
             for (row_user_id, topic_id), row in self.connection.topic_rows.items():
                 if row_user_id != user_id:

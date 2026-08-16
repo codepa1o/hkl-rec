@@ -211,9 +211,7 @@ def replay_event(
     settings: Settings,
 ) -> bool:
     event = _event_message(row)
-    news_topic_ids = (
-        [] if event.event_type == "search_result_click" else _stored_topic_ids(row)
-    )
+    news_topic_ids = [] if event.event_type == "search_result_click" else _stored_topic_ids(row)
     if event.news_id is not None and not news_topic_ids:
         news_topic_ids = load_news_topic_ids(connection, event.news_id)
     query_topic_ids = (

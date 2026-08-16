@@ -150,12 +150,8 @@ def project_topic_signal(
         decayed,
         short_positive_score=decayed.short_positive_score + positive_delta,
         short_negative_score=decayed.short_negative_score + negative_delta,
-        long_positive_score=(
-            decayed.long_positive_score + positive_delta * long_term_factor
-        ),
-        long_negative_score=(
-            decayed.long_negative_score + negative_delta * long_term_factor
-        ),
+        long_positive_score=(decayed.long_positive_score + positive_delta * long_term_factor),
+        long_negative_score=(decayed.long_negative_score + negative_delta * long_term_factor),
         positive_evidence_count=(
             decayed.positive_evidence_count + (1 if positive_delta > 0 else 0)
         ),

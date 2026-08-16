@@ -142,9 +142,7 @@ def test_sync_upvote_projects_v2_in_the_direct_database_transaction(
     repository._load_sponsored_event_attribution = lambda **kwargs: None
     repository._enqueue_raw_event = lambda *args, **kwargs: None
     projected: list[tuple[Any, dict[int, float]]] = []
-    repository._project_profile_v2 = lambda conn, evt, strengths: projected.append(
-        (evt, strengths)
-    )
+    repository._project_profile_v2 = lambda conn, evt, strengths: projected.append((evt, strengths))
 
     monkeypatch.setattr(postgres, "claim_event_id", lambda *args, **kwargs: True)
     monkeypatch.setattr(

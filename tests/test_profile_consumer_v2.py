@@ -113,8 +113,8 @@ def test_projection_records_update_and_late_event_metrics(
     assert applier._project_profile_v2(object(), event("upvote"), {10: 2.0}) is True
     assert calls[0]["event_type"] == "upvote"
     assert calls[0]["topic_strengths"] == {10: 2.0}
-    assert updates == [((('event_type', 'upvote'),), 1.0)]
-    assert late == [((('reason', 'out_of_order'),), 1.0)]
+    assert updates == [((("event_type", "upvote"),), 1.0)]
+    assert late == [((("reason", "out_of_order"),), 1.0)]
     assert len(duration) == 1
     assert duration[0][1] >= 0
 
@@ -140,7 +140,7 @@ def test_pre_reset_event_is_recorded_but_v1_projection_is_skipped(
 
     assert applier.apply_event(event()) is True
     assert project_flags == [False]
-    assert late == [((('reason', 'pre_reset'),), 1.0)]
+    assert late == [((("reason", "pre_reset"),), 1.0)]
     assert connection.committed is True
     assert connection.rolled_back is False
 

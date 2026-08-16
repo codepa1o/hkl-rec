@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from alembic import command
 from backend.app.auth.repository import PostgresAuthRepository
@@ -24,14 +25,18 @@ def _database_url() -> str:
 
 
 def test_alembic_upgrade_is_idempotent_and_auth_tables_are_at_head() -> None:
-    command.upgrade(Config("alembic.ini"), "head")
-    command.upgrade(Config("alembic.ini"), "head")
+    config = Config("alembic.ini")
+    expected_head = ScriptDirectory.from_config(config).get_current_head()
+    assert expected_head is not None
+
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
 
     connection = connect(parse_database_url(_database_url()))
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT version_num FROM alembic_version")
-            assert cursor.fetchone()["version_num"] == "20260816_0004"
+            assert cursor.fetchone()["version_num"] == expected_head
             cursor.execute(
                 "SELECT next_user_id FROM auth_user_id_sequence "
                 "WHERE sequence_key = 'registered_user'"
