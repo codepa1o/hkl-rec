@@ -169,6 +169,20 @@ def test_profile_reset_uses_session_user_and_returns_cold_profile() -> None:
     assert repository.reset_user_ids == [7004]
 
 
+def test_profile_reset_rejects_untrusted_origin() -> None:
+    repository = ProfileRouteRepository()
+    client = _client(repository)
+    _login(client)
+
+    response = client.post(
+        "/profile/reset",
+        headers={"Origin": "https://attacker.example"},
+    )
+
+    assert response.status_code == 403
+    assert repository.reset_user_ids == []
+
+
 def test_profile_reset_reports_missing_seed_as_service_unavailable() -> None:
     repository = ProfileRouteRepository(
         reset_error=ProfileSeedUnavailableError("cold_start_default")

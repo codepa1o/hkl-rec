@@ -38,6 +38,10 @@ def upgrade() -> None:
     )
     op.add_column(
         "user_profile",
+        sa.Column("profile_reset_before_event_id", sa.BigInteger(), nullable=True),
+    )
+    op.add_column(
+        "user_profile",
         sa.Column("profile_v2_updated_at", sa.DateTime(timezone=True), nullable=True),
     )
 
@@ -136,6 +140,7 @@ def downgrade() -> None:
     op.drop_index("idx_user_topic_profile_user", table_name="user_topic_profile")
     op.drop_table("user_topic_profile")
     op.drop_column("user_profile", "profile_v2_updated_at")
+    op.drop_column("user_profile", "profile_reset_before_event_id")
     op.drop_column("user_profile", "profile_reset_before_ts")
     op.drop_column("user_profile", "profile_v2_last_event_ts")
     op.drop_column("user_profile", "profile_v2_evidence_count")

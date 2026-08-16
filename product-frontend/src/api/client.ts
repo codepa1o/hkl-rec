@@ -162,13 +162,14 @@ export function trackEvent(payload: EventTrackRequest): Promise<EventTrackRespon
 
 export function sendTrackedEventKeepalive(payload: EventTrackRequest): void {
   const url = new URL("/event/track", BASE_URL);
+  const beaconUrl = new URL("/event/track/beacon", BASE_URL);
   const serialized = JSON.stringify(payload);
   let acceptedByBeacon = false;
   try {
     acceptedByBeacon = Boolean(
       globalThis.navigator?.sendBeacon?.(
-        url.toString(),
-        new Blob([serialized], { type: "application/json" }),
+        beaconUrl.toString(),
+        serialized,
       ),
     );
   } catch {

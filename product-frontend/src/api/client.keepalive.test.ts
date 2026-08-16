@@ -28,8 +28,8 @@ describe("sendTrackedEventKeepalive", () => {
     sendTrackedEventKeepalive(payload);
 
     expect(beacon).toHaveBeenCalledWith(
-      expect.stringMatching(/\/event\/track$/),
-      expect.any(Blob),
+      expect.stringMatching(/\/event\/track\/beacon$/),
+      JSON.stringify(payload),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });

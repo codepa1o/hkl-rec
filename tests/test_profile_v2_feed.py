@@ -12,6 +12,7 @@ from backend.app.repositories.postgres import (
     _apply_profile_v2_boost,
     _profile_v2_recall_scores,
 )
+from backend.app.schemas.feed import FeedItemScores
 
 
 class SavepointCursor(AbstractContextManager["SavepointCursor"]):
@@ -47,6 +48,19 @@ def test_default_arm_score_is_unchanged_and_has_no_v2_debug_score() -> None:
 
     assert final_score == 0.625
     assert profile_v2_score is None
+
+
+def test_default_scores_serialization_omits_profile_v2_field() -> None:
+    payload = FeedItemScores(
+        base_recall_score=0.1,
+        personalized_topic_score=0.2,
+        default_topic_score=0.3,
+        topic_match_score=0.4,
+        query_recall_boost=0.0,
+        final_score=0.5,
+    ).model_dump()
+
+    assert "profile_v2_score" not in payload
 
 
 def test_profile_v2_arm_adds_signed_topic_boost() -> None:

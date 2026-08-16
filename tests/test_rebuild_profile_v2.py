@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +24,33 @@ class TransactionConnection:
 
     def rollback(self) -> None:
         self.rollbacks += 1
+
+
+class PsycopgStyleTransaction(AbstractContextManager[None]):
+    def __init__(self, connection: PsycopgStyleConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self) -> None:
+        self.connection.transaction_enters += 1
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.connection.transaction_exits += 1
+        return None
+
+
+class PsycopgStyleConnection:
+    """Models the raw psycopg API: transaction(), but no begin()."""
+
+    def __init__(self) -> None:
+        self.commits = 0
+        self.transaction_enters = 0
+        self.transaction_exits = 0
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def transaction(self) -> PsycopgStyleTransaction:
+        return PsycopgStyleTransaction(self)
 
 
 def _event(event_id: int, *, user_id: int, event_ts: int) -> dict[str, Any]:
@@ -59,7 +88,11 @@ def test_dry_run_counts_filtered_events_without_writes(
     monkeypatch.setattr(
         rebuild_profile_v2,
         "load_reset_cutoff",
-        lambda connection_arg, user_id: 100 if user_id == 7 else None,
+        lambda connection_arg, user_id, *, for_update=False: (
+            rebuild_profile_v2.ResetBoundary(event_ts=100, event_id=4)
+            if user_id == 7
+            else None
+        ),
     )
     monkeypatch.setattr(
         rebuild_profile_v2,
@@ -109,7 +142,11 @@ def test_live_rebuild_sorts_events_and_is_repeatable(
     snapshots: list[list[int]] = []
 
     monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7])
-    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: None)
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_reset_cutoff",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(
         rebuild_profile_v2,
         "load_rebuild_events",
@@ -139,8 +176,36 @@ def test_live_rebuild_sorts_events_and_is_repeatable(
         assert summary.replayed_event_count == 3
 
     assert snapshots == [[1, 2, 3], [1, 2, 3]]
-    assert connection.commits == 2
+    assert connection.begins == 2
+    assert connection.commits == 4
     assert connection.rollbacks == 0
+
+
+def test_live_rebuild_uses_raw_psycopg_transaction_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = PsycopgStyleConnection()
+    monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7])
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_reset_cutoff",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(rebuild_profile_v2, "load_rebuild_events", lambda *args: [])
+    monkeypatch.setattr(rebuild_profile_v2, "clear_profile_v2_projection", lambda *args: None)
+
+    summary = rebuild_profile_v2.rebuild_profiles(
+        connection,
+        settings=Settings(),
+        user_id=7,
+        all_users=False,
+        dry_run=False,
+    )
+
+    assert summary.failed_user_ids == []
+    assert connection.commits == 1
+    assert connection.transaction_enters == 1
+    assert connection.transaction_exits == 1
 
 
 def test_live_rebuild_rolls_back_only_failed_user_and_continues(
@@ -149,7 +214,11 @@ def test_live_rebuild_rolls_back_only_failed_user_and_continues(
     connection = TransactionConnection()
     replayed_users: list[int] = []
     monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7, 8])
-    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: None)
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_reset_cutoff",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(
         rebuild_profile_v2,
         "load_rebuild_events",
@@ -179,21 +248,38 @@ def test_live_rebuild_rolls_back_only_failed_user_and_continues(
     assert summary.failed_user_ids == [7]
     assert replayed_users == [8]
     assert connection.rollbacks == 1
-    assert connection.commits == 1
+    assert connection.begins == 2
+    assert connection.commits == 2
 
 
-def test_reset_cutoff_is_passed_to_event_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("dry_run, expected_for_update", [(True, False), (False, True)])
+def test_reset_cutoff_is_locked_before_event_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    dry_run: bool,
+    expected_for_update: bool,
+) -> None:
     connection = TransactionConnection()
-    observed_cutoffs: list[int | None] = []
+    boundary = rebuild_profile_v2.ResetBoundary(event_ts=500, event_id=12)
+    observed: list[tuple[bool, rebuild_profile_v2.ResetBoundary | None]] = []
     monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7])
-    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: 500)
+
+    def load_cutoff(
+        connection_arg: Any,
+        user_id: int,
+        *,
+        for_update: bool = False,
+    ) -> rebuild_profile_v2.ResetBoundary:
+        observed.append((for_update, None))
+        return boundary
+
+    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", load_cutoff)
 
     def load_events(
         connection_arg: Any,
         user_id: int,
-        reset_cutoff: int | None,
+        reset_cutoff: rebuild_profile_v2.ResetBoundary | None,
     ) -> list[dict[str, Any]]:
-        observed_cutoffs.append(reset_cutoff)
+        observed[-1] = (observed[-1][0], reset_cutoff)
         return []
 
     monkeypatch.setattr(rebuild_profile_v2, "load_rebuild_events", load_events)
@@ -203,10 +289,10 @@ def test_reset_cutoff_is_passed_to_event_selection(monkeypatch: pytest.MonkeyPat
         settings=Settings(),
         user_id=7,
         all_users=False,
-        dry_run=True,
+        dry_run=dry_run,
     )
 
-    assert observed_cutoffs == [500]
+    assert observed == [(expected_for_update, boundary)]
 
 
 def test_replay_uses_production_topic_signal_and_projection_functions(
@@ -243,3 +329,35 @@ def test_replay_uses_production_topic_signal_and_projection_functions(
     assert projected[0]["user_id"] == 7
     assert projected[0]["event_ts"] == 123
     assert projected[0]["topic_strengths"] == {10: 2.0}
+
+
+def test_search_click_rebuild_keeps_article_and_query_topic_attribution_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _event(1, user_id=7, event_ts=123)
+    row.update(
+        {
+            "event_type": "search_result_click",
+            "query_key": "market",
+            "topic_ids_json": [10, 20],
+        }
+    )
+    projected: list[dict[int, float]] = []
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_answer_topic_ids",
+        lambda connection, article_id: [10],
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_query_topics",
+        lambda connection, query_key: [SimpleNamespace(topic_id=10), SimpleNamespace(topic_id=20)],
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "apply_profile_v2_event",
+        lambda connection, **kwargs: projected.append(kwargs["topic_strengths"]) or True,
+    )
+
+    assert rebuild_profile_v2.replay_event(object(), row, settings=Settings()) is True
+    assert projected == [{10: 1.25, 20: 0.625}]

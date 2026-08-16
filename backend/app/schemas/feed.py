@@ -29,7 +29,7 @@ class FeedItemScores(ApiModel):
     topic_match_score: float
     query_recall_boost: float
     final_score: float
-    profile_v2_score: float | None = None
+    profile_v2_score: float | None = Field(default=None, exclude_if=lambda value: value is None)
     sponsored_score: float | None = None
 
 

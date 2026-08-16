@@ -37,6 +37,9 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
         if "FROM user_profile" in normalized and normalized.startswith("SELECT"):
             self._one = deepcopy(self.connection.profile)
             return
+        if normalized.startswith("SELECT MAX(event_id) AS event_id FROM user_event"):
+            self._one = {"event_id": max(self.connection.event_ids, default=None)}
+            return
         if (
             "FROM user_topic_profile" in normalized
             and "topic_id = %s" in normalized
@@ -106,6 +109,7 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
                 recent_queries,
                 behavior_score,
                 reset_ts,
+                reset_event_id,
                 user_id,
             ) = params
             assert int(user_id) == int(self.connection.profile["user_id"])
@@ -119,6 +123,9 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
                     "profile_v2_evidence_count": 0,
                     "profile_v2_last_event_ts": None,
                     "profile_reset_before_ts": int(reset_ts),
+                    "profile_reset_before_event_id": (
+                        int(reset_event_id) if reset_event_id is not None else None
+                    ),
                     "profile_v2_updated_at": datetime.now(UTC),
                 }
             )
@@ -150,6 +157,7 @@ class FakeConnection:
             "profile_v2_evidence_count": 0,
             "profile_v2_last_event_ts": None,
             "profile_reset_before_ts": None,
+            "profile_reset_before_event_id": None,
             "profile_v2_updated_at": None,
         }
         self.topic_rows: dict[tuple[int, int], dict[str, Any]] = {}
@@ -163,6 +171,7 @@ class FakeConnection:
             }
         }
         self.statements: list[tuple[str, tuple[Any, ...]]] = []
+        self.event_ids = [3, 9, 12]
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self)
@@ -203,7 +212,7 @@ def test_pre_reset_and_out_of_order_events_do_not_mutate_projection() -> None:
             connection,
             user_id=7,
             event_type="upvote",
-            event_ts=500,
+            event_ts=499,
             topic_strengths={10: 2.0},
             config=CONFIG,
         )
@@ -240,6 +249,21 @@ def test_pre_reset_and_out_of_order_events_do_not_mutate_projection() -> None:
     )
     assert connection.topic_rows == before
     assert connection.profile["profile_v2_evidence_count"] == 0
+
+
+def test_event_in_reset_second_is_treated_as_causally_post_reset() -> None:
+    connection = FakeConnection()
+    connection.profile["profile_reset_before_ts"] = 500
+
+    assert apply_profile_v2_event(
+        connection,
+        user_id=7,
+        event_type="upvote",
+        event_ts=500,
+        topic_strengths={10: 2.0},
+        config=CONFIG,
+    )
+    assert connection.profile["profile_v2_evidence_count"] == 1
 
 
 def test_zero_strength_does_not_create_evidence_or_topic_rows() -> None:
@@ -340,9 +364,13 @@ def test_reset_restores_v1_seed_and_clears_only_v2_projection() -> None:
     assert connection.profile["behavior_score"] == 0.0
     assert connection.profile["profile_v2_evidence_count"] == 0
     assert connection.profile["profile_reset_before_ts"] == 2_000
+    assert connection.profile["profile_reset_before_event_id"] == 12
     assert (7, 10) not in connection.topic_rows
     assert (99, 20) in connection.topic_rows
-    assert not any("user_event" in statement for statement, _params in connection.statements)
+    assert not any(
+        statement.startswith(("DELETE FROM user_event", "UPDATE user_event"))
+        for statement, _params in connection.statements
+    )
 
 
 def test_reset_fails_when_the_configured_seed_is_missing() -> None:

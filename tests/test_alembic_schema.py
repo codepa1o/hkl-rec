@@ -155,6 +155,7 @@ def test_profile_v2_user_state_columns_exist() -> None:
         "profile_v2_evidence_count",
         "profile_v2_last_event_ts",
         "profile_reset_before_ts",
+        "profile_reset_before_event_id",
         "profile_v2_updated_at",
     } <= set(columns.keys())
     assert columns.profile_v2_evidence_count.nullable is False

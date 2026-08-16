@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from backend.app.auth.service import AuthenticatedUser
 from backend.app.dependencies import get_profile_service
-from backend.app.routers.auth import get_current_user
+from backend.app.routers.auth import get_current_user, require_trusted_origin
 from backend.app.schemas.profile import ProfileResponse
 from backend.app.services.profile import ProfileService
 
@@ -22,6 +22,7 @@ def profile(
 @router.post("/reset", response_model=ProfileResponse)
 def reset_profile(
     current_user: AuthenticatedUser = Depends(get_current_user),
+    _trusted_origin: None = Depends(require_trusted_origin),
     service: ProfileService = Depends(get_profile_service),
 ) -> ProfileResponse:
     return service.reset_profile(current_user.user_id)

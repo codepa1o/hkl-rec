@@ -80,7 +80,7 @@ MySQL 兼容模式仍使用 answer/question 表名，但 OpenAPI 不会暴露这
 
 `status` 取值为 `cold`、`learning` 或 `established`；`confidence` 范围为 0–1。
 重置成功返回新的冷启动画像。重置保留 `user_event` 审计记录，并设置事件时间边界，确保
-旧的 Kafka 重试或重建不会恢复重置前兴趣。本接口可能返回：
+旧的 Kafka 重试或重建不会恢复重置前兴趣。同秒内的事件由用户行锁和事实事件 ID 边界保持因果顺序。本接口可能返回：
 
 - 401：会话缺失或失效；
 - 404 `PROFILE_NOT_INITIALIZED`：账号尚无 `user_profile` 行；

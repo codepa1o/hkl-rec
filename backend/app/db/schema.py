@@ -268,6 +268,7 @@ user_profile = Table(
     Column("profile_v2_evidence_count", Integer, nullable=False, server_default=text("0")),
     Column("profile_v2_last_event_ts", BigInteger),
     Column("profile_reset_before_ts", BigInteger),
+    Column("profile_reset_before_event_id", BigInteger),
     Column("profile_v2_updated_at", DateTime(timezone=True)),
     Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     Index("idx_user_profile_seed", "cold_start_seed_key"),

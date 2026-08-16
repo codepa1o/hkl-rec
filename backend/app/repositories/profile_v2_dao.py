@@ -63,6 +63,7 @@ def fetch_profile_v2_user_state(
               profile_v2_evidence_count,
               profile_v2_last_event_ts,
               profile_reset_before_ts,
+              profile_reset_before_event_id,
               profile_v2_updated_at
             FROM user_profile
             WHERE user_id = %s
@@ -233,7 +234,9 @@ def profile_event_is_before_reset(
 ) -> bool:
     user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
     reset_before = user_state.get("profile_reset_before_ts")
-    return reset_before is not None and event_ts <= int(reset_before)
+    # Both reset and projection lock this row. A same-second event that gets
+    # the lock after reset is causally post-reset and must remain eligible.
+    return reset_before is not None and event_ts < int(reset_before)
 
 
 def apply_profile_v2_event_with_outcome(
@@ -260,7 +263,7 @@ def apply_profile_v2_event_with_outcome(
 
     user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
     reset_before = user_state.get("profile_reset_before_ts")
-    if reset_before is not None and event_ts <= int(reset_before):
+    if reset_before is not None and event_ts < int(reset_before):
         return ProfileProjectionOutcome(
             updated=False,
             reason="pre_reset",
@@ -494,6 +497,16 @@ def reset_profile_projections(
     seed = load_profile_seed(connection, seed_key=seed_key)
     with connection.cursor() as cursor:
         cursor.execute(
+            "SELECT MAX(event_id) AS event_id FROM user_event WHERE user_id = %s",
+            (user_id,),
+        )
+        boundary_row = cast(dict[str, Any] | None, cursor.fetchone())
+        reset_before_event_id = (
+            int(boundary_row["event_id"])
+            if boundary_row is not None and boundary_row.get("event_id") is not None
+            else None
+        )
+        cursor.execute(
             """
             UPDATE user_profile
             SET
@@ -505,6 +518,7 @@ def reset_profile_projections(
               profile_v2_evidence_count = 0,
               profile_v2_last_event_ts = NULL,
               profile_reset_before_ts = %s,
+              profile_reset_before_event_id = %s,
               profile_v2_updated_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
             WHERE user_id = %s
@@ -515,6 +529,7 @@ def reset_profile_projections(
                 json_text(seed.get("recent_queries_json") or []),
                 float(seed.get("behavior_score") or 0.0),
                 reset_ts,
+                reset_before_event_id,
                 user_id,
             ),
         )

@@ -50,7 +50,7 @@ python scripts/rebuild_profile_v2.py --all --dry-run
 python scripts/rebuild_profile_v2.py --all
 ```
 
-`POST /profile/reset` 在同一事务内恢复系统冷启动种子、清空 V1/V2 派生画像并记录重置边界，
+`POST /profile/reset` 在同一事务内恢复系统冷启动种子、清空 V1/V2 派生画像并记录时间与事实事件 ID 双重边界，
 但保留 `user_event` 审计事实。种子缺失时事务回滚并返回
 `PROFILE_SEED_UNAVAILABLE`；用户画像未初始化时返回 `PROFILE_NOT_INITIALIZED`。
 紧急回退只需设置 `NEWSREC_PROFILE_V2_ENABLED=0`：它会停止新投影，并使显式

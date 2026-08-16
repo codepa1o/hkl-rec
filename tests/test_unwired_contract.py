@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 _BUSINESS_ENDPOINTS = [
@@ -93,3 +95,35 @@ def test_profile_v2_feed_arm_is_accepted_by_the_api_contract(unwired_client):
 
     assert response.status_code == 503, response.text
     assert response.json()["error_code"] == "repository_not_ready"
+
+
+def test_text_plain_beacon_endpoint_accepts_event_payload(unwired_client):
+    path = "/event/track/beacon"
+    response = unwired_client.post(
+        path,
+        content=json.dumps(
+            {
+                "event_id": "dwell-7248-1",
+                "user_id": 7248,
+                "event_type": "dwell",
+                "surface": "article_detail",
+                "article_id": 1,
+                "dwell_ms": 12_000,
+            }
+        ),
+        headers={"Content-Type": "text/plain;charset=UTF-8"},
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error_code"] == "repository_not_ready"
+    assert response.json()["path"] == path
+
+
+def test_text_plain_beacon_endpoint_rejects_invalid_json(unwired_client):
+    response = unwired_client.post(
+        "/event/track/beacon",
+        content="not-json",
+        headers={"Content-Type": "text/plain;charset=UTF-8"},
+    )
+
+    assert response.status_code == 422
