@@ -1,10 +1,16 @@
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getArticleCard, trackEvent } from "../api/client";
+import {
+  getArticleCard,
+  newClientId,
+  sendTrackedEventKeepalive,
+  trackEvent,
+} from "../api/client";
 import type { ArticleCardResponse } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
+import { dwellEventId, VisibleDwellAccumulator } from "../profile/visibleDwell";
 
 export default function ArticleDetailPage() {
   const { articleId: articleIdParam } = useParams<{ articleId: string }>();
@@ -13,6 +19,7 @@ export default function ArticleDetailPage() {
   const [data, setData] = useState<ArticleCardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [routeLoadId] = useState(() => newClientId("article-detail"));
 
   useEffect(() => {
     if (!articleId || isNaN(articleId)) return;
@@ -39,13 +46,57 @@ export default function ArticleDetailPage() {
 
   useEffect(() => {
     if (!data || !selectedPersona) return;
-    trackEvent({
+    void trackEvent({
       user_id: selectedPersona.user_id,
       event_type: "detail_view",
       surface: "article_detail",
       article_id: data.article_id,
-    }).then(() => bumpProfile());
-  }, [data, selectedPersona, bumpProfile]);
+    })
+      .then(() => bumpProfile())
+      .catch(() => undefined);
+  }, [data?.article_id, selectedPersona?.user_id, bumpProfile]);
+
+  useEffect(() => {
+    const userId = selectedPersona?.user_id;
+    const loadedArticleId = data?.article_id;
+    if (!userId || !loadedArticleId) return;
+
+    const dwell = new VisibleDwellAccumulator(
+      () => performance.now(),
+      document.visibilityState === "visible",
+    );
+    const flush = () => {
+      const dwellMs = dwell.takeForSend(10_000);
+      if (dwellMs === null) return;
+      try {
+        sendTrackedEventKeepalive({
+          event_id: dwellEventId(userId, loadedArticleId, routeLoadId),
+          user_id: userId,
+          event_type: "dwell",
+          surface: "article_detail",
+          article_id: loadedArticleId,
+          dwell_ms: dwellMs,
+        });
+      } catch {
+        // Unload feedback is best-effort and must never block navigation.
+      }
+    };
+    const handleVisibility = () => {
+      dwell.setVisible(document.visibilityState === "visible");
+    };
+    const handlePageHide = () => {
+      dwell.setVisible(false);
+      flush();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", handlePageHide);
+      flush();
+    };
+  }, [data?.article_id, selectedPersona?.user_id, routeLoadId]);
 
   if (isNaN(articleId)) {
     return (

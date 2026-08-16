@@ -159,3 +159,27 @@ export function trackEvent(payload: EventTrackRequest): Promise<EventTrackRespon
     body: JSON.stringify(payload),
   });
 }
+
+export function sendTrackedEventKeepalive(payload: EventTrackRequest): void {
+  const url = new URL("/event/track", BASE_URL);
+  const serialized = JSON.stringify(payload);
+  let acceptedByBeacon = false;
+  try {
+    acceptedByBeacon = Boolean(
+      globalThis.navigator?.sendBeacon?.(
+        url.toString(),
+        new Blob([serialized], { type: "application/json" }),
+      ),
+    );
+  } catch {
+    acceptedByBeacon = false;
+  }
+  if (acceptedByBeacon) return;
+  void fetch(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: serialized,
+    keepalive: true,
+  }).catch(() => undefined);
+}
