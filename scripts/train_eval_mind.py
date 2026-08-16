@@ -365,9 +365,9 @@ def _build_item_cosine_similarity(
 ) -> ItemSimilarity:
     norms = np.linalg.norm(item_embeddings, axis=1)
 
-    def similarity(left_article_id: int, right_article_id: int) -> float | None:
-        left_index = item_map.get(left_article_id)
-        right_index = item_map.get(right_article_id)
+    def similarity(left_news_id: str, right_news_id: str) -> float | None:
+        left_index = item_map.get(int(left_news_id[1:]))
+        right_index = item_map.get(int(right_news_id[1:]))
         if left_index is None or right_index is None:
             return None
         denominator = float(norms[left_index] * norms[right_index])
@@ -411,7 +411,7 @@ def _ranking_metrics(
         else:
             candidates = [
                 MMRCandidate(
-                    article_id=int(row.article_id),
+                    news_id=f"N{int(row.article_id)}",
                     relevance=float(row.score),
                     topic_ids=(
                         article_topics.get(int(row.article_id), frozenset())
@@ -470,9 +470,9 @@ def _ranking_metrics(
             if als_similarity is not None:
                 pair_similarities = [
                     hybrid_item_similarity(
-                        left_article_id,
+                        f"N{left_article_id}",
                         article_topics.get(left_article_id, frozenset()),
-                        right_article_id,
+                        f"N{right_article_id}",
                         article_topics.get(right_article_id, frozenset()),
                         als_similarity=als_similarity,
                     )

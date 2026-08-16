@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,8 +12,6 @@ from dotenv import dotenv_values
 
 EventMode = Literal["sync_postgres", "kafka_dual_write", "kafka_async"]
 SearchRetrievalMode = Literal["lexical_v1", "hybrid_v1"]
-logger = logging.getLogger(__name__)
-_DEPRECATED_ENV_WARNINGS: set[str] = set()
 _DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 # Process environment variables still take precedence in _env_optional().
 _DOTENV_VALUES: Mapping[str, str | None] = dotenv_values(_DOTENV_PATH)
@@ -22,12 +19,6 @@ _DOTENV_VALUES: Mapping[str, str | None] = dotenv_values(_DOTENV_PATH)
 
 def parse_event_mode(value: str) -> EventMode:
     normalized = value.strip().lower()
-    if normalized == "sync_mysql":
-        logger.warning(
-            "deprecated event mode used",
-            extra={"deprecated_mode": "sync_mysql", "replacement_mode": "sync_postgres"},
-        )
-        normalized = "sync_postgres"
     if normalized in {"sync_postgres", "kafka_dual_write", "kafka_async"}:
         return cast(EventMode, normalized)
     raise ValueError(
@@ -43,23 +34,10 @@ def parse_search_retrieval_mode(value: str) -> SearchRetrievalMode:
 
 
 def _env_optional(name: str) -> str | None:
-    legacy_name = name.replace("NEWSREC_", "ZHIHUREC_", 1)
     for source in (os.environ, _DOTENV_VALUES):
         value = source.get(name)
         if value is not None:
             return value
-        legacy_value = source.get(legacy_name)
-        if legacy_value is not None:
-            if legacy_name not in _DEPRECATED_ENV_WARNINGS:
-                logger.warning(
-                    "deprecated environment variable used",
-                    extra={
-                        "deprecated_env": legacy_name,
-                        "replacement_env": name,
-                    },
-                )
-                _DEPRECATED_ENV_WARNINGS.add(legacy_name)
-            return legacy_value
     return None
 
 
@@ -97,26 +75,15 @@ def _auth_secret_key() -> str:
     return secret
 
 
-def _seed_demo_user_id(seed_dir: str) -> int:
-    path = Path(seed_dir) / "demo_user_profile_seed.json"
-    if path.is_file():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            return int(payload["user_id"])
-        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Invalid demo user seed {path}: {exc}") from exc
-    return 7001
-
-
-def _seed_source_fingerprint(seed_dir: str) -> str | None:
-    path = Path(seed_dir) / "manifest.json"
+def _normalized_source_fingerprint(normalized_dir: str) -> str | None:
+    path = Path(normalized_dir) / "normalization_manifest.json"
     if not path.is_file():
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        value = str(payload.get("source_fingerprint") or "").strip()
+        value = str(payload.get("normalized_fingerprint") or "").strip()
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid demo manifest {path}: {exc}") from exc
+        raise ValueError(f"Invalid normalization manifest {path}: {exc}") from exc
     return value or None
 
 
@@ -134,7 +101,7 @@ class Settings:
     allow_unauthenticated_research_api: bool = False
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
-    demo_seed_dir: str = "build/mind_demo_world"
+    mind_normalized_dir: str = "build/mind_normalized"
     postgres_connect_timeout_seconds: int = 5
     postgres_pool_min_size: int = 1
     postgres_pool_max_connections: int = 10
@@ -143,6 +110,11 @@ class Settings:
     recommendation_click_behavior_delta: float = 3.0
     search_result_click_behavior_delta: float = 5.0
     profile_topic_decay: float = 0.92
+    profile_v2_enabled: bool = False
+    profile_v2_short_half_life_seconds: int = 21_600
+    profile_v2_long_half_life_seconds: int = 2_592_000
+    profile_v2_long_term_factor: float = 0.25
+    profile_v2_boost: float = 0.10
     recommendation_click_topic_delta: float = 0.08
     search_result_click_topic_delta: float = 0.12
     search_result_overlap_topic_delta: float = 0.2
@@ -153,7 +125,7 @@ class Settings:
     als_recall_top_k: int = 200
     als_recall_enabled: bool = True
     search_retrieval_mode: SearchRetrievalMode = "hybrid_v1"
-    search_index_dir: str = "build/mind_search/demo"
+    search_index_dir: str = "build/mind_search/full"
     search_source_fingerprint: str | None = None
     event_mode: EventMode = "sync_postgres"
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
@@ -203,16 +175,11 @@ def compute_alpha(behavior_score: float, settings: Settings) -> float:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    demo_seed_dir = _env("NEWSREC_DEMO_SEED_DIR", "build/mind_demo_world")
-    configured_demo_user_id = _env_optional("NEWSREC_DEFAULT_DEMO_USER_ID")
+    mind_normalized_dir = _env("NEWSREC_MIND_NORMALIZED_DIR", "build/mind_normalized")
     return Settings(
         app_name=_env("NEWSREC_APP_NAME", "NewsIntentRec Backend"),
         app_version=_env("NEWSREC_APP_VERSION", "0.1.0"),
-        default_demo_user_id=(
-            int(configured_demo_user_id)
-            if configured_demo_user_id is not None
-            else _seed_demo_user_id(demo_seed_dir)
-        ),
+        default_demo_user_id=int(_env("NEWSREC_DEFAULT_DEMO_USER_ID", "7001")),
         database_url=_env("NEWSREC_DATABASE_URL", ""),
         auth_secret_key=_auth_secret_key(),
         auth_access_token_minutes=int(_env("NEWSREC_AUTH_ACCESS_TOKEN_MINUTES", "60")),
@@ -224,7 +191,7 @@ def get_settings() -> Settings:
         ),
         auth_rate_limit_attempts=int(_env("NEWSREC_AUTH_RATE_LIMIT_ATTEMPTS", "10")),
         auth_rate_limit_window_seconds=int(_env("NEWSREC_AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")),
-        demo_seed_dir=demo_seed_dir,
+        mind_normalized_dir=mind_normalized_dir,
         postgres_connect_timeout_seconds=int(_env("NEWSREC_POSTGRES_CONNECT_TIMEOUT_SECONDS", "5")),
         postgres_pool_min_size=int(_env("NEWSREC_POSTGRES_POOL_MIN_SIZE", "1")),
         postgres_pool_max_connections=int(_env("NEWSREC_POSTGRES_POOL_MAX_CONNECTIONS", "10")),
@@ -237,6 +204,17 @@ def get_settings() -> Settings:
             _env("NEWSREC_SEARCH_RESULT_CLICK_BEHAVIOR_DELTA", "5.0")
         ),
         profile_topic_decay=float(_env("NEWSREC_PROFILE_TOPIC_DECAY", "0.92")),
+        profile_v2_enabled=_env_bool("NEWSREC_PROFILE_V2_ENABLED", "0"),
+        profile_v2_short_half_life_seconds=int(
+            _env("NEWSREC_PROFILE_V2_SHORT_HALF_LIFE_SECONDS", "21600")
+        ),
+        profile_v2_long_half_life_seconds=int(
+            _env("NEWSREC_PROFILE_V2_LONG_HALF_LIFE_SECONDS", "2592000")
+        ),
+        profile_v2_long_term_factor=float(
+            _env("NEWSREC_PROFILE_V2_LONG_TERM_FACTOR", "0.25")
+        ),
+        profile_v2_boost=float(_env("NEWSREC_PROFILE_V2_BOOST", "0.10")),
         recommendation_click_topic_delta=float(
             _env("NEWSREC_RECOMMENDATION_CLICK_TOPIC_DELTA", "0.08")
         ),
@@ -259,8 +237,8 @@ def get_settings() -> Settings:
         search_retrieval_mode=parse_search_retrieval_mode(
             _env("NEWSREC_SEARCH_RETRIEVAL_MODE", "hybrid_v1")
         ),
-        search_index_dir=_env("NEWSREC_SEARCH_INDEX_DIR", "build/mind_search/demo"),
-        search_source_fingerprint=_seed_source_fingerprint(demo_seed_dir),
+        search_index_dir=_env("NEWSREC_SEARCH_INDEX_DIR", "build/mind_search/full"),
+        search_source_fingerprint=_normalized_source_fingerprint(mind_normalized_dir),
         event_mode=parse_event_mode(_env("NEWSREC_EVENT_MODE", "sync_postgres")),
         kafka_bootstrap_servers=_env(
             "NEWSREC_KAFKA_BOOTSTRAP_SERVERS",

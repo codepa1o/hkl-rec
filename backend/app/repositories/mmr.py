@@ -4,7 +4,7 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-ItemSimilarity = Callable[[int, int], float | None]
+ItemSimilarity = Callable[[str, str], float | None]
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class MMRConfig:
 
 @dataclass(frozen=True)
 class MMRCandidate[T]:
-    article_id: int
+    news_id: str
     relevance: float
     topic_ids: frozenset[int]
     value: T
@@ -23,7 +23,7 @@ class MMRCandidate[T]:
 @dataclass(frozen=True)
 class MMRSelection[T]:
     value: T
-    article_id: int
+    news_id: str
     relevance: float
     max_similarity: float
     mmr_score: float
@@ -46,14 +46,14 @@ def topic_jaccard(left: frozenset[int], right: frozenset[int]) -> float:
 
 
 def hybrid_item_similarity(
-    left_article_id: int,
+    left_news_id: str,
     left_topic_ids: frozenset[int],
-    right_article_id: int,
+    right_news_id: str,
     right_topic_ids: frozenset[int],
     *,
     als_similarity: ItemSimilarity,
 ) -> float:
-    als_score = als_similarity(left_article_id, right_article_id)
+    als_score = als_similarity(left_news_id, right_news_id)
     if als_score is not None and math.isfinite(als_score):
         return min(1.0, max(0.0, als_score))
     return topic_jaccard(left_topic_ids, right_topic_ids)
@@ -81,7 +81,7 @@ def rerank_mmr[T](
             key=lambda index: (
                 -(candidates[index].relevance - similarity_penalty * max_similarities[index]),
                 -candidates[index].relevance,
-                candidates[index].article_id,
+                candidates[index].news_id,
             ),
         )
         candidate = candidates[best_index]
@@ -89,7 +89,7 @@ def rerank_mmr[T](
         selected.append(
             MMRSelection(
                 value=candidate.value,
-                article_id=candidate.article_id,
+                news_id=candidate.news_id,
                 relevance=candidate.relevance,
                 max_similarity=max_similarity,
                 mmr_score=candidate.relevance - similarity_penalty * max_similarity,
@@ -101,9 +101,9 @@ def rerank_mmr[T](
 
         for index in remaining:
             similarity = hybrid_item_similarity(
-                candidate.article_id,
+                candidate.news_id,
                 candidate.topic_ids,
-                candidates[index].article_id,
+                candidates[index].news_id,
                 candidates[index].topic_ids,
                 als_similarity=als_similarity,
             )

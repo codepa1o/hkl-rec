@@ -48,10 +48,13 @@ class SearchItemScores(ApiModel):
 
 
 class SearchItem(ApiModel):
-    article_id: int
-    headline: str
+    news_id: str = Field(pattern=r"^N[0-9]+$")
+    title: str
     abstract: str
+    url: str
     source_domain: str
+    category: str
+    subcategory: str
     categories: list[TopicCard]
     scores: SearchItemScores
 
@@ -63,7 +66,7 @@ class SearchMatchedTopic(ApiModel):
 
 
 class SearchResultSource(ApiModel):
-    article_id: int
+    news_id: str
     source: str
 
 

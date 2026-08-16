@@ -17,13 +17,14 @@ MIND 提供真实的文章曝光、已曝光未点击项、点击项以及请求
 - 精确别名 + BM25 + sentence-transformer/FAISS 混合搜索，并带校准后的拒绝机制；
 - FastAPI + PostgreSQL 在线服务、Alembic 迁移、Outbox/Kafka、幂等消费者、健康检查与指标；
 - React 信息流/搜索界面、来源/类别标签、用户画像与推荐解释；
+- 可解释的短/长期主题画像、点踩/可见停留反馈、置信度与一键冷启动重置；
 - Argon2 密码哈希、HttpOnly Cookie 会话、登录注册和受保护前端路由；
-- 相互独立的全量数据模型证据与紧凑、确定性的在线服务/CI 数据世界。
+- MIND-small train/dev 全目录直接落 PostgreSQL，在线推荐与搜索覆盖全部唯一新闻。
 
 ## 当前证据
 
 规范化数据指纹：
-`643c53b0ce5fddf5e08a8d6f8e491ddec607a3f56c335c44d872e6e74cbd4b52`。
+`a0144602f29ee9e07f91d4a67eca0cda5e2ee016f910a62a4a75aeae072f2e9d`。
 
 排序报告在 MIND-small 训练集内部采用全局时间顺序留出法。
 LightGBM 使用 20,000 个完整训练请求和 10,000 个完整评估请求。
@@ -51,16 +52,15 @@ LightGBM 使用 20,000 个完整训练请求和 10,000 个完整评估请求。
 
 | 搜索分组 | Recall@10 | NDCG@10 | MRR@10 | OOD 拒绝准确率 |
 |---|---:|---:|---:|---:|
-| 旧版词法搜索 | 0.2895 | 0.2854 | 0.3158 | 0.0 |
-| BM25 | 0.6847 | 0.6790 | 0.7444 | 1.0 |
-| 稠密检索 | **0.8806** | **0.8319** | **0.8772** | 1.0 |
-| 混合检索 | 0.8122 | 0.8131 | 0.8596 | 1.0 |
+| 旧版词法搜索 | 0.0058 | 0.0043 | 0.0075 | 0.0 |
+| BM25 | 0.4274 | 0.4415 | 0.4887 | 1.0 |
+| 稠密检索 | **0.6233** | **0.5944** | **0.6216** | 1.0 |
+| 混合检索 | 0.5548 | 0.5756 | 0.6040 | 1.0 |
 
 混合检索通过了冻结的上线门槛，并在拼写/噪声查询上表现最好，因此被设为默认方案。
 稠密检索是整体留出评估中最强的分组；项目保留了这一对混合检索不利的结果，而未将其隐藏。
 
-现有信息流本地回环测量的 p50/p95 为 9.47/14.18 ms。在包含 174 篇文档的演示索引上，
-进程内混合检索预热后的测量结果为 6.433/9.568 ms。这些仅是本地测量值，
+现有信息流本地回环测量的 p50/p95 为 9.47/14.18 ms；该结果仅是本地测量值，
 不代表生产环境容量。
 
 ## 数据准备
@@ -73,50 +73,46 @@ MIND 官方页面当前会将下载请求转至需要授权的 Hugging Face 访�
 python scripts/download_mind.py --variant small --split all --accept-license --source huyva
 python scripts/inspect_mind.py --variant small
 python scripts/normalize_mind.py
-python scripts/build_mind_demo_world.py
+python -m alembic upgrade head
+python scripts/import_mind_catalog.py \
+  --normalized-root build/mind_normalized \
+  --replace-catalog
 python scripts/build_search_index.py \
-  --corpus full \
+  --input-dir build/mind_normalized \
+  --output-dir build/mind_search/full \
   --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
   --config evaluation/search_relevance/selected_config.json
 python scripts/calibrate_search_relevance.py
 python scripts/eval_search_relevance.py \
   --config evaluation/search_relevance/selected_config.json
-python scripts/build_search_index.py \
-  --corpus demo \
-  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
-  --config evaluation/search_relevance/selected_config.json \
-  --online-config evaluation/search_relevance/online_demo_config.json
-python scripts/import_demo_world.py \
-  --input-dir build/mind_demo_world \
-  --output-sql build/mind_demo_world/import_demo_world.sql \
-  --truncate-first
 python scripts/train_eval_mind.py
 ```
 
-原始 MIND 文件、规范化 Parquet、演示包和模型二进制文件均保留在本地，不提交到仓库。
+原始 MIND 文件、规范化 Parquet、全量搜索索引和模型二进制文件均保留在本地，不提交到仓库。
+`mind_news` 严格保存 `news.tsv` 的八个原始字段；训练期统计和导入证明分别保存在
+`mind_news_stats` 与 `mind_catalog_import`，不会污染新闻源字段。`topic.topic_key` 保存稳定的
+`category:<name>` / `subcategory:<category>/<name>` 身份，`mind_news_topic` 为每篇新闻保存恰好
+两条精确关联，避免同名子分类串联。
+
+产品首页首批展示 20 篇新闻，并在接近页面底部时通过不透明游标继续加载；一个浏览会话内
+不会重复展示相同 `news_id`。MIND 的标题实体和摘要实体由详情接口解析，仅在文章详情页按
+人物、机构、地点等分组展示。八个源字段与具体页面渲染位置见
+[`docs/mind_news_field_rendering.md`](docs/mind_news_field_rendering.md)。
 
 ## 本地初始化
 
 ```bash
 python -m pip install -r backend/requirements-dev.txt
-PYTHON=.venv/bin/python scripts/init_local.sh --product-frontend
+BUILD_SEARCH_INDEX=1 scripts/init_local.sh
 ```
+
+Windows PowerShell 使用 `./scripts/init_local.ps1 -BuildSearchIndex`。
 
 `docker-compose.yml` 默认启动 PostgreSQL 16，应用启动前必须把 Alembic 升级到最新版本：
 
 ```bash
 docker compose up -d --wait postgres
 python -m alembic upgrade head
-```
-
-旧 MySQL 只作为一次性历史数据源保留在 `docker-compose.mysql-legacy.yml`。首次切换时，在空的
-PostgreSQL 目标库执行以下命令；脚本会在单一目标事务内迁移全部表，并逐表核对行数与内容摘要：
-
-```bash
-docker compose -f docker-compose.mysql-legacy.yml up -d --wait mysql
-NEWSREC_MYSQL_SOURCE_URL='mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo' \
-NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo' \
-python scripts/migrate_mysql_to_postgres.py
 ```
 
 随后生成至少 32 字符的随机鉴权密钥并写入 `.env`：
@@ -132,9 +128,32 @@ NEWSREC_AUTH_SECRET_KEY='<generated-secret>'
   事件业务接口也会要求有效会话。未设置密钥时默认拒绝业务 API；仅离线研究脚本可显式设置
   `NEWSREC_ALLOW_UNAUTHENTICATED_RESEARCH_API=1` 临时兼容，产品部署禁止开启。
 
-添加 `--smoke-test` 可执行一次性检查，添加 `--with-kafka` 可启动 Kafka 工作进程。
-默认数据库为 `newsrec_demo`，种子目录为 `build/mind_demo_world`，
-公共 API 使用文章字段和 `/articles/{article_id}`。
+默认数据库为 `newsrec_demo`，规范化目录为 `build/mind_normalized`，全量搜索索引目录为
+`build/mind_search/full`。公共 API 使用 MIND `news_id`，文章路由为 `/articles/{news_id}`。
+
+## 用户画像 V2 MVP
+
+画像 V2 以 PostgreSQL 为事实源，使用推荐点击、搜索结果点击、点赞、点踩和可见停留时间
+生成带时间衰减的短期/长期主题证据；本期不引入语义向量。正式产品接口为登录态专用的
+`GET /profile` 与 `POST /profile/reset`，用户 ID 只从 HttpOnly Cookie 会话确定。
+研究与演示兼容接口 `GET /debug/profile?user_id=...` 保持不变。
+
+V2 默认关闭，且不会改变默认 Feed 排序。迁移数据库后，可按以下顺序灰度：
+
+```bash
+python -m alembic upgrade head
+NEWSREC_PROFILE_V2_ENABLED=1 python scripts/rebuild_profile_v2.py --all --dry-run
+NEWSREC_PROFILE_V2_ENABLED=1 python scripts/rebuild_profile_v2.py --all
+```
+
+通过 `GET /feed?...&experiment_arm=profile_v2` 显式进入实验分组；读取 V2 失败时会在数据库
+保存点回滚并继续使用原排序。将 `NEWSREC_PROFILE_V2_ENABLED=0` 即可停止新投影并让该实验
+分组退化为原排序，`default` 分组始终不受影响。重置画像只清理派生投影并恢复冷启动种子，
+不会删除历史事件；重置时间边界也会阻止旧事件在消费重试或重建时重新写回画像。
+
+MIND 只提供曝光与点击行为，不提供真实搜索、点踩或停留标签。因此现有离线数据只能验证
+画像投影、衰减、降级和重建机制，不能证明点踩/停留带来线上 CTR 或因果收益；
+`profile_v2` 必须在获得独立离线与在线实验依据后才可考虑升级为默认分组。
 
 ## 开发质量门禁
 
@@ -149,7 +168,7 @@ npm test -- --run
 npm run build
 ```
 
-PostgreSQL、MySQL→PostgreSQL 历史迁移和 Kafka 集成任务在 `.github/workflows/ci.yml` 中运行。
+PostgreSQL、MIND 目录导入和 Kafka 集成任务在 `.github/workflows/ci.yml` 中运行。
 
 ## 文档
 

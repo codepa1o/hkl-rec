@@ -3,7 +3,7 @@ import { useState } from "react";
 import { trackEvent } from "../api/client";
 
 interface Props {
-  articleId: number;
+  newsId: string;
   userId: number;
   requestId?: string;
   surface?: string;
@@ -13,7 +13,7 @@ interface Props {
 type VoteDirection = "upvote" | "downvote";
 
 export default function VoteActions({
-  articleId,
+  newsId,
   userId,
   requestId,
   surface = "feed",
@@ -27,7 +27,7 @@ export default function VoteActions({
       user_id: userId,
       event_type: direction,
       surface,
-      article_id: articleId,
+      news_id: newsId,
       request_id: requestId ?? null,
     }).then(() => onVoted?.());
   };

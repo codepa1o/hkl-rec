@@ -23,12 +23,12 @@ pytestmark = [
 
 
 def test_feed_blends_two_sponsored_items_and_tracks_delivery(
-    mysql_client,
-    mysql_demo_user,
+    postgres_client,
+    postgres_demo_user,
 ):
-    response = mysql_client.get(
+    response = postgres_client.get(
         "/feed",
-        params={"user_id": mysql_demo_user, "page_size": 10, "debug": "true"},
+        params={"user_id": postgres_demo_user, "page_size": 10, "debug": "true"},
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -42,28 +42,28 @@ def test_feed_blends_two_sponsored_items_and_tracks_delivery(
 
     first = sponsored_items[0][1]
     delivery_id = first["sponsored"]["delivery_id"]
-    impression = mysql_client.post(
+    impression = postgres_client.post(
         "/event/track",
         json={
             "event_id": f"test-sponsored-impression-{delivery_id}",
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "feed_impression",
             "surface": "feed",
-            "article_id": first["article_id"],
+            "news_id": first["news_id"],
             "request_id": body["request_id"],
             "sponsored_delivery_id": delivery_id,
         },
     )
     assert impression.status_code == 200, impression.text
 
-    click = mysql_client.post(
+    click = postgres_client.post(
         "/event/track",
         json={
             "event_id": f"test-sponsored-click-{delivery_id}",
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "recommendation_click",
             "surface": "feed",
-            "article_id": first["article_id"],
+            "news_id": first["news_id"],
             "request_id": body["request_id"],
             "sponsored_delivery_id": delivery_id,
         },
@@ -98,11 +98,11 @@ def test_feed_blends_two_sponsored_items_and_tracks_delivery(
         connection.close()
 
 
-def test_organic_evaluation_feed_excludes_sponsored(mysql_client, mysql_demo_user):
-    response = mysql_client.get(
+def test_organic_evaluation_feed_excludes_sponsored(postgres_client, postgres_demo_user):
+    response = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 10,
             "include_sponsored": "false",
             "experiment_arm": "manual",
@@ -113,19 +113,19 @@ def test_organic_evaluation_feed_excludes_sponsored(mysql_client, mysql_demo_use
 
 
 def test_duplicate_feed_request_reuses_sponsored_deliveries(
-    mysql_client,
-    mysql_demo_user,
+    postgres_client,
+    postgres_demo_user,
 ):
-    request_id = f"feed-retry-{mysql_demo_user}"
+    request_id = f"feed-retry-{postgres_demo_user}"
     params = {
-        "user_id": mysql_demo_user,
+        "user_id": postgres_demo_user,
         "page_size": 10,
         "debug": "true",
         "request_id": request_id,
     }
 
-    first = mysql_client.get("/feed", params=params)
-    second = mysql_client.get("/feed", params=params)
+    first = postgres_client.get("/feed", params=params)
+    second = postgres_client.get("/feed", params=params)
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
@@ -152,7 +152,7 @@ def test_duplicate_feed_request_reuses_sponsored_deliveries(
                 FROM sponsored_delivery
                 WHERE request_id = %s AND user_id = %s
                 """,
-                (request_id, mysql_demo_user),
+                (request_id, postgres_demo_user),
             )
             delivery_count = int(cursor.fetchone()["delivery_count"])
     finally:
@@ -160,20 +160,20 @@ def test_duplicate_feed_request_reuses_sponsored_deliveries(
     assert delivery_count == len(first_deliveries)
 
 
-def test_feed_request_id_rejects_different_page_shape(mysql_client, mysql_demo_user):
-    request_id = f"feed-shape-conflict-{mysql_demo_user}"
-    first = mysql_client.get(
+def test_feed_request_id_rejects_different_page_shape(postgres_client, postgres_demo_user):
+    request_id = f"feed-shape-conflict-{postgres_demo_user}"
+    first = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 10,
             "request_id": request_id,
         },
     )
-    conflict = mysql_client.get(
+    conflict = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 3,
             "request_id": request_id,
         },
@@ -184,21 +184,21 @@ def test_feed_request_id_rejects_different_page_shape(mysql_client, mysql_demo_u
     assert conflict.json()["error_code"] == "idempotency_conflict"
 
 
-def test_non_sponsored_feed_request_binds_page_shape(mysql_client, mysql_demo_user):
-    request_id = f"organic-feed-shape-{mysql_demo_user}"
-    first = mysql_client.get(
+def test_non_sponsored_feed_request_binds_page_shape(postgres_client, postgres_demo_user):
+    request_id = f"organic-feed-shape-{postgres_demo_user}"
+    first = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 3,
             "include_sponsored": "false",
             "request_id": request_id,
         },
     )
-    conflict = mysql_client.get(
+    conflict = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 5,
             "include_sponsored": "false",
             "request_id": request_id,
@@ -209,22 +209,22 @@ def test_non_sponsored_feed_request_binds_page_shape(mysql_client, mysql_demo_us
     assert conflict.status_code == 409
 
 
-def test_feed_request_id_binds_debug_shape(mysql_client, mysql_demo_user):
-    request_id = f"feed-debug-shape-{mysql_demo_user}"
-    first = mysql_client.get(
+def test_feed_request_id_binds_debug_shape(postgres_client, postgres_demo_user):
+    request_id = f"feed-debug-shape-{postgres_demo_user}"
+    first = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 3,
             "debug": "false",
             "include_sponsored": "false",
             "request_id": request_id,
         },
     )
-    conflict = mysql_client.get(
+    conflict = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 3,
             "debug": "true",
             "include_sponsored": "false",
@@ -236,7 +236,7 @@ def test_feed_request_id_binds_debug_shape(mysql_client, mysql_demo_user):
     assert conflict.status_code == 409
 
 
-def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
+def test_concurrent_reservations_respect_budget_and_frequency(postgres_demo_user):
     settings = get_settings()
     config = parse_database_url(settings.database_url)
     campaign_id = 99001
@@ -247,22 +247,22 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
         with lookup.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT answer_id, topic_id
-                FROM answer_topic
-                ORDER BY answer_id, topic_id
+                SELECT mapping.news_id, mapping.topic_id
+                FROM mind_news_topic AS mapping
+                ORDER BY mapping.news_id, mapping.source_rank
                 LIMIT 1
                 """
             )
             content = cursor.fetchone()
     finally:
         lookup.close()
-    answer_id = int(content["answer_id"])
+    news_id = str(content["news_id"])
     topic_id = int(content["topic_id"])
     candidate = SponsoredCandidate(
         campaign_id=campaign_id,
         campaign_name="Concurrency Test",
         creative_id=creative_id,
-        answer_id=answer_id,
+        news_id=news_id,
         bid_micros=1000,
         predicted_ctr=0.1,
         quality_score=1.0,
@@ -296,7 +296,7 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
                 INSERT INTO sponsored_creative (
                   creative_id,
                   campaign_id,
-                  answer_id,
+                  news_id,
                   status,
                   bid_micros,
                   predicted_ctr,
@@ -304,7 +304,7 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
                 )
                 VALUES (%s, %s, %s, 'active', 1000, 0.1, 1.0)
                 """,
-                (creative_id, campaign_id, answer_id),
+                (creative_id, campaign_id, news_id),
             )
     finally:
         setup.close()
@@ -316,7 +316,7 @@ def test_concurrent_reservations_respect_budget_and_frequency(mysql_demo_user):
                 delivery = reserve_sponsored_delivery(
                     connection,
                     candidate=candidate,
-                    user_id=mysql_demo_user,
+                    user_id=postgres_demo_user,
                     request_id=f"concurrent-sponsored-{index}",
                     slot_position=3,
                     now_ts=now_ts,

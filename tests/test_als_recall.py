@@ -50,15 +50,21 @@ def test_faiss_recall_matches_numpy_inner_product(tmp_path: Path):
     results = recall.get_candidates(7248, k=4)
     expected_order = list(np.argsort(-(item_embeddings @ user_embeddings[0])))
 
-    assert [answer_id for answer_id, _ in results] == [
-        [301, 302, 303, 304][index] for index in expected_order
+    assert [news_id for news_id, _ in results] == [
+        f"N{[301, 302, 303, 304][index]}" for index in expected_order
     ]
     assert recall.get_candidates(999999, k=3) == []
-    assert recall.item_cosine_similarity(301, 303) == pytest.approx(2**-0.5)
-    assert recall.item_cosine_similarity(301, 302) == pytest.approx(0.0)
-    assert recall.item_cosine_similarity(301, 304) is None
-    assert recall.item_cosine_similarity(301, 999999) is None
+    assert recall.item_cosine_similarity("N301", "N303") == pytest.approx(2**-0.5)
+    assert recall.item_cosine_similarity("N301", "N302") == pytest.approx(0.0)
+    assert recall.item_cosine_similarity("N301", "N304") is None
+    assert recall.item_cosine_similarity("N301", "N999999") is None
+    mismatched = ALSRecall(
+        str(tmp_path),
+        expected_normalized_fingerprint="active-catalog",
+    )
+    assert mismatched.get_candidates(7248, k=4) == []
+    assert mismatched.metadata() == {}
 
 
 def test_item_similarity_returns_none_without_artifacts(tmp_path: Path):
-    assert ALSRecall(str(tmp_path)).item_cosine_similarity(301, 302) is None
+    assert ALSRecall(str(tmp_path)).item_cosine_similarity("N301", "N302") is None

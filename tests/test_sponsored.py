@@ -8,6 +8,34 @@ from backend.app.repositories.sponsored import (
     sponsored_score,
     sponsored_slot_is_reachable,
 )
+from backend.app.repositories.sponsored_dao import claim_feed_request, load_sponsored_candidates
+
+
+class RecordingCursor:
+    rowcount = 1
+
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...]) -> None:
+        self.executed.append((sql, params))
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return []
+
+
+class RecordingConnection:
+    def __init__(self) -> None:
+        self.cursor_value = RecordingCursor()
+
+    def cursor(self) -> RecordingCursor:
+        return self.cursor_value
 
 
 def test_sponsored_score_and_expected_spend_are_distinct():
@@ -42,9 +70,9 @@ def test_fixed_slots_degrade_for_short_pages():
 def test_unreachable_sponsored_slot_is_rejected_before_reservation():
     assert (
         sponsored_slot_is_reachable(
-            organic_answer_ids={1},
-            already_sponsored_answer_ids=set(),
-            candidate_answer_id=99,
+            organic_news_ids={"N1"},
+            already_sponsored_news_ids=set(),
+            candidate_news_id="N99",
             slot_position=3,
             sponsored_count=0,
         )
@@ -52,3 +80,41 @@ def test_unreachable_sponsored_slot_is_rejected_before_reservation():
     )
     with pytest.raises(ValueError, match="unreachable"):
         blend_fixed_slots(["organic-1"], {3: "sponsored-a"}, page_size=3)
+
+
+def test_feed_request_claim_persists_category_in_request_shape() -> None:
+    connection = RecordingConnection()
+
+    claim_feed_request(
+        connection,
+        request_id="feed-sports",
+        user_id=7001,
+        page_size=10,
+        debug=False,
+        include_sponsored=True,
+        experiment_arm="default",
+        as_of_ts=None,
+        category="sports",
+    )
+
+    insert_sql, insert_params = connection.cursor_value.executed[0]
+    assert "category" in insert_sql
+    assert "sports" in insert_params
+
+
+def test_sponsored_candidates_are_filtered_by_exact_category() -> None:
+    connection = RecordingConnection()
+
+    candidates = load_sponsored_candidates(
+        connection,
+        user_id=7001,
+        target_topic_ids=[7],
+        now_ts=1_700_000_000,
+        category="sports",
+    )
+
+    assert candidates == []
+    sql, params = connection.cursor_value.executed[0]
+    assert "JOIN mind_news AS news" in sql
+    assert "news.category = %s" in sql
+    assert "sports" in params

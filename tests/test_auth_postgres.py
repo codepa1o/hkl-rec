@@ -31,7 +31,7 @@ def test_alembic_upgrade_is_idempotent_and_auth_tables_are_at_head() -> None:
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT version_num FROM alembic_version")
-            assert cursor.fetchone()["version_num"] == "20260814_0001"
+            assert cursor.fetchone()["version_num"] == "20260816_0004"
             cursor.execute(
                 "SELECT next_user_id FROM auth_user_id_sequence "
                 "WHERE sequence_key = 'registered_user'"

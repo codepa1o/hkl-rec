@@ -31,9 +31,9 @@ def _settings(event_mode: str) -> Settings:
     )
 
 
-def _first_answer_id(mysql_client, user_id: int) -> int:
-    feed = mysql_client.get("/feed", params={"user_id": user_id, "page_size": 1}).json()
-    return int(feed["items"][0]["article_id"])
+def _first_news_id(postgres_client, user_id: int) -> str:
+    feed = postgres_client.get("/feed", params={"user_id": user_id, "page_size": 1}).json()
+    return str(feed["items"][0]["news_id"])
 
 
 def _fetch_count(connection, sql: str, params: tuple[object, ...]) -> int:
@@ -43,19 +43,19 @@ def _fetch_count(connection, sql: str, params: tuple[object, ...]) -> int:
     return int(row["row_count"])
 
 
-def test_dual_write_stages_raw_event_in_same_database(mysql_client, mysql_demo_user):
+def test_dual_write_stages_raw_event_in_same_database(postgres_client, postgres_demo_user):
     settings = _settings("kafka_dual_write")
     repository = PostgresRuntimeRepository(settings)
-    answer_id = _first_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_news_id(postgres_client, postgres_demo_user)
     event_id = f"dual-outbox-{time.time_ns()}"
 
     response = repository.record_tracked_event(
         EventTrackRequest(
             event_id=event_id,
-            user_id=mysql_demo_user,
+            user_id=postgres_demo_user,
             event_type="feed_impression",
             surface="feed",
-            article_id=answer_id,
+            news_id=news_id,
             request_id="dual-outbox-request",
         )
     )
@@ -79,20 +79,20 @@ def test_dual_write_stages_raw_event_in_same_database(mysql_client, mysql_demo_u
         connection.close()
 
 
-def test_kafka_async_ack_requires_durable_raw_outbox(mysql_client, mysql_demo_user):
+def test_kafka_async_ack_requires_durable_raw_outbox(postgres_client, postgres_demo_user):
     settings = _settings("kafka_async")
     repository = PostgresRuntimeRepository(settings)
-    answer_id = _first_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_news_id(postgres_client, postgres_demo_user)
     event_id = f"async-outbox-{time.time_ns()}"
-    before = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+    before = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
 
     response = repository.record_tracked_event(
         EventTrackRequest(
             event_id=event_id,
-            user_id=mysql_demo_user,
+            user_id=postgres_demo_user,
             event_type="recommendation_click",
             surface="feed",
-            article_id=answer_id,
+            news_id=news_id,
             request_id="async-outbox-request",
         )
     )
@@ -127,35 +127,35 @@ def test_kafka_async_ack_requires_durable_raw_outbox(mysql_client, mysql_demo_us
         )
     finally:
         connection.close()
-    after = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+    after = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
     assert float(after["behavior_score"]) == float(before["behavior_score"])
 
 
 def test_kafka_async_rejects_conflicting_duplicate_event_id(
-    mysql_client,
-    mysql_demo_user,
+    postgres_client,
+    postgres_demo_user,
 ):
     settings = _settings("kafka_async")
     repository = PostgresRuntimeRepository(settings)
-    feed = mysql_client.get(
+    feed = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 2,
             "include_sponsored": "false",
         },
     ).json()
-    first_answer = int(feed["items"][0]["article_id"])
-    second_answer = int(feed["items"][1]["article_id"])
+    first_news = str(feed["items"][0]["news_id"])
+    second_news = str(feed["items"][1]["news_id"])
     event_id = f"async-conflict-{time.time_ns()}"
 
     repository.record_tracked_event(
         EventTrackRequest(
             event_id=event_id,
-            user_id=mysql_demo_user,
+            user_id=postgres_demo_user,
             event_type="feed_impression",
             surface="feed",
-            article_id=first_answer,
+            news_id=first_news,
             request_id="async-conflict-request",
         )
     )
@@ -164,26 +164,26 @@ def test_kafka_async_rejects_conflicting_duplicate_event_id(
         repository.record_tracked_event(
             EventTrackRequest(
                 event_id=event_id,
-                user_id=mysql_demo_user,
+                user_id=postgres_demo_user,
                 event_type="feed_impression",
                 surface="feed",
-                article_id=second_answer,
+                news_id=second_news,
                 request_id="async-conflict-request",
             )
         )
 
 
 def test_duplicate_consumer_event_backfills_one_training_outbox(
-    mysql_client,
-    mysql_demo_user,
+    postgres_client,
+    postgres_demo_user,
 ):
     settings = _settings("kafka_async")
-    answer_id = _first_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_news_id(postgres_client, postgres_demo_user)
     event = UserEventMessage(
         event_id=f"consumer-outbox-{time.time_ns()}",
         event_type="feed_impression",
-        user_id=mysql_demo_user,
-        article_id=answer_id,
+        user_id=postgres_demo_user,
+        news_id=news_id,
         request_id="consumer-outbox-request",
         surface="feed",
         event_ts=int(time.time()),
@@ -211,14 +211,14 @@ def test_duplicate_consumer_event_backfills_one_training_outbox(
         connection.close()
 
 
-def test_consumer_persists_dwell_duration(mysql_client, mysql_demo_user):
+def test_consumer_persists_dwell_duration(postgres_client, postgres_demo_user):
     settings = _settings("kafka_async")
-    answer_id = _first_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_news_id(postgres_client, postgres_demo_user)
     event = UserEventMessage(
         event_id=f"consumer-dwell-{time.time_ns()}",
         event_type="dwell",
-        user_id=mysql_demo_user,
-        article_id=answer_id,
+        user_id=postgres_demo_user,
+        news_id=news_id,
         request_id="consumer-dwell-request",
         surface="feed",
         dwell_ms=4321,
@@ -240,7 +240,7 @@ def test_consumer_persists_dwell_duration(mysql_client, mysql_demo_user):
     assert int(row["dwell_ms"]) == 4321
 
 
-def test_failed_outbox_batch_remains_retryable(mysql_client):
+def test_failed_outbox_batch_remains_retryable(postgres_client):
     settings = _settings("kafka_async")
     event_id = f"retry-outbox-{time.time_ns()}"
     connection = connect(parse_database_url(settings.database_url))

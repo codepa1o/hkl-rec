@@ -60,11 +60,28 @@ class CatalogNewsStats:
 
 
 @dataclass(frozen=True)
+class CatalogTopic:
+    key: str
+    topic_id: int
+    display_name: str
+    news_count: int
+
+
+@dataclass(frozen=True)
+class CatalogNewsTopic:
+    news_id: str
+    topic_id: int
+    source_rank: int
+
+
+@dataclass(frozen=True)
 class PreparedCatalog:
     normalized_fingerprint: str
     dataset: str
     news: tuple[CatalogNews, ...]
     stats: tuple[CatalogNewsStats, ...]
+    topics: tuple[CatalogTopic, ...]
+    news_topics: tuple[CatalogNewsTopic, ...]
     train_request_count: int
     train_impression_count: int
     train_click_count: int
@@ -81,6 +98,8 @@ class ImportResult:
     normalized_fingerprint: str
     news_rows: int
     stats_rows: int
+    topic_rows: int
+    news_topic_rows: int
     train_request_count: int
     train_impression_count: int
     train_click_count: int
@@ -177,6 +196,61 @@ def _internal_news_mapping(normalized_root: Path) -> dict[int, str]:
             )
         result[internal_id] = news_id
     return result
+
+
+def _load_topics(normalized_root: Path, news: dict[str, CatalogNews]) -> tuple[CatalogTopic, ...]:
+    id_maps = _load_json(normalized_root / "id_maps.json")
+    raw_mapping = id_maps.get("topic_ids")
+    if not isinstance(raw_mapping, dict):
+        raise MindCatalogImportError("id_maps.json lacks topic_ids")
+    counts: dict[str, int] = {}
+    for row in news.values():
+        category_key = f"category:{row.category}"
+        subcategory_key = f"subcategory:{row.category}/{row.subcategory}"
+        counts[category_key] = counts.get(category_key, 0) + 1
+        counts[subcategory_key] = counts.get(subcategory_key, 0) + 1
+    if set(raw_mapping) != set(counts):
+        raise MindCatalogImportError("id_maps.json topic_ids do not match the normalized catalog")
+    topics = []
+    for key, raw_topic_id in raw_mapping.items():
+        prefix, name = str(key).split(":", 1)
+        display_name = name if prefix == "category" else name.split("/", 1)[1]
+        topics.append(
+            CatalogTopic(
+                key=str(key),
+                topic_id=int(raw_topic_id),
+                display_name=display_name,
+                news_count=counts[str(key)],
+            )
+        )
+    return tuple(sorted(topics, key=lambda row: row.topic_id))
+
+
+def _load_news_topics(
+    news: dict[str, CatalogNews],
+    topics: tuple[CatalogTopic, ...],
+) -> tuple[CatalogNewsTopic, ...]:
+    topic_id_by_key = {row.key: row.topic_id for row in topics}
+    mappings: list[CatalogNewsTopic] = []
+    for news_id in sorted(news, key=news_internal_id):
+        row = news[news_id]
+        keys = (
+            f"category:{row.category}",
+            f"subcategory:{row.category}/{row.subcategory}",
+        )
+        for source_rank, key in enumerate(keys):
+            try:
+                topic_id = topic_id_by_key[key]
+            except KeyError as exc:
+                raise MindCatalogImportError(f"MIND news {news_id} lacks topic key {key}") from exc
+            mappings.append(
+                CatalogNewsTopic(
+                    news_id=news_id,
+                    topic_id=topic_id,
+                    source_rank=source_rank,
+                )
+            )
+    return tuple(mappings)
 
 
 def _load_news(
@@ -279,6 +353,8 @@ def prepare_catalog(normalized_root: Path) -> PreparedCatalog:
     manifest, hashes = _verify_manifest(normalized_root)
     internal_to_news = _internal_news_mapping(normalized_root)
     news = _load_news(normalized_root, internal_to_news)
+    topics = _load_topics(normalized_root, news)
+    news_topics = _load_news_topics(news, topics)
     stats, train_impression_count, train_click_count = _load_train_stats(
         normalized_root,
         internal_to_news,
@@ -293,6 +369,8 @@ def prepare_catalog(normalized_root: Path) -> PreparedCatalog:
         dataset=str(manifest.get("dataset", "MIND-small")),
         news=tuple(news[news_id] for news_id in sorted_news_ids),
         stats=tuple(stats[news_id] for news_id in sorted_news_ids),
+        topics=topics,
+        news_topics=news_topics,
         train_request_count=int(train_request_count),
         train_impression_count=train_impression_count,
         train_click_count=train_click_count,
@@ -317,6 +395,16 @@ def _database_name(connection: Any) -> str:
 def _create_staging_tables(cursor: Any) -> None:
     cursor.execute(
         """
+        CREATE TEMP TABLE mind_topic_import_stage (
+            topic_id BIGINT PRIMARY KEY,
+            topic_key VARCHAR(512) NOT NULL UNIQUE,
+            display_name VARCHAR(128) NOT NULL,
+            news_count INTEGER NOT NULL
+        ) ON COMMIT DROP
+        """
+    )
+    cursor.execute(
+        """
         CREATE TEMP TABLE mind_news_import_stage (
             news_id VARCHAR(32) PRIMARY KEY,
             category TEXT NOT NULL,
@@ -326,6 +414,17 @@ def _create_staging_tables(cursor: Any) -> None:
             url TEXT NOT NULL,
             title_entities JSONB NOT NULL,
             abstract_entities JSONB NOT NULL
+        ) ON COMMIT DROP
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TEMP TABLE mind_news_topic_import_stage (
+            news_id VARCHAR(32) NOT NULL,
+            topic_id BIGINT NOT NULL,
+            source_rank SMALLINT NOT NULL,
+            PRIMARY KEY (news_id, topic_id),
+            UNIQUE (news_id, source_rank)
         ) ON COMMIT DROP
         """
     )
@@ -343,6 +442,13 @@ def _create_staging_tables(cursor: Any) -> None:
 
 
 def _copy_staging(cursor: Any, prepared: PreparedCatalog) -> None:
+    with cursor.copy(
+        """
+        COPY mind_topic_import_stage (topic_id, topic_key, display_name, news_count) FROM STDIN
+        """
+    ) as copy:
+        for row in prepared.topics:
+            copy.write_row((row.topic_id, row.key, row.display_name, row.news_count))
     with cursor.copy(
         """
         COPY mind_news_import_stage (
@@ -366,6 +472,13 @@ def _copy_staging(cursor: Any, prepared: PreparedCatalog) -> None:
             )
     with cursor.copy(
         """
+        COPY mind_news_topic_import_stage (news_id, topic_id, source_rank) FROM STDIN
+        """
+    ) as copy:
+        for row in prepared.news_topics:
+            copy.write_row((row.news_id, row.topic_id, row.source_rank))
+    with cursor.copy(
+        """
         COPY mind_news_stats_import_stage (
             news_id, first_seen_ts, click_count, impression_count, hot_score
         ) FROM STDIN
@@ -384,6 +497,81 @@ def _copy_staging(cursor: Any, prepared: PreparedCatalog) -> None:
 
 
 def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
+    cursor.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM topic AS current
+            FULL OUTER JOIN mind_topic_import_stage AS stage USING (topic_id)
+            WHERE current.topic_id IS NULL
+               OR stage.topic_id IS NULL
+               OR current.topic_key IS DISTINCT FROM stage.topic_key
+        ) AS topics_changed
+        """
+    )
+    topic_state = cursor.fetchone()
+    topics_changed = bool(
+        topic_state["topics_changed"] if isinstance(topic_state, dict) else topic_state[0]
+    )
+
+    cursor.execute("DELETE FROM query_topic_map")
+    cursor.execute("DELETE FROM sponsored_campaign_topic")
+    cursor.execute("DELETE FROM mind_news_topic")
+    if topics_changed:
+        cursor.execute(
+            """
+            UPDATE app_user
+            SET followed_topic_ids_json = '[]'::jsonb,
+                followed_topic_count = 0
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE system_profile_seed
+            SET topic_weights_json = '[]'::jsonb,
+                recent_queries_json = '[]'::jsonb
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE user_profile
+            SET topic_weights_json = '[]'::jsonb,
+                recent_queries_json = '[]'::jsonb,
+                user_vector_json = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE user_event
+            SET query_key = NULL,
+                topic_ids_json = NULL
+            WHERE query_key IS NOT NULL OR topic_ids_json IS NOT NULL
+            """
+        )
+        cursor.execute("DELETE FROM topic")
+
+    cursor.execute(
+        """
+        INSERT INTO topic (topic_id, topic_key, display_name, news_count, source)
+        SELECT topic_id, topic_key, display_name, news_count, 'mind_small'
+        FROM mind_topic_import_stage
+        ON CONFLICT (topic_id) DO UPDATE SET
+            topic_key = EXCLUDED.topic_key,
+            display_name = EXCLUDED.display_name,
+            news_count = EXCLUDED.news_count,
+            source = EXCLUDED.source
+        """
+    )
+    cursor.execute(
+        """
+        DELETE FROM topic AS current
+        WHERE NOT EXISTS (
+            SELECT 1 FROM mind_topic_import_stage AS stage
+            WHERE stage.topic_id = current.topic_id
+        )
+        """
+    )
     cursor.execute(
         """
         INSERT INTO mind_catalog_import (
@@ -453,6 +641,42 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
     )
     cursor.execute(
         """
+        INSERT INTO mind_news_topic (news_id, topic_id, source_rank)
+        SELECT news_id, topic_id, source_rank
+        FROM mind_news_topic_import_stage
+        ON CONFLICT (news_id, topic_id) DO UPDATE SET
+            source_rank = EXCLUDED.source_rank
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO query_topic_map (
+            query_key, display_query, query_tokens_json, topic_id, score,
+            evidence_query_count, evidence_user_count, match_rank, source_method
+        )
+        SELECT
+            topic_id::text,
+            display_name,
+            jsonb_build_array(LOWER(display_name)),
+            topic_id,
+            1,
+            news_count,
+            0,
+            0,
+            'mind_catalog'
+        FROM mind_topic_import_stage
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO sponsored_campaign_topic (campaign_id, topic_id)
+        SELECT DISTINCT creative.campaign_id, mapping.topic_id
+        FROM sponsored_creative AS creative
+        JOIN mind_news_topic AS mapping USING (news_id)
+        """
+    )
+    cursor.execute(
+        """
         DELETE FROM mind_news_stats AS stats
         WHERE NOT EXISTS (
             SELECT 1 FROM mind_news_stats_import_stage AS stage
@@ -479,6 +703,47 @@ def _count(cursor: Any, table_name: str) -> int:
     cursor.execute(f"SELECT COUNT(*) AS count FROM {table_name}")
     row = cursor.fetchone()
     return int(row["count"] if isinstance(row, dict) else row[0])
+
+
+def _assert_replacement_has_no_removed_news_references(cursor: Any) -> None:
+    cursor.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM user_event AS event
+             WHERE event.news_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM mind_news_import_stage AS stage
+                   WHERE stage.news_id = event.news_id
+               )) AS user_events,
+            (SELECT COUNT(*) FROM sponsored_creative AS creative
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM mind_news_import_stage AS stage
+                 WHERE stage.news_id = creative.news_id
+             )) AS sponsored_creatives,
+            (SELECT COUNT(*) FROM sponsored_delivery AS delivery
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM mind_news_import_stage AS stage
+                 WHERE stage.news_id = delivery.news_id
+             )) AS sponsored_deliveries
+        """
+    )
+    row = cursor.fetchone()
+    values = (
+        row
+        if isinstance(row, dict)
+        else {
+            "user_events": row[0],
+            "sponsored_creatives": row[1],
+            "sponsored_deliveries": row[2],
+        }
+    )
+    referenced = {name: int(count) for name, count in values.items() if int(count) > 0}
+    if referenced:
+        detail = ", ".join(f"{name}={count}" for name, count in referenced.items())
+        raise MindCatalogImportError(
+            "Catalog replacement would remove news referenced by operational history; "
+            f"archive or delete those rows first ({detail})"
+        )
 
 
 def import_catalog(
@@ -514,16 +779,30 @@ def import_catalog(
                 raise MindCatalogImportError("Staged MIND news row count does not match manifest")
             if _count(cursor, "mind_news_stats_import_stage") != prepared.news_count:
                 raise MindCatalogImportError("Staged MIND stats row count does not match catalog")
+            if _count(cursor, "mind_topic_import_stage") != len(prepared.topics):
+                raise MindCatalogImportError("Staged MIND topic row count does not match catalog")
+            if _count(cursor, "mind_news_topic_import_stage") != len(prepared.news_topics):
+                raise MindCatalogImportError(
+                    "Staged MIND news-topic row count does not match catalog"
+                )
+            if different and replace_catalog:
+                _assert_replacement_has_no_removed_news_references(cursor)
             _upsert_catalog(cursor, prepared)
             if _count(cursor, "mind_news") != prepared.news_count:
                 raise MindCatalogImportError("Imported MIND news row count does not match catalog")
             if _count(cursor, "mind_news_stats") != prepared.news_count:
                 raise MindCatalogImportError("Imported MIND stats row count does not match catalog")
+            if _count(cursor, "mind_news_topic") != len(prepared.news_topics):
+                raise MindCatalogImportError(
+                    "Imported MIND news-topic row count does not match catalog"
+                )
 
     return ImportResult(
         normalized_fingerprint=prepared.normalized_fingerprint,
         news_rows=prepared.news_count,
         stats_rows=len(prepared.stats),
+        topic_rows=len(prepared.topics),
+        news_topic_rows=len(prepared.news_topics),
         train_request_count=prepared.train_request_count,
         train_impression_count=prepared.train_impression_count,
         train_click_count=prepared.train_click_count,

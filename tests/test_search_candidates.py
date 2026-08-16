@@ -38,7 +38,7 @@ def test_hybrid_candidates_use_artifact_hits_without_sql_or_hot_backfill():
     connection = FakeConnection(script=[])
     hits = (
         HybridHit(
-            article_id=42,
+            news_id="N42",
             bm25_score=12.0,
             dense_score=0.7,
             fusion_score=0.03,
@@ -58,7 +58,7 @@ def test_hybrid_candidates_use_artifact_hits_without_sql_or_hot_backfill():
 
     assert connection.cursor_value.executed == []
     assert candidates == {
-        42: {
+        "N42": {
             "source": "bm25+dense",
             "topic_match_score": 0.0,
             "bm25_score": 12.0,
@@ -81,4 +81,4 @@ def test_topic_lookup_does_not_backfill_hot_articles_when_empty():
 
     assert candidates == {}
     assert len(connection.cursor_value.executed) == 1
-    assert "hot_answer_snapshot" not in connection.cursor_value.executed[0][0]
+    assert "mind_news_stats" in connection.cursor_value.executed[0][0]

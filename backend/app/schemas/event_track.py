@@ -23,7 +23,7 @@ class EventTrackRequest(ApiModel):
     user_id: int
     event_type: EventTrackType
     surface: str
-    article_id: int | None = None
+    news_id: str | None = Field(None, pattern=r"^N[0-9]+$")
     query_key: str | None = None
     request_id: str | None = None
     sponsored_delivery_id: str | None = None
@@ -33,7 +33,7 @@ class EventTrackRequest(ApiModel):
 
     @model_validator(mode="after")
     def validate_event_fields(self) -> EventTrackRequest:
-        article_required = {
+        news_required = {
             "feed_impression",
             "detail_view",
             "dwell",
@@ -43,8 +43,8 @@ class EventTrackRequest(ApiModel):
             "recommendation_click",
             "search_result_click",
         }
-        if self.event_type in article_required and self.article_id is None:
-            raise ValueError(f"{self.event_type} requires article_id")
+        if self.event_type in news_required and self.news_id is None:
+            raise ValueError(f"{self.event_type} requires news_id")
         if self.event_type == "search_result_click" and not self.query_key:
             raise ValueError("search_result_click requires query_key")
         if self.event_type == "dwell" and self.dwell_ms is None:

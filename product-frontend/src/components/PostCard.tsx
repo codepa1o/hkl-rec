@@ -34,9 +34,9 @@ export default function PostCard({
   const categoryName = localizeCategoryName(mainCategory?.display_name);
 
   const handleShare = async () => {
-    const url = `${window.location.origin}/articles/${item.article_id}`;
+    const url = `${window.location.origin}/articles/${item.news_id}`;
     if (navigator.share) {
-      await navigator.share({ title: item.headline, url });
+      await navigator.share({ title: item.title, url });
     } else {
       await navigator.clipboard.writeText(url);
     }
@@ -46,7 +46,7 @@ export default function PostCard({
       user_id: userId,
       event_type: "share",
       surface,
-      article_id: item.article_id,
+      news_id: item.news_id,
       request_id: requestId ?? null,
     });
   };
@@ -70,8 +70,8 @@ export default function PostCard({
         </div>
 
         <h2 className="zr-card__title">
-          <Link to={`/articles/${item.article_id}`} onClick={onTrackClick}>
-            {item.headline}
+          <Link to={`/articles/${item.news_id}`} onClick={onTrackClick}>
+            {item.title}
           </Link>
         </h2>
 
@@ -96,7 +96,7 @@ export default function PostCard({
 
         <div className="zr-card__footer">
           <VoteActions
-            articleId={item.article_id}
+            newsId={item.news_id}
             userId={userId}
             requestId={requestId}
             surface={surface}
@@ -104,7 +104,7 @@ export default function PostCard({
           />
           <div className="zr-card__actions">
             <Link
-              to={`/articles/${item.article_id}`}
+              to={`/articles/${item.news_id}`}
               className="zr-action"
               onClick={onTrackClick}
             >

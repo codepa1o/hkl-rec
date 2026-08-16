@@ -9,6 +9,7 @@ from .profile import ProfileTopicWeight
 
 FeedExperimentArm = Literal[
     "default",
+    "profile_v2",
     "manual",
     "manual_plus_als",
     "lgb_plus_als",
@@ -28,6 +29,7 @@ class FeedItemScores(ApiModel):
     topic_match_score: float
     query_recall_boost: float
     final_score: float
+    profile_v2_score: float | None = Field(default=None, exclude_if=lambda value: value is None)
     sponsored_score: float | None = None
 
 
@@ -39,10 +41,13 @@ class SponsoredFeedMetadata(ApiModel):
 
 
 class FeedItem(ApiModel):
-    article_id: int
-    headline: str
+    news_id: str = Field(pattern=r"^N[0-9]+$")
+    title: str
     abstract: str
+    url: str
     source_domain: str
+    category: str
+    subcategory: str
     categories: list[TopicCard]
     selected_reason: str
     scores: FeedItemScores
@@ -58,7 +63,7 @@ class FeedProfileSummary(ApiModel):
 
 
 class RecallCandidateDebug(ApiModel):
-    article_id: int
+    news_id: str
     source: str
     base_recall_score: float
 
@@ -66,7 +71,7 @@ class RecallCandidateDebug(ApiModel):
 class SponsoredCandidateDebug(ApiModel):
     campaign_id: int
     creative_id: int
-    article_id: int
+    news_id: str
     slot_position: int
     expected_spend_micros: int
     sponsored_score: float
@@ -100,4 +105,6 @@ class FeedResponse(ApiModel):
     user_id: int
     request_id: str
     items: list[FeedItem]
+    next_cursor: str | None = None
+    has_more: bool = False
     debug: FeedDebugPayload | None = None

@@ -30,3 +30,27 @@ class SearchIndexNotReadyError(RuntimeError):
 
 class IdempotencyConflictError(ValueError):
     """同一事件 ID 被用于语义不同的载荷时抛出。"""
+
+
+class UnknownCategoryError(ValueError):
+    """请求的新闻一级分类不存在时抛出。"""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(f"未知新闻分类：{category}")
+        self.category = category
+
+
+class ProfileNotInitializedError(LookupError):
+    """Raised when an authenticated account has no profile projection row."""
+
+    def __init__(self, user_id: int) -> None:
+        super().__init__(f"Profile is not initialized for user_id={user_id}.")
+        self.user_id = user_id
+
+
+class ProfileSeedUnavailableError(RuntimeError):
+    """Raised when reset cannot restore the user's configured cold-start seed."""
+
+    def __init__(self, seed_key: str) -> None:
+        super().__init__(f"Cold-start profile seed {seed_key!r} is unavailable.")
+        self.seed_key = seed_key

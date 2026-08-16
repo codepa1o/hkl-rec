@@ -61,14 +61,14 @@ export default function SearchPage() {
   }, [selectedPersona, rawQuery, isExact, bumpProfile, searchEventId]);
 
   const handleClick = useCallback(
-    (articleId: number) => {
+    (newsId: string) => {
       if (!selectedPersona) return;
       trackEvent({
-        event_id: `search-click-${requestId}:${articleId}`,
+        event_id: `search-click-${requestId}:${newsId}`,
         user_id: selectedPersona.user_id,
         event_type: "search_result_click",
         surface: "search",
-        article_id: articleId,
+        news_id: newsId,
         query_key: resolvedQueryKey || rawQuery,
         request_id: requestId || searchEventId,
       }).then(() => bumpProfile());
@@ -117,11 +117,11 @@ export default function SearchPage() {
 
       {items.map((item) => (
         <PostCard
-          key={item.article_id}
+          key={item.news_id}
           item={item}
           userId={selectedPersona.user_id}
           surface="search"
-          onTrackClick={() => handleClick(item.article_id)}
+          onTrackClick={() => handleClick(item.news_id)}
           onProfileChanged={bumpProfile}
         />
       ))}

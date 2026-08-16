@@ -48,6 +48,13 @@ def _check_auth_origin(request: Request, settings: Settings) -> None:
         raise HTTPException(status_code=403, detail="请求来源不受信任")
 
 
+def require_trusted_origin(
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+) -> None:
+    _check_auth_origin(request, settings)
+
+
 def _check_auth_rate_limit(request: Request, settings: Settings) -> None:
     client_host = request.client.host if request.client else "unknown"
     key = f"{client_host}:{request.url.path}"

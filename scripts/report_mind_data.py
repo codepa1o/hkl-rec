@@ -14,7 +14,7 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_summary(normalized_dir: Path, demo_dir: Path) -> dict[str, Any]:
+def build_summary(normalized_dir: Path) -> dict[str, Any]:
     manifest = _load_json(normalized_dir / "normalization_manifest.json")
     articles = pq.read_table(
         normalized_dir / "articles.parquet",
@@ -69,8 +69,6 @@ def build_summary(normalized_dir: Path, demo_dir: Path) -> dict[str, Any]:
     dev_users = set(dev_requests["user_id"].astype(int))
     train_articles = set(train_impressions["article_id"].astype(int))
     dev_articles = set(dev_impressions["article_id"].astype(int))
-    demo_manifest = _load_json(demo_dir / "manifest.json")
-
     return {
         "dataset": "MIND-small",
         "normalized_fingerprint": manifest["normalized_fingerprint"],
@@ -129,14 +127,6 @@ def build_summary(normalized_dir: Path, demo_dir: Path) -> dict[str, Any]:
                 6,
             ),
         },
-        "demo_world": {
-            "personas": demo_manifest["demo_persona_count"],
-            "requests": demo_manifest["selected_request_count"],
-            "articles": demo_manifest["selected_article_count"],
-            "difference_from_full_data": (
-                "The demo world is a deterministic serving slice and is not model evidence."
-            ),
-        },
     }
 
 
@@ -146,7 +136,6 @@ def render_markdown(summary: dict[str, Any]) -> str:
     content = summary["content"]
     overlap = summary["overlap_and_cold_start"]
     exposure = summary["exposure"]
-    demo = summary["demo_world"]
     top_categories = "\n".join(
         f"| {category} | {count:,} |" for category, count in content["top_categories"].items()
     )
@@ -196,10 +185,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
 由于开发集已知用户覆盖率较低，协同检索采用训练集内部的时间顺序留出法评估。
 官方开发集则作为独立的冷启动内容/类别评估场景报告。
 
-## 演示世界与模型证据
+## 在线目录
 
-在线演示包含 {demo["personas"]} 个用户画像、{demo["requests"]} 个请求和
-{demo["articles"]} 篇文章。演示世界是确定性的在线服务切片，不属于模型证据。
+在线 PostgreSQL 导入和搜索索引均以本报告的完整规范化目录为输入，目录完整性由
+`normalization_manifest.json` 指纹和导入记录共同校验。
 """
 
 
@@ -209,11 +198,6 @@ def main() -> None:
         "--normalized-dir",
         type=Path,
         default=ROOT / "build" / "mind_normalized",
-    )
-    parser.add_argument(
-        "--demo-dir",
-        type=Path,
-        default=ROOT / "build" / "mind_demo_world",
     )
     parser.add_argument(
         "--json-output",
@@ -226,7 +210,7 @@ def main() -> None:
         default=ROOT / "docs" / "data_analysis_report.md",
     )
     args = parser.parse_args()
-    summary = build_summary(args.normalized_dir, args.demo_dir)
+    summary = build_summary(args.normalized_dir)
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.json_output.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",

@@ -143,7 +143,7 @@ def test_mind_features_use_only_prior_item_counts():
 
 def test_runtime_base_score_matches_mind_training_formula():
     features = build_feature_dict(
-        article_row={"create_ts": 0},
+        article_row={"first_seen_ts": 100},
         topic_ids=set(),
         topic_weight_map={},
         default_topic_weight_map={},
@@ -151,9 +151,11 @@ def test_runtime_base_score_matches_mind_training_formula():
         alpha=0.5,
         max_hot_score=1000,
         article_hot_score=100,
+        now_ts=3700,
     )
 
     assert features["base_score"] == 0.5
+    assert features["article_age_hours"] == 1.0
 
 
 def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
@@ -172,9 +174,15 @@ def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
     article_topics = {
         article_id: frozenset({category}) for article_id, category in article_category.items()
     }
+    similarity_pairs: list[tuple[str, str]] = []
+
+    def similarity(left: str, right: str) -> None:
+        similarity_pairs.append((left, right))
+        return None
+
     context = {
         "article_topics": article_topics,
-        "als_similarity": lambda _left, _right: None,
+        "als_similarity": similarity,
     }
 
     baseline = _ranking_metrics(
@@ -197,6 +205,8 @@ def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
     assert float(mmr["hybrid_intra_list_similarity@10"]) < float(
         baseline["hybrid_intra_list_similarity@10"]
     )
+    assert similarity_pairs
+    assert all(left.startswith("N") and right.startswith("N") for left, right in similarity_pairs)
 
 
 def test_select_mmr_penalty_enforces_recall_guardrail_then_minimizes_similarity():

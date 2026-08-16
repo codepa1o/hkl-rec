@@ -84,7 +84,7 @@ def _precompute_runs(
     for query in queries:
         exact = aliases.search_exact_alias(query.text, limit=10)
         if exact is not None:
-            article_ids = tuple(hit.article_id for hit in exact.hits)
+            article_ids = tuple(int(hit.news_id[1:]) for hit in exact.hits)
             exact_run = QueryRun(
                 query=query,
                 accepted=True,
@@ -129,7 +129,7 @@ def _evaluate_config(
             config=config,
             limit=10,
         )
-        candidate_ids = tuple(hit.article_id for hit in result.hits)
+        candidate_ids = tuple(int(hit.news_id[1:]) for hit in result.hits)
         runs.append(
             QueryRun(
                 query=raw.query,

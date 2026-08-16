@@ -1,11 +1,13 @@
 import type {
   ArticleCardResponse,
   AuthUser,
+  CategoryListResponse,
   DebugProfileResponse,
   EventTrackRequest,
   EventTrackResponse,
   FeedResponse,
   PersonaListResponse,
+  ProfileResponse,
   LoginInput,
   RegisterInput,
   SearchResponse,
@@ -98,6 +100,10 @@ export function listPersonas(limit = 10): Promise<PersonaListResponse> {
   return request<PersonaListResponse>("/personas", { params: { limit } });
 }
 
+export function listCategories(): Promise<CategoryListResponse> {
+  return request<CategoryListResponse>("/categories");
+}
+
 export function listSearchSuggestions(limit = 12): Promise<SuggestionListResponse> {
   return request<SuggestionListResponse>("/search/suggestions", { params: { limit } });
 }
@@ -107,9 +113,18 @@ export function getFeed(
   pageSize = 10,
   debug = false,
   requestId?: string,
+  cursor?: string,
+  category?: string,
 ): Promise<FeedResponse> {
   return request<FeedResponse>("/feed", {
-    params: { user_id: userId, page_size: pageSize, debug, request_id: requestId },
+    params: {
+      user_id: userId,
+      page_size: pageSize,
+      debug,
+      request_id: requestId,
+      cursor,
+      category,
+    },
   });
 }
 
@@ -136,12 +151,20 @@ export function postSearch(
   });
 }
 
-export function getArticleCard(articleId: number): Promise<ArticleCardResponse> {
-  return request<ArticleCardResponse>(`/articles/${articleId}`);
+export function getArticleCard(newsId: string): Promise<ArticleCardResponse> {
+  return request<ArticleCardResponse>(`/articles/${newsId}`);
 }
 
 export function getDebugProfile(userId: number): Promise<DebugProfileResponse> {
   return request<DebugProfileResponse>("/debug/profile", { params: { user_id: userId } });
+}
+
+export function getProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile");
+}
+
+export function resetProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile/reset", { method: "POST" });
 }
 
 export function trackEvent(payload: EventTrackRequest): Promise<EventTrackResponse> {
@@ -149,4 +172,29 @@ export function trackEvent(payload: EventTrackRequest): Promise<EventTrackRespon
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function sendTrackedEventKeepalive(payload: EventTrackRequest): void {
+  const url = new URL("/event/track", BASE_URL);
+  const beaconUrl = new URL("/event/track/beacon", BASE_URL);
+  const serialized = JSON.stringify(payload);
+  let acceptedByBeacon = false;
+  try {
+    acceptedByBeacon = Boolean(
+      globalThis.navigator?.sendBeacon?.(
+        beaconUrl.toString(),
+        serialized,
+      ),
+    );
+  } catch {
+    acceptedByBeacon = false;
+  }
+  if (acceptedByBeacon) return;
+  void fetch(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: serialized,
+    keepalive: true,
+  }).catch(() => undefined);
 }

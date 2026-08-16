@@ -11,9 +11,7 @@ from backend.app.data_contracts.mind import (
 
 
 def test_news_row_preserves_the_exact_eight_mind_fields() -> None:
-    news = parse_news_row(
-        "N123\tNews\tLocal\tTitle\t\thttps://example.com/story\t[]\t[]"
-    )
+    news = parse_news_row("N123\tNews\tLocal\tTitle\t\thttps://example.com/story\t[]\t[]")
 
     assert news.news_id == "N123"
     assert news.category == "News"
@@ -62,13 +60,9 @@ def test_entities_must_be_json_arrays(entities: str) -> None:
 
 def test_entity_array_members_must_be_objects() -> None:
     with pytest.raises(MindContractError, match="objects"):
-        parse_news_row(
-            "N1\tNews\tLocal\tTitle\tAbstract\thttps://example.com\t[1]\t[]"
-        )
+        parse_news_row("N1\tNews\tLocal\tTitle\tAbstract\thttps://example.com\t[1]\t[]")
 
 
 def test_malformed_entity_json_is_rejected() -> None:
     with pytest.raises(MindContractError, match="valid JSON"):
-        parse_news_row(
-            "N1\tNews\tLocal\tTitle\tAbstract\thttps://example.com\t[\t[]"
-        )
+        parse_news_row("N1\tNews\tLocal\tTitle\tAbstract\thttps://example.com\t[\t[]")

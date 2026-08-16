@@ -13,15 +13,15 @@ def expected_spend_micros(bid_micros: int, predicted_ctr: float) -> int:
 
 def sponsored_slot_is_reachable(
     *,
-    organic_answer_ids: set[int],
-    already_sponsored_answer_ids: set[int],
-    candidate_answer_id: int,
+    organic_news_ids: set[str],
+    already_sponsored_news_ids: set[str],
+    candidate_news_id: str,
     slot_position: int,
     sponsored_count: int,
 ) -> bool:
     required_organic_before = slot_position - 1 - sponsored_count
     remaining_organic_count = len(
-        organic_answer_ids - already_sponsored_answer_ids - {candidate_answer_id}
+        organic_news_ids - already_sponsored_news_ids - {candidate_news_id}
     )
     return remaining_organic_count >= required_organic_before
 

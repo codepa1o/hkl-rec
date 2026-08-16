@@ -18,6 +18,7 @@ vi.mock("../context/AuthContext", () => ({
 }));
 
 vi.mock("../api/client", () => ({
+  listCategories: vi.fn().mockResolvedValue({ items: [] }),
   listSearchSuggestions: vi.fn().mockResolvedValue({ items: [] }),
 }));
 
@@ -35,12 +36,15 @@ describe("中文界面", () => {
 
     expect(screen.getByText("首页")).toBeInTheDocument();
     expect(screen.getByText("新闻意图推荐")).toBeInTheDocument();
-    expect(screen.getByText("搜索")).toBeInTheDocument();
+    const searchButtons = screen.getAllByRole("button", { name: "搜索" });
+    expect(searchButtons).toHaveLength(2);
+    searchButtons.forEach((button) => expect(button).toBeDisabled());
     expect(screen.getByText("兴趣画像")).toBeInTheDocument();
     expect(screen.getByText("新闻分类")).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("搜索新闻")).toHaveLength(2);
     expect(screen.getByLabelText("切换为深色主题")).toBeInTheDocument();
-    expect(screen.getByText("加载中…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开账号菜单" })).toBeInTheDocument();
+    expect(screen.getByText("新闻读者")).toBeInTheDocument();
     expect(screen.queryByText("热门")).not.toBeInTheDocument();
     expect(screen.queryByText("探索")).not.toBeInTheDocument();
   });

@@ -41,14 +41,14 @@ def test_user_event_message_serializes_partition_key_and_optional_fields():
         event_id="evt-test",
         event_type="upvote",
         user_id=7248,
-        article_id=123,
+        news_id="N123",
         surface="home_feed",
         event_ts=1713399900,
     )
 
     assert event.partition_key == "7248"
     payload = event.model_dump(exclude_none=True)
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["event_id"] == "evt-test"
     assert payload["event_type"] == "upvote"
     assert "query_key" not in payload
@@ -62,21 +62,20 @@ def test_event_fingerprint_ignores_retry_timestamps_but_detects_payload_conflict
         event_id="evt-stable",
         event_type="feed_impression",
         user_id=7248,
-        article_id=301,
+        news_id="N301",
         request_id="feed-1",
         event_ts=100,
         producer_ts=101,
     )
     retry = first.model_copy(update={"event_ts": 200, "producer_ts": 201})
-    conflict = first.model_copy(update={"article_id": 302})
+    conflict = first.model_copy(update={"news_id": "N302"})
 
     assert first.idempotency_fingerprint == retry.idempotency_fingerprint
     assert first.idempotency_fingerprint != conflict.idempotency_fingerprint
 
 
-def test_schema_v2_event_backlog_migrates_without_changing_legacy_fingerprint():
-    import hashlib
-    import json
+def test_schema_v2_event_backlog_is_rejected_after_hard_cutover():
+    from pydantic import ValidationError
 
     from backend.app.events.schema import UserEventMessage
 
@@ -92,49 +91,40 @@ def test_schema_v2_event_backlog_migrates_without_changing_legacy_fingerprint():
         "producer_ts": 101,
         "source": "api",
     }
-    event = UserEventMessage.model_validate(payload)
-    expected_fingerprint_payload = {
-        "event_type": "feed_impression",
-        "user_id": 7248,
-        "answer_id": 301,
-        "query_key": None,
-        "query_text": None,
-        "request_id": "feed-v2",
-        "sponsored_delivery_id": None,
-        "surface": "feed",
-        "dwell_ms": None,
-        "source": "api",
-    }
-    expected = hashlib.sha256(
-        json.dumps(
-            expected_fingerprint_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode()
-    ).hexdigest()
-
-    assert event.schema_version == 2
-    assert event.article_id == 301
-    assert event.idempotency_fingerprint == expected
+    with pytest.raises(ValidationError):
+        UserEventMessage.model_validate(payload)
 
 
-def test_schema_v2_training_message_is_still_readable():
+def test_schema_v2_training_message_is_rejected_after_hard_cutover():
+    from pydantic import ValidationError
+
     from backend.app.events.schema import TrainingInteractionMessage
 
-    message = TrainingInteractionMessage.model_validate(
-        {
-            "schema_version": 2,
-            "example_id": "example-v2",
-            "user_id": 7248,
-            "answer_id": 301,
-            "event_type": "feed_impression",
-            "event_ts": 100,
-        }
-    )
+    with pytest.raises(ValidationError):
+        TrainingInteractionMessage.model_validate(
+            {
+                "schema_version": 2,
+                "example_id": "example-v2",
+                "user_id": 7248,
+                "answer_id": 301,
+                "event_type": "feed_impression",
+                "event_ts": 100,
+            }
+        )
 
-    assert message.schema_version == 2
-    assert message.article_id == 301
+
+def test_unknown_future_event_schema_is_rejected() -> None:
+    from pydantic import ValidationError
+
+    from backend.app.events.schema import UserEventMessage
+
+    with pytest.raises(ValidationError):
+        UserEventMessage(
+            schema_version=5,
+            event_type="search_query",
+            user_id=7248,
+            event_ts=100,
+        )
 
 
 def test_dwell_event_requires_bounded_duration():
@@ -146,14 +136,14 @@ def test_dwell_event_requires_bounded_duration():
         UserEventMessage(
             event_type="dwell",
             user_id=7248,
-            article_id=301,
+            news_id="N301",
             event_ts=100,
         )
     with pytest.raises(ValidationError, match="between 0 and 86400000"):
         UserEventMessage(
             event_type="dwell",
             user_id=7248,
-            article_id=301,
+            news_id="N301",
             dwell_ms=-1,
             event_ts=100,
         )
@@ -170,7 +160,7 @@ def test_default_publisher_is_noop_when_kafka_disabled():
             event_id="evt-noop",
             event_type="feed_impression",
             user_id=7248,
-            article_id=123,
+            news_id="N123",
             surface="feed",
             event_ts=1713399900,
         )
@@ -240,7 +230,7 @@ def test_kafka_publisher_does_not_flush_per_message(monkeypatch):
             event_id="evt-batched",
             event_type="feed_impression",
             user_id=7248,
-            article_id=301,
+            news_id="N301",
             event_ts=1713399900,
         )
     )

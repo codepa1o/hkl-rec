@@ -5,10 +5,24 @@ from pathlib import Path
 from typing import Any, cast
 
 from backend.app.config import Settings, compute_alpha
-from backend.app.errors import SearchIndexNotReadyError, UnresolvedQueryError
+from backend.app.data_contracts.mind import source_domain
+from backend.app.errors import (
+    SearchIndexNotReadyError,
+    UnknownCategoryError,
+    UnresolvedQueryError,
+)
 from backend.app.events.outbox import enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage, UserEventType
-from backend.app.observability import SEARCH_RESOLUTIONS, SEARCH_RETRIEVAL_DURATION
+from backend.app.observability import (
+    PROFILE_V2_LATE_EVENTS,
+    PROFILE_V2_PROJECTION_DURATION,
+    PROFILE_V2_PROJECTION_UPDATES,
+    PROFILE_V2_READ_FALLBACK,
+    PROFILE_V2_RESET,
+    SEARCH_RESOLUTIONS,
+    SEARCH_RETRIEVAL_DURATION,
+)
+from backend.app.profiles.signals import topic_strengths_for_event
 from backend.app.repositories._utils import (
     add_feed_candidate,
     is_numeric_query_key,
@@ -22,16 +36,22 @@ from backend.app.repositories.als_recall import get_als_recall
 from backend.app.repositories.base import RuntimeRepository
 from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
 from backend.app.repositories.content_dao import (
-    load_answer_event_counts_as_of,
-    load_answer_ids_created_as_of,
-    load_answer_ids_for_topics,
-    load_answer_rows,
-    load_answer_topic_ids,
+    list_news_categories,
+    load_catalog_identity,
+    load_exploration_rows,
     load_hot_fallback_rows,
+    load_news_event_counts_as_of,
+    load_news_ids_available_as_of,
+    load_news_ids_for_topics,
+    load_news_rows,
+    load_news_topic_ids,
     load_query_topics,
     load_search_candidates,
     load_search_matched_topics,
-    load_topics_by_answer,
+    load_topics_by_news,
+    load_unseen_catalog_rows,
+    news_category_exists,
+    parse_mind_entities,
 )
 from backend.app.repositories.event_dao import (
     append_recent_query,
@@ -44,10 +64,19 @@ from backend.app.repositories.event_dao import (
 )
 from backend.app.repositories.mmr import MMRCandidate, mmr_config, rerank_mmr
 from backend.app.repositories.profile_dao import (
+    attach_recent_click_titles,
     fetch_profile_row,
     load_default_seed_topic_weights,
     load_recent_query_topic_scores,
     profile_from_row,
+)
+from backend.app.repositories.profile_v2_dao import (
+    apply_profile_v2_event_with_outcome,
+    load_profile_v2,
+    load_profile_v2_topic_scores,
+    profile_event_is_before_reset,
+    profile_signal_config,
+    reset_profile_projections,
 )
 from backend.app.repositories.query_resolver import resolve_search_query
 from backend.app.repositories.ranker import (
@@ -63,7 +92,9 @@ from backend.app.repositories.sponsored import (
 from backend.app.repositories.sponsored_dao import (
     SponsoredDelivery,
     claim_feed_request,
+    complete_feed_request,
     confirm_sponsored_impression,
+    load_feed_session_news_ids,
     load_sponsored_attribution,
     load_sponsored_candidates,
     load_sponsored_deliveries_for_request,
@@ -71,10 +102,11 @@ from backend.app.repositories.sponsored_dao import (
     reserve_sponsored_delivery,
 )
 from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.category import CategoryItem, CategoryListResponse
 from backend.app.schemas.common import TopicCard
 from backend.app.schemas.event import (
-    ArticleTopic,
     EventAckResponse,
+    NewsTopic,
     OverlapTopic,
     RecommendationClickDebug,
     RecommendationClickRequest,
@@ -97,7 +129,7 @@ from backend.app.schemas.feed import (
     SponsoredFeedMetadata,
 )
 from backend.app.schemas.persona import PersonaCard, PersonaListResponse
-from backend.app.schemas.profile import DebugProfileResponse
+from backend.app.schemas.profile import DebugProfileResponse, ProfileResponse
 from backend.app.schemas.search import (
     SearchArtifactDebug,
     SearchDebugPayload,
@@ -112,6 +144,33 @@ from backend.app.search_retrieval import (
     SearchArtifactError,
     load_hybrid_search_index,
 )
+
+
+def _profile_v2_recall_scores(topic_scores: dict[int, float]) -> dict[int, float]:
+    return dict(
+        sorted(
+            (
+                (int(topic_id), float(score))
+                for topic_id, score in topic_scores.items()
+                if float(score) > 0.0
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )[:10]
+    )
+
+
+def _apply_profile_v2_boost(
+    *,
+    experiment_arm: FeedExperimentArm,
+    final_score: float,
+    topic_ids: set[int],
+    topic_scores: dict[int, float],
+    boost: float,
+) -> tuple[float, float | None]:
+    if experiment_arm != "profile_v2":
+        return final_score, None
+    profile_v2_score = round(sum(topic_scores.get(topic_id, 0.0) for topic_id in topic_ids), 6)
+    return round(final_score + boost * profile_v2_score, 6), profile_v2_score
 
 
 class PostgresRuntimeRepository(RuntimeRepository):
@@ -145,7 +204,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
         experiment_arm: FeedExperimentArm = "default",
         include_sponsored: bool = True,
         request_id: str | None = None,
+        cursor: str | None = None,
         as_of_ts: int | None = None,
+        category: str | None = None,
     ) -> FeedResponse:
         request_id = request_id or new_request_id(self._settings.request_id_prefix, "feed")
         sponsored_enabled = (
@@ -155,7 +216,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
         transaction_started = True
         try:
             connection.begin()
-            new_feed_request = claim_feed_request(
+            catalog_fingerprint, catalog_news_count = load_catalog_identity(connection)
+            if category is not None and not news_category_exists(connection, category):
+                raise UnknownCategoryError(category)
+            feed_claim = claim_feed_request(
                 connection,
                 request_id=request_id,
                 user_id=user_id,
@@ -164,14 +228,34 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 include_sponsored=include_sponsored,
                 experiment_arm=experiment_arm,
                 as_of_ts=as_of_ts,
+                category=category,
+                cursor_token=cursor,
+            )
+            new_feed_request = feed_claim.is_new
+            seen_news_ids = load_feed_session_news_ids(
+                connection,
+                session_id=feed_claim.session_id,
+                exclude_request_id=request_id,
             )
             profile_row = fetch_profile_row(connection, user_id)
             profile = profile_from_row(profile_row)
             topic_weight_map = {item.topic_id: item.weight for item in profile.topic_weights}
+            profile_now_ts = as_of_ts if as_of_ts is not None else int(time.time())
+            profile_v2_topic_scores = (
+                self._load_profile_v2_scores_with_fallback(
+                    connection,
+                    user_id=user_id,
+                    now_ts=profile_now_ts,
+                )
+                if experiment_arm == "profile_v2"
+                else {}
+            )
+            profile_v2_recall_scores = _profile_v2_recall_scores(profile_v2_topic_scores)
             signal_config = search_signal_config(experiment_arm)
             use_search = signal_config is not None
             use_lgb = experiment_arm in {
                 "default",
+                "profile_v2",
                 "lgb_plus_als",
                 "lgb_plus_als_plus_search",
                 "lgb_plus_als_plus_search_mmr",
@@ -180,10 +264,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 "lgb_plus_als_plus_search_gated_30m_4h",
                 "lgb_plus_als_plus_search_gated_2h_12h",
             }
-            require_lgb = use_lgb and experiment_arm != "default"
+            require_lgb = use_lgb and experiment_arm not in {"default", "profile_v2"}
             use_als = (
                 self._settings.als_recall_enabled
-                if experiment_arm == "default"
+                if experiment_arm in {"default", "profile_v2"}
                 else experiment_arm != "manual"
             )
             query_topic_scores = (
@@ -226,18 +310,32 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection=connection,
                 topic_weight_map=topic_weight_map,
                 query_topic_scores=query_recall_topic_scores,
+                profile_v2_topic_scores=profile_v2_recall_scores,
                 page_size=page_size,
                 user_id=user_id,
+                request_id=request_id,
                 use_als=use_als,
                 as_of_ts=as_of_ts,
+                expected_catalog_fingerprint=catalog_fingerprint,
+                excluded_news_ids=seen_news_ids,
+                session_id=feed_claim.session_id,
+                category=category,
             )
             if not candidates:
+                complete_feed_request(
+                    connection,
+                    request_id=request_id,
+                    news_ids=[],
+                    next_cursor=None,
+                )
                 if transaction_started:
                     connection.commit()
                 return FeedResponse(
                     user_id=user_id,
                     request_id=request_id,
                     items=[],
+                    next_cursor=None,
+                    has_more=False,
                     debug=FeedDebugPayload(
                         experiment_arm=experiment_arm,
                         profile_summary=FeedProfileSummary(
@@ -246,7 +344,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         ),
                         recall_candidates=[],
                         sponsored_candidates=[],
-                        artifacts=self._artifact_debug(),
+                        artifacts=self._artifact_debug(catalog_fingerprint),
                         fallback_used=False,
                         cold_start_mix=cold_start_mix,
                     )
@@ -254,19 +352,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     else None,
                 )
 
-            answer_ids = list(candidates)
-            answer_rows = load_answer_rows(connection, answer_ids)
+            news_ids = list(candidates)
+            news_rows = load_news_rows(connection, news_ids)
             if as_of_ts is not None:
-                event_counts = load_answer_event_counts_as_of(
+                event_counts = load_news_event_counts_as_of(
                     connection,
-                    answer_ids,
+                    news_ids,
                     as_of_ts=as_of_ts,
                 )
-                answer_rows = {
-                    answer_id: {
+                news_rows = {
+                    news_id: {
                         **row,
                         **event_counts.get(
-                            answer_id,
+                            news_id,
                             {
                                 "hot_score": 0.0,
                                 "click_count": 0,
@@ -274,11 +372,11 @@ class PostgresRuntimeRepository(RuntimeRepository):
                             },
                         ),
                     }
-                    for answer_id, row in answer_rows.items()
+                    for news_id, row in news_rows.items()
                 }
-            topics_by_answer = load_topics_by_answer(connection, answer_ids)
+            topics_by_news = load_topics_by_news(connection, news_ids)
             max_hot_score = max(
-                [float(row.get("hot_score") or 0) for row in answer_rows.values()] + [1.0]
+                [float(row.get("hot_score") or 0) for row in news_rows.values()] + [1.0]
             )
 
             now_ts = int(time.time())
@@ -287,12 +385,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
 
             # ── 为所有候选项构建特征字典 ─────────────────────────────
             feature_dicts: list[dict[str, float]] = []
-            candidate_keys: list[tuple[int, Any, Any, set[int], float, list[str], bool]] = []
-            for answer_id, candidate in candidates.items():
-                row = answer_rows.get(answer_id)
+            candidate_keys: list[tuple[str, Any, Any, set[int], float, list[str], bool]] = []
+            for news_id, candidate in candidates.items():
+                row = news_rows.get(news_id)
                 if row is None:
                     continue
-                topics = topics_by_answer.get(answer_id, [])
+                topics = topics_by_news.get(news_id, [])
                 topic_ids = {topic.topic_id for topic in topics}
                 base_score = (
                     round(
@@ -318,7 +416,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 feature_dicts.append(feat)
                 candidate_keys.append(
                     (
-                        answer_id,
+                        news_id,
                         row,
                         topics,
                         topic_ids,
@@ -329,7 +427,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 )
 
             # ── 批量模型推理 ─────────────────────────────────────────
-            model_scores = score_candidates(feature_dicts) if feature_dicts and use_lgb else None
+            model_scores = (
+                score_candidates(
+                    feature_dicts,
+                    expected_normalized_fingerprint=catalog_fingerprint,
+                )
+                if feature_dicts and use_lgb
+                else None
+            )
             if require_lgb and model_scores is None:
                 raise RuntimeError(
                     "requested LightGBM experiment arm but a compatible model is unavailable"
@@ -338,7 +443,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             # ── 构建 FeedItem 列表 ───────────────────────────────────
             scored_items: list[tuple[FeedItem, RecallCandidateDebug]] = []
             for idx, (
-                answer_id,
+                news_id,
                 row,
                 topics,
                 topic_ids,
@@ -364,12 +469,22 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 else:
                     # 回退方案：模型尚未训练时使用手工公式
                     final_score = round(base_score + topic_match_score + query_recall_boost, 6)
+                final_score, profile_v2_score = _apply_profile_v2_boost(
+                    experiment_arm=experiment_arm,
+                    final_score=final_score,
+                    topic_ids=topic_ids,
+                    topic_scores=profile_v2_topic_scores,
+                    boost=self._settings.profile_v2_boost,
+                )
 
                 item = FeedItem(
-                    article_id=answer_id,
-                    headline=row.get("headline") or f"Article {answer_id}",
+                    news_id=news_id,
+                    title=row.get("title") or news_id,
                     abstract=row.get("abstract") or "",
-                    source_domain=row.get("source_domain") or "unknown-source",
+                    url=row.get("url") or "",
+                    source_domain=source_domain(str(row.get("url") or "")),
+                    category=row.get("category") or "",
+                    subcategory=row.get("subcategory") or "",
                     categories=topics,
                     selected_reason=selected_reason(
                         is_fallback=is_fallback,
@@ -382,6 +497,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         topic_match_score=topic_match_score,
                         query_recall_boost=query_recall_boost,
                         final_score=final_score,
+                        profile_v2_score=profile_v2_score,
                     ),
                     recall_sources=sources,
                     is_fallback=is_fallback,
@@ -390,14 +506,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     (
                         item,
                         RecallCandidateDebug(
-                            article_id=answer_id,
+                            news_id=news_id,
                             source="+".join(sources),
                             base_recall_score=base_score,
                         ),
                     )
                 )
 
-            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].article_id))
+            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].news_id))
             sponsored_deliveries: list[SponsoredDelivery] = []
             if sponsored_enabled:
                 if not new_feed_request:
@@ -421,27 +537,29 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         user_id=user_id,
                         target_topic_ids=target_topic_ids,
                         now_ts=now_ts,
+                        category=category,
                     )
                     slots = sorted(
                         {slot for slot in self._settings.sponsored_slots if 1 <= slot <= page_size}
                     )
-                    used_answers: set[int] = set()
+                    used_news: set[str] = set()
                     used_campaigns: set[int] = set()
                     candidate_index = 0
-                    organic_answer_ids = {pair[0].article_id for pair in scored_items}
+                    organic_news_ids = {pair[0].news_id for pair in scored_items}
                     for slot in slots:
                         while candidate_index < len(sponsored_candidates):
                             sponsored_candidate = sponsored_candidates[candidate_index]
                             candidate_index += 1
                             if (
-                                sponsored_candidate.answer_id in used_answers
+                                sponsored_candidate.news_id in seen_news_ids
+                                or sponsored_candidate.news_id in used_news
                                 or sponsored_candidate.campaign_id in used_campaigns
                             ):
                                 continue
                             if not sponsored_slot_is_reachable(
-                                organic_answer_ids=organic_answer_ids,
-                                already_sponsored_answer_ids=used_answers,
-                                candidate_answer_id=sponsored_candidate.answer_id,
+                                organic_news_ids=organic_news_ids,
+                                already_sponsored_news_ids=used_news,
+                                candidate_news_id=sponsored_candidate.news_id,
                                 slot_position=slot,
                                 sponsored_count=len(sponsored_deliveries),
                             ):
@@ -460,7 +578,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                             if delivery is None:
                                 continue
                             sponsored_deliveries.append(delivery)
-                            used_answers.add(delivery.answer_id)
+                            used_news.add(delivery.news_id)
                             used_campaigns.add(delivery.campaign_id)
                             break
 
@@ -468,19 +586,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection,
                 sponsored_deliveries,
             )
-            sponsored_answer_ids = {item.article_id for item in sponsored_items}
+            sponsored_news_ids = {item.news_id for item in sponsored_items}
             organic_pairs = [
-                pair for pair in scored_items if pair[0].article_id not in sponsored_answer_ids
+                pair for pair in scored_items if pair[0].news_id not in sponsored_news_ids
             ]
             organic_limit = max(0, page_size - len(sponsored_items))
             active_mmr_config = mmr_config(experiment_arm)
             if active_mmr_config is None:
                 selected_pairs = organic_pairs[:organic_limit]
             else:
-                als = get_als_recall()
+                als = get_als_recall(expected_normalized_fingerprint=catalog_fingerprint)
                 mmr_candidates: list[MMRCandidate[tuple[FeedItem, RecallCandidateDebug]]] = [
                     MMRCandidate(
-                        article_id=pair[0].article_id,
+                        news_id=pair[0].news_id,
                         relevance=pair[0].scores.final_score,
                         topic_ids=frozenset(topic.topic_id for topic in pair[0].categories),
                         value=pair,
@@ -510,6 +628,20 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 page_size=page_size,
             )
             fallback_used = any(item.is_fallback for item in organic_items)
+            returned_news_ids = [item.news_id for item in selected_items]
+            has_more = len(seen_news_ids | set(returned_news_ids)) < catalog_news_count
+            proposed_next_cursor = (
+                feed_claim.next_cursor
+                or new_request_id(self._settings.request_id_prefix, "feed-cursor")
+                if has_more
+                else None
+            )
+            next_cursor = complete_feed_request(
+                connection,
+                request_id=request_id,
+                news_ids=returned_news_ids,
+                next_cursor=proposed_next_cursor,
+            )
             if transaction_started:
                 connection.commit()
 
@@ -517,6 +649,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 user_id=user_id,
                 request_id=request_id,
                 items=selected_items,
+                next_cursor=next_cursor,
+                has_more=has_more,
                 debug=FeedDebugPayload(
                     experiment_arm=experiment_arm,
                     profile_summary=FeedProfileSummary(
@@ -525,7 +659,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     ),
                     recall_candidates=[pair[1] for pair in scored_items[:50]],
                     sponsored_candidates=sponsored_debug,
-                    artifacts=self._artifact_debug(),
+                    artifacts=self._artifact_debug(catalog_fingerprint),
                     fallback_used=fallback_used,
                     cold_start_mix=cold_start_mix,
                 )
@@ -545,6 +679,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         )
         connection = self._connection_pool.connect()
         try:
+            catalog_fingerprint, catalog_news_count = load_catalog_identity(connection)
             resolution_started = time.perf_counter()
             try:
                 hybrid_index = None
@@ -555,8 +690,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     try:
                         hybrid_index = load_hybrid_search_index(
                             Path(self._settings.search_index_dir),
-                            expected_source_fingerprint=(self._settings.search_source_fingerprint),
+                            expected_source_fingerprint=catalog_fingerprint,
                         )
+                        if int(hybrid_index.metadata().get("document_count") or -1) != (
+                            catalog_news_count
+                        ):
+                            raise SearchArtifactError(
+                                "search artifact document count disagrees with PostgreSQL catalog"
+                            )
                     except SearchArtifactError as exc:
                         raise SearchIndexNotReadyError(str(exc)) from exc
                 resolution = resolve_search_query(
@@ -607,11 +748,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             if self._settings.event_mode != "kafka_async":
                 claimed = claim_event_id(connection, event)
                 if claimed:
-                    profile_row = fetch_profile_row(
+                    project_profile = not profile_event_is_before_reset(
                         connection,
-                        payload.user_id,
-                        for_update=True,
+                        user_id=payload.user_id,
+                        event_ts=event_ts,
                     )
+                    if not project_profile and self._settings.profile_v2_enabled:
+                        PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
                     record_search_query(
                         connection=connection,
                         user_id=payload.user_id,
@@ -619,13 +762,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         event_ts=event_ts,
                         external_event_id=event.event_id,
                     )
-                    append_recent_query(
-                        connection=connection,
-                        profile_row=profile_row,
-                        query_key=query_key,
-                        event_ts=event_ts,
-                        behavior_delta=self._settings.search_query_behavior_delta,
-                    )
+                    if project_profile:
+                        profile_row = fetch_profile_row(
+                            connection,
+                            payload.user_id,
+                            for_update=True,
+                        )
+                        append_recent_query(
+                            connection=connection,
+                            profile_row=profile_row,
+                            query_key=query_key,
+                            event_ts=event_ts,
+                            behavior_delta=self._settings.search_query_behavior_delta,
+                        )
 
             matched_topics = load_search_matched_topics(connection, query_key)
             search_candidates = load_search_candidates(
@@ -636,15 +785,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 retrieval_mode=self._settings.search_retrieval_mode,
                 hybrid_hits=resolution.hybrid_hits,
             )
-            answer_ids = [answer_id for answer_id in search_candidates]
-            answer_rows = load_answer_rows(connection, answer_ids)
-            topics_by_answer = load_topics_by_answer(connection, answer_ids)
+            news_ids = list(search_candidates)
+            news_rows = load_news_rows(connection, news_ids)
+            missing_news_ids = set(news_ids) - set(news_rows)
+            if missing_news_ids:
+                missing_preview = ", ".join(sorted(missing_news_ids)[:5])
+                raise SearchIndexNotReadyError(
+                    f"search artifact references missing mind_news rows: {missing_preview}"
+                )
+            topics_by_news = load_topics_by_news(connection, news_ids)
 
             scored_items: list[tuple[SearchItem, SearchResultSource]] = []
-            for answer_id, candidate in search_candidates.items():
-                row = answer_rows.get(answer_id)
-                if row is None:
-                    continue
+            for news_id, candidate in search_candidates.items():
+                row = news_rows[news_id]
 
                 topic_match_score = round(float(candidate["topic_match_score"]), 6)
                 bm25_score = round(float(candidate.get("bm25_score") or 0.0), 6)
@@ -652,11 +805,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 hybrid_score = round(float(candidate.get("hybrid_score") or 0.0), 9)
                 final_score = hybrid_score if hybrid_score > 0 else topic_match_score
                 item = SearchItem(
-                    article_id=answer_id,
-                    headline=row.get("headline") or f"Article {answer_id}",
+                    news_id=news_id,
+                    title=row.get("title") or news_id,
                     abstract=row.get("abstract") or "",
-                    source_domain=row.get("source_domain") or "unknown-source",
-                    categories=topics_by_answer.get(answer_id, []),
+                    url=row.get("url") or "",
+                    source_domain=source_domain(str(row.get("url") or "")),
+                    category=row.get("category") or "",
+                    subcategory=row.get("subcategory") or "",
+                    categories=topics_by_news.get(news_id, []),
                     scores=SearchItemScores(
                         topic_match_score=topic_match_score,
                         bm25_score=bm25_score,
@@ -668,11 +824,11 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 scored_items.append(
                     (
                         item,
-                        SearchResultSource(article_id=answer_id, source=candidate["source"]),
+                        SearchResultSource(news_id=news_id, source=candidate["source"]),
                     )
                 )
 
-            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].article_id))
+            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].news_id))
             selected = scored_items[: payload.page_size]
             search_artifact = None
             if hybrid_index is not None:
@@ -714,13 +870,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
         sponsored_attribution = self._load_sponsored_event_attribution(
             delivery_id=payload.sponsored_delivery_id,
             user_id=payload.user_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
         )
         event = self._event_message(
             event_type="recommendation_click",
             user_id=payload.user_id,
             event_id=payload.event_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
             campaign_id=(
@@ -750,30 +906,36 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     event_type="recommendation_click",
                     debug=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     for_update=True,
                 )
-            profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
-            answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
+            news_topic_ids = load_news_topic_ids(connection, payload.news_id)
             topic_deltas = {
                 topic_id: self._settings.recommendation_click_topic_delta
-                for topic_id in answer_topic_ids
+                for topic_id in news_topic_ids
             }
             record_click_event(
                 connection=connection,
                 user_id=payload.user_id,
                 event_type="recommendation_click",
-                article_id=payload.article_id,
+                news_id=payload.news_id,
                 query_key=None,
                 request_id=payload.request_id,
                 surface="feed",
                 event_ts=event_ts,
-                topic_ids=answer_topic_ids,
+                topic_ids=news_topic_ids,
                 external_event_id=event.event_id,
                 sponsored_delivery_id=event.sponsored_delivery_id,
                 campaign_id=event.campaign_id,
@@ -785,25 +947,38 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
-            update = apply_click_profile_update(
-                connection=connection,
-                profile_row=profile_row,
-                article_id=payload.article_id,
-                event_ts=event_ts,
-                topic_deltas=topic_deltas,
-                behavior_delta=self._settings.recommendation_click_behavior_delta,
-                decay_factor=self._settings.profile_topic_decay,
-            )
+            update: dict[str, Any] | None = None
+            if project_profile:
+                profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
+                update = apply_click_profile_update(
+                    connection=connection,
+                    profile_row=profile_row,
+                    news_id=payload.news_id,
+                    event_ts=event_ts,
+                    topic_deltas=topic_deltas,
+                    behavior_delta=self._settings.recommendation_click_behavior_delta,
+                    decay_factor=self._settings.profile_topic_decay,
+                )
+                self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=news_topic_ids,
+                    ),
+                )
             response = EventAckResponse(
                 ok=True,
                 event_type="recommendation_click",
-                debug=RecommendationClickDebug(
-                    updated_topics=topic_delta_models(topic_deltas),
-                    recent_clicked_articles_tail=update["recent_clicked_answers"],
-                    behavior_score=update["behavior_score"],
-                )
-                if payload.debug
-                else None,
+                debug=(
+                    RecommendationClickDebug(
+                        updated_topics=topic_delta_models(topic_deltas),
+                        recent_clicked_news_tail=update["recent_clicked_news"],
+                        behavior_score=update["behavior_score"],
+                    )
+                    if payload.debug and update is not None
+                    else None
+                ),
             )
             self._enqueue_raw_event(connection, event)
             connection.commit()
@@ -822,13 +997,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
         sponsored_attribution = self._load_sponsored_event_attribution(
             delivery_id=payload.sponsored_delivery_id,
             user_id=payload.user_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
         )
         event = self._event_message(
             event_type="search_result_click",
             user_id=payload.user_id,
             event_id=payload.event_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
             query_key=query_key,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -859,32 +1034,38 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     event_type="search_result_click",
                     debug=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     for_update=True,
                 )
-            profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
             query_topics: list[SearchQueryTopic] = load_query_topics(connection, query_key)
-            answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
+            news_topic_ids = load_news_topic_ids(connection, payload.news_id)
             query_topic_ids = {topic.topic_id for topic in query_topics}
-            answer_topic_set = set(answer_topic_ids)
-            overlap_topic_ids = query_topic_ids & answer_topic_set
+            news_topic_set = set(news_topic_ids)
+            overlap_topic_ids = query_topic_ids & news_topic_set
             topic_deltas: dict[int, float] = {}
-            for topic_id in query_topic_ids | answer_topic_set:
+            for topic_id in query_topic_ids | news_topic_set:
                 topic_deltas[topic_id] = self._settings.search_result_click_topic_delta
             for topic_id in overlap_topic_ids:
                 topic_deltas[topic_id] = self._settings.search_result_overlap_topic_delta
 
-            topic_ids = sorted(query_topic_ids | answer_topic_set)
+            topic_ids = sorted(query_topic_ids | news_topic_set)
             record_click_event(
                 connection=connection,
                 user_id=payload.user_id,
                 event_type="search_result_click",
-                article_id=payload.article_id,
+                news_id=payload.news_id,
                 query_key=query_key,
                 request_id=payload.request_id,
                 surface="search",
@@ -895,43 +1076,60 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 campaign_id=event.campaign_id,
                 creative_id=event.creative_id,
             )
-            confirm_recent_query(
-                connection,
-                profile_row,
-                query_key=query_key,
-                event_ts=event_ts,
+            profile_row = (
+                fetch_profile_row(connection, payload.user_id, for_update=True)
+                if project_profile
+                else None
             )
+            if profile_row is not None:
+                confirm_recent_query(
+                    connection,
+                    profile_row,
+                    query_key=query_key,
+                    event_ts=event_ts,
+                )
             if sponsored_attribution is not None:
                 record_sponsored_click(
                     connection,
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
-            update = apply_click_profile_update(
-                connection=connection,
-                profile_row=profile_row,
-                article_id=payload.article_id,
-                event_ts=event_ts,
-                topic_deltas=topic_deltas,
-                behavior_delta=self._settings.search_result_click_behavior_delta,
-                decay_factor=self._settings.profile_topic_decay,
-            )
+            update: dict[str, Any] | None = None
+            if profile_row is not None:
+                update = apply_click_profile_update(
+                    connection=connection,
+                    profile_row=profile_row,
+                    news_id=payload.news_id,
+                    event_ts=event_ts,
+                    topic_deltas=topic_deltas,
+                    behavior_delta=self._settings.search_result_click_behavior_delta,
+                    decay_factor=self._settings.profile_topic_decay,
+                )
+                self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=news_topic_set,
+                        query_topic_ids=query_topic_ids,
+                    ),
+                )
             response = EventAckResponse(
                 ok=True,
                 event_type="search_result_click",
-                debug=SearchResultClickDebug(
-                    query_topics=query_topics,
-                    article_topics=[
-                        ArticleTopic(topic_id=topic_id) for topic_id in answer_topic_ids
-                    ],
-                    overlap_topics=[
-                        OverlapTopic(topic_id=topic_id, boost_type="strong_confirm")
-                        for topic_id in sorted(overlap_topic_ids)
-                    ],
-                    behavior_score=update["behavior_score"],
-                )
-                if payload.debug
-                else None,
+                debug=(
+                    SearchResultClickDebug(
+                        query_topics=query_topics,
+                        news_topics=[NewsTopic(topic_id=topic_id) for topic_id in news_topic_ids],
+                        overlap_topics=[
+                            OverlapTopic(topic_id=topic_id, boost_type="strong_confirm")
+                            for topic_id in sorted(overlap_topic_ids)
+                        ],
+                        behavior_score=update["behavior_score"],
+                    )
+                    if payload.debug and update is not None
+                    else None
+                ),
             )
             self._enqueue_raw_event(connection, event)
             connection.commit()
@@ -945,7 +1143,69 @@ class PostgresRuntimeRepository(RuntimeRepository):
     def get_debug_profile(self, user_id: int) -> DebugProfileResponse:
         connection = self._connection_pool.connect()
         try:
-            return profile_from_row(fetch_profile_row(connection, user_id))
+            profile = profile_from_row(fetch_profile_row(connection, user_id))
+            recent_news_rows = load_news_rows(
+                connection,
+                [click.news_id for click in profile.recent_clicked_news],
+            )
+            return profile.model_copy(
+                update={
+                    "recent_clicked_news": attach_recent_click_titles(
+                        profile.recent_clicked_news,
+                        recent_news_rows,
+                    )
+                }
+            )
+        finally:
+            connection.close()
+
+    def list_categories(self) -> CategoryListResponse:
+        connection = self._connection_pool.connect()
+        try:
+            rows = list_news_categories(connection)
+        finally:
+            connection.close()
+        return CategoryListResponse(
+            items=[
+                CategoryItem(
+                    key=str(row["key"]),
+                    news_count=int(row["news_count"]),
+                )
+                for row in rows
+            ]
+        )
+
+    def get_profile(self, user_id: int) -> ProfileResponse:
+        connection = self._connection_pool.connect()
+        try:
+            return load_profile_v2(
+                connection,
+                user_id=user_id,
+                now_ts=int(time.time()),
+                config=profile_signal_config(self._settings),
+            )
+        finally:
+            connection.close()
+
+    def reset_profile(self, user_id: int) -> ProfileResponse:
+        connection = self._connection_pool.connect()
+        try:
+            connection.begin()
+            reset_ts = int(time.time())
+            reset_profile_projections(connection, user_id=user_id, reset_ts=reset_ts)
+            profile = load_profile_v2(
+                connection,
+                user_id=user_id,
+                now_ts=reset_ts,
+                config=profile_signal_config(self._settings),
+            )
+            connection.commit()
+            PROFILE_V2_RESET.labels(status="success").inc()
+            return profile
+        except Exception:
+            connection.rollback()
+            PROFILE_V2_RESET.labels(status="failure").inc()
+            raise
         finally:
             connection.close()
 
@@ -1017,36 +1277,41 @@ class PostgresRuntimeRepository(RuntimeRepository):
         ]
         return SuggestionListResponse(items=items)
 
-    def get_article_card(self, article_id: int) -> ArticleCardResponse:
+    def get_article_card(self, news_id: str) -> ArticleCardResponse:
         connection = self._connection_pool.connect()
         try:
-            answer_rows = load_answer_rows(connection, [article_id])
-            row = answer_rows.get(article_id)
+            news_rows = load_news_rows(connection, [news_id])
+            row = news_rows.get(news_id)
             if row is None:
-                raise LookupError(f"article not found: {article_id}")
-            topics_by_answer = load_topics_by_answer(connection, [article_id])
+                raise LookupError(f"news not found: {news_id}")
+            topics_by_news = load_topics_by_news(connection, [news_id])
         finally:
             connection.close()
 
-        categories: list[TopicCard] = topics_by_answer.get(article_id, [])
+        categories: list[TopicCard] = topics_by_news.get(news_id, [])
         return ArticleCardResponse(
-            article_id=article_id,
-            headline=row.get("headline") or f"Article {article_id}",
+            news_id=news_id,
+            title=row.get("title") or news_id,
             abstract=row.get("abstract") or "",
-            source_domain=row.get("source_domain") or "unknown-source",
+            url=row.get("url") or "",
+            source_domain=source_domain(str(row.get("url") or "")),
+            category=row.get("category") or "",
+            subcategory=row.get("subcategory") or "",
             categories=categories,
+            title_entities=parse_mind_entities(row.get("title_entities")),
+            abstract_entities=parse_mind_entities(row.get("abstract_entities")),
         )
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
         # 将已有完整画像更新逻辑的事件类型交给对应处理器。
         if payload.event_type == "recommendation_click":
-            if payload.article_id is None:
-                raise ValueError("recommendation_click requires article_id")
+            if payload.news_id is None:
+                raise ValueError("recommendation_click requires news_id")
             ack = self.record_recommendation_click(
                 RecommendationClickRequest(
                     event_id=payload.event_id,
                     user_id=payload.user_id,
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     request_id=payload.request_id,
                     sponsored_delivery_id=payload.sponsored_delivery_id,
                     debug=payload.debug,
@@ -1067,13 +1332,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
 
         if payload.event_type == "search_result_click":
-            if payload.article_id is None or not payload.query_key:
-                raise ValueError("search_result_click requires article_id and query_key")
+            if payload.news_id is None or not payload.query_key:
+                raise ValueError("search_result_click requires news_id and query_key")
             ack = self.record_search_result_click(
                 SearchResultClickRequest(
                     event_id=payload.event_id,
                     user_id=payload.user_id,
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     query_key=payload.query_key,
                     request_id=payload.request_id,
                     sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1093,8 +1358,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
 
         if payload.event_type == "upvote":
-            if payload.article_id is None:
-                raise ValueError("upvote requires article_id")
+            if payload.news_id is None:
+                raise ValueError("upvote requires news_id")
             # 应用与推荐点击相同的正向画像更新，
             # 但将 user_event 记录标记为 event_type='upvote'，便于分析时区分。
             event_ts = (
@@ -1103,13 +1368,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             sponsored_attribution = self._load_sponsored_event_attribution(
                 delivery_id=payload.sponsored_delivery_id,
                 user_id=payload.user_id,
-                article_id=payload.article_id,
+                news_id=payload.news_id,
             )
             event = self._event_message(
                 event_type="upvote",
                 user_id=payload.user_id,
                 event_id=payload.event_id,
-                article_id=payload.article_id,
+                news_id=payload.news_id,
                 query_key=payload.query_key,
                 request_id=payload.request_id,
                 sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1147,30 +1412,36 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         profile_updated=True,
                         behavior_score=None,
                     )
+                project_profile = not profile_event_is_before_reset(
+                    connection,
+                    user_id=payload.user_id,
+                    event_ts=event_ts,
+                )
+                if not project_profile and self._settings.profile_v2_enabled:
+                    PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
                 if payload.sponsored_delivery_id:
                     sponsored_attribution = load_sponsored_attribution(
                         connection,
                         delivery_id=payload.sponsored_delivery_id,
                         user_id=payload.user_id,
-                        article_id=payload.article_id,
+                        news_id=payload.news_id,
                         for_update=True,
                     )
-                profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
-                answer_topic_ids = load_answer_topic_ids(connection, payload.article_id)
+                news_topic_ids = load_news_topic_ids(connection, payload.news_id)
                 topic_deltas = {
                     topic_id: self._settings.recommendation_click_topic_delta
-                    for topic_id in answer_topic_ids
+                    for topic_id in news_topic_ids
                 }
                 record_click_event(
                     connection=connection,
                     user_id=payload.user_id,
                     event_type="upvote",
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     query_key=payload.query_key,
                     request_id=payload.request_id,
                     surface=payload.surface or "home_feed",
                     event_ts=event_ts,
-                    topic_ids=answer_topic_ids,
+                    topic_ids=news_topic_ids,
                     external_event_id=event.event_id,
                     sponsored_delivery_id=event.sponsored_delivery_id,
                     campaign_id=event.campaign_id,
@@ -1182,15 +1453,31 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         attribution=sponsored_attribution,
                         event_ts=event_ts,
                     )
-                update = apply_click_profile_update(
-                    connection=connection,
-                    profile_row=profile_row,
-                    article_id=payload.article_id,
-                    event_ts=event_ts,
-                    topic_deltas=topic_deltas,
-                    behavior_delta=self._settings.recommendation_click_behavior_delta,
-                    decay_factor=self._settings.profile_topic_decay,
-                )
+                update: dict[str, Any] | None = None
+                if project_profile:
+                    profile_row = fetch_profile_row(
+                        connection,
+                        payload.user_id,
+                        for_update=True,
+                    )
+                    update = apply_click_profile_update(
+                        connection=connection,
+                        profile_row=profile_row,
+                        news_id=payload.news_id,
+                        event_ts=event_ts,
+                        topic_deltas=topic_deltas,
+                        behavior_delta=self._settings.recommendation_click_behavior_delta,
+                        decay_factor=self._settings.profile_topic_decay,
+                    )
+                    self._project_profile_v2(
+                        connection,
+                        event,
+                        topic_strengths_for_event(
+                            event.event_type,
+                            article_topic_ids=news_topic_ids,
+                            dwell_ms=event.dwell_ms,
+                        ),
+                    )
                 self._enqueue_raw_event(connection, event)
                 connection.commit()
             except Exception:
@@ -1201,26 +1488,26 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=True,
                 event_type=payload.event_type,
-                profile_updated=True,
-                behavior_score=update["behavior_score"],
+                profile_updated=update is not None,
+                behavior_score=(float(update["behavior_score"]) if update is not None else None),
             )
 
         # 仅记录日志的事件：feed_impression、detail_view、dwell、downvote、share
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
-        if payload.article_id is None:
-            raise ValueError(f"{payload.event_type} requires article_id")
+        if payload.news_id is None:
+            raise ValueError(f"{payload.event_type} requires news_id")
         sponsored_attribution = self._load_sponsored_event_attribution(
             delivery_id=payload.sponsored_delivery_id,
             user_id=payload.user_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
         )
         event = self._event_message(
             event_type=cast(UserEventType, payload.event_type),
             user_id=payload.user_id,
             event_id=payload.event_id,
-            article_id=payload.article_id,
+            news_id=payload.news_id,
             query_key=payload.query_key,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1258,12 +1545,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     profile_updated=False,
                     behavior_score=None,
                 )
+            project_profile = not profile_event_is_before_reset(
+                connection,
+                user_id=payload.user_id,
+                event_ts=event_ts,
+            )
+            if not project_profile and self._settings.profile_v2_enabled:
+                PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
             if payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    article_id=payload.article_id,
+                    news_id=payload.news_id,
                     for_update=True,
                 )
             inserted = record_log_only_event(
@@ -1271,7 +1565,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 user_id=payload.user_id,
                 event_type=payload.event_type,
                 surface=payload.surface or "home_feed",
-                article_id=payload.article_id,
+                news_id=payload.news_id,
                 query_key=payload.query_key,
                 request_id=payload.request_id,
                 event_ts=event_ts,
@@ -1292,6 +1586,18 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     attribution=sponsored_attribution,
                     event_ts=event_ts,
                 )
+            profile_v2_updated = False
+            if inserted and project_profile and payload.event_type in {"dwell", "downvote"}:
+                news_topic_ids = load_news_topic_ids(connection, payload.news_id)
+                profile_v2_updated = self._project_profile_v2(
+                    connection,
+                    event,
+                    topic_strengths_for_event(
+                        event.event_type,
+                        article_topic_ids=news_topic_ids,
+                        dwell_ms=event.dwell_ms,
+                    ),
+                )
             self._enqueue_raw_event(connection, event)
             connection.commit()
         except Exception:
@@ -1302,15 +1608,45 @@ class PostgresRuntimeRepository(RuntimeRepository):
         return EventTrackResponse(
             ok=True,
             event_type=payload.event_type,
-            profile_updated=False,
+            profile_updated=profile_v2_updated,
             behavior_score=None,
         )
 
     # ── 编排辅助方法 ────────────────────────────────────────────
 
-    def _artifact_debug(self) -> ArtifactDebug:
-        lgb_metadata = loaded_model_metadata()
-        als_metadata = get_als_recall().metadata()
+    def _project_profile_v2(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        topic_strengths: dict[int, float],
+    ) -> bool:
+        if not self._settings.profile_v2_enabled:
+            return False
+        started_at = time.perf_counter()
+        try:
+            outcome = apply_profile_v2_event_with_outcome(
+                connection,
+                user_id=event.user_id,
+                event_type=event.event_type,
+                event_ts=event.event_ts,
+                topic_strengths=topic_strengths,
+                config=profile_signal_config(self._settings),
+            )
+        finally:
+            PROFILE_V2_PROJECTION_DURATION.observe(time.perf_counter() - started_at)
+        if outcome.updated:
+            PROFILE_V2_PROJECTION_UPDATES.labels(event_type=event.event_type).inc()
+        if outcome.reason in {"pre_reset", "out_of_order"}:
+            PROFILE_V2_LATE_EVENTS.labels(reason=outcome.reason).inc()
+        elif outcome.late_topic_count:
+            PROFILE_V2_LATE_EVENTS.labels(reason="out_of_order").inc()
+        return outcome.updated
+
+    def _artifact_debug(self, catalog_fingerprint: str) -> ArtifactDebug:
+        lgb_metadata = loaded_model_metadata(expected_normalized_fingerprint=catalog_fingerprint)
+        als_metadata = get_als_recall(
+            expected_normalized_fingerprint=catalog_fingerprint
+        ).metadata()
         return ArtifactDebug(
             lightgbm_data_fingerprint=(
                 str(lgb_metadata["data_fingerprint"])
@@ -1339,7 +1675,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         *,
         delivery_id: str | None,
         user_id: int,
-        article_id: int,
+        news_id: str,
     ) -> dict[str, Any] | None:
         if not delivery_id:
             return None
@@ -1349,7 +1685,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection,
                 delivery_id=delivery_id,
                 user_id=user_id,
-                article_id=article_id,
+                news_id=news_id,
             )
         finally:
             connection.close()
@@ -1361,22 +1697,25 @@ class PostgresRuntimeRepository(RuntimeRepository):
     ) -> tuple[list[FeedItem], list[SponsoredCandidateDebug]]:
         if not deliveries:
             return [], []
-        answer_ids = [delivery.answer_id for delivery in deliveries]
-        answer_rows = load_answer_rows(connection, answer_ids)
-        topics_by_answer = load_topics_by_answer(connection, answer_ids)
+        news_ids = [delivery.news_id for delivery in deliveries]
+        news_rows = load_news_rows(connection, news_ids)
+        topics_by_news = load_topics_by_news(connection, news_ids)
         items: list[FeedItem] = []
         debug_rows: list[SponsoredCandidateDebug] = []
         for delivery in deliveries:
-            row = answer_rows.get(delivery.answer_id)
+            row = news_rows.get(delivery.news_id)
             if row is None:
-                raise RuntimeError(f"sponsored creative article is missing: {delivery.answer_id}")
-            topics = topics_by_answer.get(delivery.answer_id, [])
+                raise RuntimeError(f"sponsored creative news is missing: {delivery.news_id}")
+            topics = topics_by_news.get(delivery.news_id, [])
             items.append(
                 FeedItem(
-                    article_id=delivery.answer_id,
-                    headline=row.get("headline") or f"Article {delivery.answer_id}",
+                    news_id=delivery.news_id,
+                    title=row.get("title") or delivery.news_id,
                     abstract=row.get("abstract") or "",
-                    source_domain=row.get("source_domain") or "unknown-source",
+                    url=row.get("url") or "",
+                    source_domain=source_domain(str(row.get("url") or "")),
+                    category=row.get("category") or "",
+                    subcategory=row.get("subcategory") or "",
                     categories=topics,
                     selected_reason=(
                         f"Sponsored candidate from {delivery.campaign_name}; "
@@ -1405,7 +1744,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 SponsoredCandidateDebug(
                     campaign_id=delivery.campaign_id,
                     creative_id=delivery.creative_id,
-                    article_id=delivery.answer_id,
+                    news_id=delivery.news_id,
                     slot_position=delivery.slot_position,
                     expected_spend_micros=delivery.expected_spend_micros,
                     sponsored_score=round(delivery.sponsored_score, 6),
@@ -1420,7 +1759,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         user_id: int,
         event_ts: int,
         event_id: str | None = None,
-        article_id: int | None = None,
+        news_id: str | None = None,
         query_key: str | None = None,
         query_text: str | None = None,
         request_id: str | None = None,
@@ -1433,7 +1772,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         message_values: dict[str, Any] = {
             "event_type": event_type,
             "user_id": user_id,
-            "article_id": article_id,
+            "news_id": news_id,
             "query_key": query_key,
             "query_text": query_text,
             "request_id": request_id,
@@ -1472,75 +1811,146 @@ class PostgresRuntimeRepository(RuntimeRepository):
         finally:
             connection.close()
 
+    def _load_profile_v2_scores_with_fallback(
+        self,
+        connection: Any,
+        *,
+        user_id: int,
+        now_ts: int,
+    ) -> dict[int, float]:
+        if not self._settings.profile_v2_enabled:
+            return {}
+        with connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT profile_v2_read")
+        try:
+            scores = load_profile_v2_topic_scores(
+                connection,
+                user_id=user_id,
+                now_ts=now_ts,
+                config=profile_signal_config(self._settings),
+            )
+        except Exception:
+            with connection.cursor() as cursor:
+                cursor.execute("ROLLBACK TO SAVEPOINT profile_v2_read")
+                cursor.execute("RELEASE SAVEPOINT profile_v2_read")
+            PROFILE_V2_READ_FALLBACK.inc()
+            return {}
+        with connection.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT profile_v2_read")
+        return scores
+
     def _load_feed_candidates(
         self,
         connection: Any,
         topic_weight_map: dict[int, float],
         query_topic_scores: dict[int, float],
+        profile_v2_topic_scores: dict[int, float],
         page_size: int,
         user_id: int,
+        request_id: str,
         use_als: bool,
         as_of_ts: int | None,
-    ) -> dict[int, dict[str, Any]]:
-        candidates: dict[int, dict[str, Any]] = {}
+        expected_catalog_fingerprint: str,
+        excluded_news_ids: set[str],
+        session_id: str,
+        category: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        candidates: dict[str, dict[str, Any]] = {}
         profile_topic_ids = list(topic_weight_map)[:10]
         query_topic_ids = list(query_topic_scores)[:20]
+        profile_v2_topic_ids = list(profile_v2_topic_scores)[:10]
         candidate_limit = max(page_size * 20, 50)
 
-        for row in load_answer_ids_for_topics(
+        for row in load_news_ids_for_topics(
             connection,
             profile_topic_ids,
             candidate_limit,
             as_of_ts=as_of_ts,
+            category=category,
         ):
             add_feed_candidate(
                 candidates,
-                answer_id=int(row["answer_id"]),
+                news_id=str(row["news_id"]),
                 source="profile_topic",
                 is_fallback=False,
                 raw_base_score=float(row.get("hot_score") or 0.0),
             )
 
-        for row in load_answer_ids_for_topics(
+        for row in load_news_ids_for_topics(
             connection,
             query_topic_ids,
             candidate_limit,
             as_of_ts=as_of_ts,
+            category=category,
         ):
             add_feed_candidate(
                 candidates,
-                answer_id=int(row["answer_id"]),
+                news_id=str(row["news_id"]),
                 source="recent_query_topic",
+                is_fallback=False,
+                raw_base_score=float(row.get("hot_score") or 0.0),
+            )
+
+        for row in load_news_ids_for_topics(
+            connection,
+            profile_v2_topic_ids,
+            candidate_limit,
+            as_of_ts=as_of_ts,
+            category=category,
+        ):
+            add_feed_candidate(
+                candidates,
+                news_id=str(row["news_id"]),
+                source="profile_v2_topic",
                 is_fallback=False,
                 raw_base_score=float(row.get("hot_score") or 0.0),
             )
 
         # ── ALS 协同过滤召回（第 4 个通道）────────────────────────
         if use_als:
-            als = get_als_recall()
+            als = get_als_recall(expected_normalized_fingerprint=expected_catalog_fingerprint)
             als_candidates = als.get_candidates(
                 user_id=user_id,
                 k=self._settings.als_recall_top_k,
             )
-            allowed_als_answer_ids = (
-                load_answer_ids_created_as_of(
+            allowed_als_news_ids = (
+                load_news_ids_available_as_of(
                     connection,
-                    [answer_id for answer_id, _ in als_candidates],
+                    [news_id for news_id, _ in als_candidates],
                     as_of_ts=as_of_ts,
+                    category=category,
                 )
-                if as_of_ts is not None
-                else {answer_id for answer_id, _ in als_candidates}
+                if as_of_ts is not None or category is not None
+                else {news_id for news_id, _ in als_candidates}
             )
-            for answer_id, sim_score in als_candidates:
-                if answer_id not in allowed_als_answer_ids:
+            for news_id, sim_score in als_candidates:
+                if news_id not in allowed_als_news_ids:
                     continue
                 add_feed_candidate(
                     candidates,
-                    answer_id=answer_id,
+                    news_id=news_id,
                     source="als_cf",
                     is_fallback=False,
                     raw_base_score=float(sim_score),
                 )
+
+        if as_of_ts is None:
+            for row in load_exploration_rows(
+                connection,
+                bucket_seed=f"user:{user_id}:request:{request_id}:catalog",
+                limit=max(page_size, 10),
+                category=category,
+            ):
+                add_feed_candidate(
+                    candidates,
+                    news_id=str(row["news_id"]),
+                    source="catalog_exploration",
+                    is_fallback=False,
+                    raw_base_score=float(row.get("hot_score") or 0.0),
+                )
+
+        for news_id in excluded_news_ids:
+            candidates.pop(news_id, None)
 
         non_fallback_count = sum(
             1 for candidate in candidates.values() if not candidate["is_fallback"]
@@ -1550,15 +1960,40 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection,
                 max(page_size * 5, 20),
                 as_of_ts=as_of_ts,
+                category=category,
             ):
                 if len(candidates) >= page_size:
                     break
+                if str(row["news_id"]) in excluded_news_ids:
+                    continue
                 add_feed_candidate(
                     candidates,
-                    answer_id=int(row["answer_id"]),
+                    news_id=str(row["news_id"]),
                     source="hot_or_fresh",
                     is_fallback=True,
                     raw_base_score=float(row.get("hot_score") or 0.0),
                 )
+
+        if len(candidates) < page_size:
+            for row in load_unseen_catalog_rows(
+                connection,
+                session_id=session_id,
+                bucket_seed=f"{session_id}:page:{request_id}",
+                limit=max(page_size * 5, 20),
+                as_of_ts=as_of_ts,
+                category=category,
+            ):
+                news_id = str(row["news_id"])
+                if news_id in excluded_news_ids:
+                    continue
+                add_feed_candidate(
+                    candidates,
+                    news_id=news_id,
+                    source="catalog_exploration",
+                    is_fallback=True,
+                    raw_base_score=float(row.get("hot_score") or 0.0),
+                )
+                if len(candidates) >= page_size:
+                    break
 
         return candidates

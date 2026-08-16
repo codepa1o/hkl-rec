@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import LeftSidebar from "./components/LeftSidebar";
 import RightRail from "./components/RightRail";
 import TopNav from "./components/TopNav";
@@ -8,23 +8,28 @@ import { PersonaProvider } from "./context/PersonaContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import FeedPage from "./pages/FeedPage";
 import ArticleDetailPage from "./pages/ArticleDetailPage";
+import ProfilePage from "./pages/ProfilePage";
 import SearchPage from "./pages/SearchPage";
 import AuthPage from "./pages/AuthPage";
 
 function ProductShell() {
+  const location = useLocation();
+  const isProfilePage = location.pathname === "/profile";
+
   return (
     <ProtectedRoute>
       <PersonaProvider>
         <TopNav />
-        <div className="zr-shell">
+        <div className={`zr-shell${isProfilePage ? " zr-shell--profile" : ""}`}>
           <LeftSidebar />
           <Routes>
             <Route path="/" element={<FeedPage />} />
             <Route path="/search" element={<SearchPage />} />
-            <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-          <RightRail />
+          {!isProfilePage && <RightRail />}
         </div>
       </PersonaProvider>
     </ProtectedRoute>

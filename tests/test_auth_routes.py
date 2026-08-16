@@ -186,12 +186,12 @@ def test_configured_auth_protects_business_routes(auth_client: TestClient) -> No
         (
             "POST",
             "/event/recommendation_click",
-            {"json": {"user_id": 999_999, "article_id": 1}},
+            {"json": {"user_id": 999_999, "news_id": "N1"}},
         ),
         (
             "POST",
             "/event/search_result_click",
-            {"json": {"user_id": 999_999, "article_id": 1, "query_key": "security"}},
+            {"json": {"user_id": 999_999, "news_id": "N1", "query_key": "security"}},
         ),
         (
             "POST",
@@ -201,7 +201,7 @@ def test_configured_auth_protects_business_routes(auth_client: TestClient) -> No
                     "user_id": 999_999,
                     "event_type": "upvote",
                     "surface": "feed",
-                    "article_id": 1,
+                    "news_id": "N1",
                 }
             },
         ),

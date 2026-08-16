@@ -18,12 +18,6 @@
     "unique_articles": 65238
   },
   "dataset": "MIND-small",
-  "demo_world": {
-    "articles": 174,
-    "difference_from_full_data": "The demo world is a deterministic serving slice and is not model evidence.",
-    "personas": 3,
-    "requests": 15
-  },
   "exposure": {
     "article_count_with_train_exposure": 20288,
     "ctr_quantiles": {
@@ -37,7 +31,7 @@
     "top_10_percent_exposure_share": 0.905368,
     "top_1_percent_exposure_share": 0.325159
   },
-  "normalized_fingerprint": "643c53b0ce5fddf5e08a8d6f8e491ddec607a3f56c335c44d872e6e74cbd4b52",
+  "normalized_fingerprint": "a0144602f29ee9e07f91d4a67eca0cda5e2ee016f910a62a4a75aeae072f2e9d",
   "overlap_and_cold_start": {
     "dev_cold_article_ratio": 0.46247,
     "dev_known_user_ratio": 0.11886,

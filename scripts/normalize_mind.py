@@ -321,9 +321,7 @@ def normalize_dataset(raw_root: Path, output_root: Path) -> dict[str, Any]:
     topic_ids = build_topic_maps(articles.values())
     article_ids = {
         article.news_id: news_internal_id(article.news_id)
-        for article in sorted(
-            articles.values(), key=lambda value: news_internal_id(value.news_id)
-        )
+        for article in sorted(articles.values(), key=lambda value: news_internal_id(value.news_id))
     }
     article_count = _write_rows(
         output_root / "articles.parquet",
