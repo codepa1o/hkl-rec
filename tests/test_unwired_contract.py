@@ -80,3 +80,16 @@ def test_mmr_feed_arm_is_accepted_by_the_api_contract(unwired_client):
 
     assert response.status_code == 503, response.text
     assert response.json()["error_code"] == "repository_not_ready"
+
+
+def test_profile_v2_feed_arm_is_accepted_by_the_api_contract(unwired_client):
+    response = unwired_client.get(
+        "/feed",
+        params={
+            "user_id": 7248,
+            "experiment_arm": "profile_v2",
+        },
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error_code"] == "repository_not_ready"

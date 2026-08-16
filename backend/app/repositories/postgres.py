@@ -12,6 +12,7 @@ from backend.app.observability import (
     PROFILE_V2_LATE_EVENTS,
     PROFILE_V2_PROJECTION_DURATION,
     PROFILE_V2_PROJECTION_UPDATES,
+    PROFILE_V2_READ_FALLBACK,
     PROFILE_V2_RESET,
     SEARCH_RESOLUTIONS,
     SEARCH_RETRIEVAL_DURATION,
@@ -60,6 +61,7 @@ from backend.app.repositories.profile_dao import (
 from backend.app.repositories.profile_v2_dao import (
     apply_profile_v2_event_with_outcome,
     load_profile_v2,
+    load_profile_v2_topic_scores,
     profile_event_is_before_reset,
     profile_signal_config,
     reset_profile_projections,
@@ -129,6 +131,33 @@ from backend.app.search_retrieval import (
 )
 
 
+def _profile_v2_recall_scores(topic_scores: dict[int, float]) -> dict[int, float]:
+    return dict(
+        sorted(
+            (
+                (int(topic_id), float(score))
+                for topic_id, score in topic_scores.items()
+                if float(score) > 0.0
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )[:10]
+    )
+
+
+def _apply_profile_v2_boost(
+    *,
+    experiment_arm: FeedExperimentArm,
+    final_score: float,
+    topic_ids: set[int],
+    topic_scores: dict[int, float],
+    boost: float,
+) -> tuple[float, float | None]:
+    if experiment_arm != "profile_v2":
+        return final_score, None
+    profile_v2_score = round(sum(topic_scores.get(topic_id, 0.0) for topic_id in topic_ids), 6)
+    return round(final_score + boost * profile_v2_score, 6), profile_v2_score
+
+
 class PostgresRuntimeRepository(RuntimeRepository):
     backend_name = "postgresql"
 
@@ -183,10 +212,22 @@ class PostgresRuntimeRepository(RuntimeRepository):
             profile_row = fetch_profile_row(connection, user_id)
             profile = profile_from_row(profile_row)
             topic_weight_map = {item.topic_id: item.weight for item in profile.topic_weights}
+            profile_now_ts = as_of_ts if as_of_ts is not None else int(time.time())
+            profile_v2_topic_scores = (
+                self._load_profile_v2_scores_with_fallback(
+                    connection,
+                    user_id=user_id,
+                    now_ts=profile_now_ts,
+                )
+                if experiment_arm == "profile_v2"
+                else {}
+            )
+            profile_v2_recall_scores = _profile_v2_recall_scores(profile_v2_topic_scores)
             signal_config = search_signal_config(experiment_arm)
             use_search = signal_config is not None
             use_lgb = experiment_arm in {
                 "default",
+                "profile_v2",
                 "lgb_plus_als",
                 "lgb_plus_als_plus_search",
                 "lgb_plus_als_plus_search_mmr",
@@ -195,10 +236,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 "lgb_plus_als_plus_search_gated_30m_4h",
                 "lgb_plus_als_plus_search_gated_2h_12h",
             }
-            require_lgb = use_lgb and experiment_arm != "default"
+            require_lgb = use_lgb and experiment_arm not in {"default", "profile_v2"}
             use_als = (
                 self._settings.als_recall_enabled
-                if experiment_arm == "default"
+                if experiment_arm in {"default", "profile_v2"}
                 else experiment_arm != "manual"
             )
             query_topic_scores = (
@@ -241,6 +282,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection=connection,
                 topic_weight_map=topic_weight_map,
                 query_topic_scores=query_recall_topic_scores,
+                profile_v2_topic_scores=profile_v2_recall_scores,
                 page_size=page_size,
                 user_id=user_id,
                 use_als=use_als,
@@ -379,6 +421,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 else:
                     # 回退方案：模型尚未训练时使用手工公式
                     final_score = round(base_score + topic_match_score + query_recall_boost, 6)
+                final_score, profile_v2_score = _apply_profile_v2_boost(
+                    experiment_arm=experiment_arm,
+                    final_score=final_score,
+                    topic_ids=topic_ids,
+                    topic_scores=profile_v2_topic_scores,
+                    boost=self._settings.profile_v2_boost,
+                )
 
                 item = FeedItem(
                     article_id=answer_id,
@@ -397,6 +446,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         topic_match_score=topic_match_score,
                         query_recall_boost=query_recall_boost,
                         final_score=final_score,
+                        profile_v2_score=profile_v2_score,
                     ),
                     recall_sources=sources,
                     is_fallback=is_fallback,
@@ -1634,11 +1684,40 @@ class PostgresRuntimeRepository(RuntimeRepository):
         finally:
             connection.close()
 
+    def _load_profile_v2_scores_with_fallback(
+        self,
+        connection: Any,
+        *,
+        user_id: int,
+        now_ts: int,
+    ) -> dict[int, float]:
+        if not self._settings.profile_v2_enabled:
+            return {}
+        with connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT profile_v2_read")
+        try:
+            scores = load_profile_v2_topic_scores(
+                connection,
+                user_id=user_id,
+                now_ts=now_ts,
+                config=profile_signal_config(self._settings),
+            )
+        except Exception:
+            with connection.cursor() as cursor:
+                cursor.execute("ROLLBACK TO SAVEPOINT profile_v2_read")
+                cursor.execute("RELEASE SAVEPOINT profile_v2_read")
+            PROFILE_V2_READ_FALLBACK.inc()
+            return {}
+        with connection.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT profile_v2_read")
+        return scores
+
     def _load_feed_candidates(
         self,
         connection: Any,
         topic_weight_map: dict[int, float],
         query_topic_scores: dict[int, float],
+        profile_v2_topic_scores: dict[int, float],
         page_size: int,
         user_id: int,
         use_als: bool,
@@ -1647,6 +1726,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         candidates: dict[int, dict[str, Any]] = {}
         profile_topic_ids = list(topic_weight_map)[:10]
         query_topic_ids = list(query_topic_scores)[:20]
+        profile_v2_topic_ids = list(profile_v2_topic_scores)[:10]
         candidate_limit = max(page_size * 20, 50)
 
         for row in load_answer_ids_for_topics(
@@ -1673,6 +1753,20 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 candidates,
                 answer_id=int(row["answer_id"]),
                 source="recent_query_topic",
+                is_fallback=False,
+                raw_base_score=float(row.get("hot_score") or 0.0),
+            )
+
+        for row in load_answer_ids_for_topics(
+            connection,
+            profile_v2_topic_ids,
+            candidate_limit,
+            as_of_ts=as_of_ts,
+        ):
+            add_feed_candidate(
+                candidates,
+                answer_id=int(row["answer_id"]),
+                source="profile_v2_topic",
                 is_fallback=False,
                 raw_base_score=float(row.get("hot_score") or 0.0),
             )

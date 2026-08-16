@@ -122,6 +122,8 @@ def selected_reason(is_fallback: bool, sources: set[str]) -> str:
         return "Filled by hot_or_fresh because primary recall was short."
     if "recent_query_topic" in sources:
         return "Selected because recent query categories boosted this article."
+    if "profile_v2_topic" in sources:
+        return "Selected because its categories match the experimental profile."
     if "profile_topic" in sources:
         return "Selected because its categories match the user profile."
     return "Selected by base recall score."

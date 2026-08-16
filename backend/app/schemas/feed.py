@@ -9,6 +9,7 @@ from .profile import ProfileTopicWeight
 
 FeedExperimentArm = Literal[
     "default",
+    "profile_v2",
     "manual",
     "manual_plus_als",
     "lgb_plus_als",
@@ -28,6 +29,7 @@ class FeedItemScores(ApiModel):
     topic_match_score: float
     query_recall_boost: float
     final_score: float
+    profile_v2_score: float | None = None
     sponsored_score: float | None = None
 
 

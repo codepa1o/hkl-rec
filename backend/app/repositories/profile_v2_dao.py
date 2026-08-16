@@ -9,6 +9,7 @@ from backend.app.errors import ProfileNotInitializedError, ProfileSeedUnavailabl
 from backend.app.profiles.signals import (
     ProfileSignalConfig,
     TopicProfileState,
+    combined_topic_score,
     confidence_from_evidence,
     decayed_topic_state,
     profile_status,
@@ -336,6 +337,27 @@ def load_topic_profile_rows(connection: Any, *, user_id: int) -> list[dict[str, 
             (user_id,),
         )
         return list(cursor.fetchall())
+
+
+def load_profile_v2_topic_scores(
+    connection: Any,
+    *,
+    user_id: int,
+    now_ts: int,
+    config: ProfileSignalConfig,
+) -> dict[int, float]:
+    scores: dict[int, float] = {}
+    for row in load_topic_profile_rows(connection, user_id=user_id):
+        state = decayed_topic_state(
+            topic_state_from_row(row),
+            now_ts=now_ts,
+            short_half_life_seconds=config.short_half_life_seconds,
+            long_half_life_seconds=config.long_half_life_seconds,
+        )
+        score = combined_topic_score(state)
+        if abs(score) > 0.01:
+            scores[int(row["topic_id"])] = score
+    return scores
 
 
 def _recent_news(value: Any) -> list[ProfileRecentClick]:
