@@ -265,9 +265,65 @@ user_profile = Table(
     Column("user_vector_json", JSONB),
     Column("notes", String(255)),
     Column("last_event_ts", BigInteger),
+    Column("profile_v2_evidence_count", Integer, nullable=False, server_default=text("0")),
+    Column("profile_v2_last_event_ts", BigInteger),
+    Column("profile_reset_before_ts", BigInteger),
+    Column("profile_v2_updated_at", DateTime(timezone=True)),
     Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     Index("idx_user_profile_seed", "cold_start_seed_key"),
     comment="Single-table user profile storage.",
+)
+
+user_topic_profile = Table(
+    "user_topic_profile",
+    metadata,
+    Column(
+        "user_id",
+        BigInteger,
+        ForeignKey("app_user.user_id", name="fk_user_topic_profile_user"),
+        nullable=False,
+    ),
+    Column(
+        "topic_id",
+        BigInteger,
+        ForeignKey("topic.topic_id", name="fk_user_topic_profile_topic"),
+        nullable=False,
+    ),
+    Column("short_positive_score", DOUBLE_PRECISION, nullable=False, server_default=text("0")),
+    Column("short_negative_score", DOUBLE_PRECISION, nullable=False, server_default=text("0")),
+    Column("long_positive_score", DOUBLE_PRECISION, nullable=False, server_default=text("0")),
+    Column("long_negative_score", DOUBLE_PRECISION, nullable=False, server_default=text("0")),
+    Column("positive_evidence_count", Integer, nullable=False, server_default=text("0")),
+    Column("negative_evidence_count", Integer, nullable=False, server_default=text("0")),
+    Column(
+        "evidence_counts_json",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    ),
+    Column("last_signal_type", String(32)),
+    Column("last_event_ts", BigInteger, nullable=False),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    CheckConstraint(
+        "short_positive_score >= 0 AND short_negative_score >= 0",
+        name="short_scores",
+    ),
+    CheckConstraint(
+        "long_positive_score >= 0 AND long_negative_score >= 0",
+        name="long_scores",
+    ),
+    CheckConstraint(
+        "positive_evidence_count >= 0 AND negative_evidence_count >= 0",
+        name="evidence_counts",
+    ),
+    PrimaryKeyConstraint("user_id", "topic_id"),
+    Index("idx_user_topic_profile_user", "user_id"),
+    comment="Short- and long-term explainable topic projection for profile V2.",
 )
 
 sponsored_campaign = Table(

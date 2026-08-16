@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "query_topic_map",
     "system_profile_seed",
     "user_profile",
+    "user_topic_profile",
     "sponsored_campaign",
     "sponsored_campaign_topic",
     "sponsored_creative",
@@ -115,8 +116,46 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 2
+    assert len(versions) == 3
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:
     assert inspect(metadata.tables["mind_news"]).primary_key.name == "pk_mind_news"
+
+
+def test_profile_v2_metadata_has_normalized_topic_projection() -> None:
+    projection = metadata.tables["user_topic_profile"]
+
+    assert [column.name for column in projection.primary_key.columns] == ["user_id", "topic_id"]
+    assert {
+        "short_positive_score",
+        "short_negative_score",
+        "long_positive_score",
+        "long_negative_score",
+        "positive_evidence_count",
+        "negative_evidence_count",
+        "evidence_counts_json",
+        "last_signal_type",
+        "last_event_ts",
+        "updated_at",
+    } <= set(projection.c.keys())
+    assert isinstance(projection.c.evidence_counts_json.type, JSONB)
+    assert {
+        element.target_fullname
+        for constraint in projection.foreign_key_constraints
+        for element in constraint.elements
+    } == {"app_user.user_id", "topic.topic_id"}
+    assert "idx_user_topic_profile_user" in {index.name for index in projection.indexes}
+
+
+def test_profile_v2_user_state_columns_exist() -> None:
+    columns = metadata.tables["user_profile"].c
+
+    assert {
+        "profile_v2_evidence_count",
+        "profile_v2_last_event_ts",
+        "profile_reset_before_ts",
+        "profile_v2_updated_at",
+    } <= set(columns.keys())
+    assert columns.profile_v2_evidence_count.nullable is False
+    assert str(columns.profile_v2_evidence_count.server_default.arg) == "0"
