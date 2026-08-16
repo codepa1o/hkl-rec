@@ -12,7 +12,7 @@ from backend.app.schemas.event import (
 from backend.app.schemas.event_track import EventTrackRequest, EventTrackResponse
 from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
 from backend.app.schemas.persona import PersonaListResponse
-from backend.app.schemas.profile import DebugProfileResponse
+from backend.app.schemas.profile import DebugProfileResponse, ProfileResponse
 from backend.app.schemas.search import SearchRequest, SearchResponse
 from backend.app.schemas.suggestion import SuggestionListResponse
 
@@ -49,6 +49,12 @@ class UnwiredRuntimeRepository(RuntimeRepository):
 
     def get_debug_profile(self, user_id: int) -> DebugProfileResponse:
         raise RepositoryNotReadyError("GET /debug/profile")
+
+    def get_profile(self, user_id: int) -> ProfileResponse:
+        raise RepositoryNotReadyError("GET /profile")
+
+    def reset_profile(self, user_id: int) -> ProfileResponse:
+        raise RepositoryNotReadyError("POST /profile/reset")
 
     def list_personas(self, limit: int) -> PersonaListResponse:
         raise RepositoryNotReadyError("GET /personas")

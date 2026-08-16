@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from backend.app.config import Settings
+from backend.app.errors import ProfileNotInitializedError, ProfileSeedUnavailableError
 from backend.app.profiles.signals import (
     ProfileSignalConfig,
     TopicProfileState,
@@ -70,7 +71,7 @@ def fetch_profile_v2_user_state(
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     if row is None:
-        raise LookupError(f"user_profile row not found for user_id={user_id}")
+        raise ProfileNotInitializedError(user_id)
     return row
 
 
@@ -456,7 +457,7 @@ def load_profile_seed(connection: Any, *, seed_key: str) -> dict[str, Any]:
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     if row is None:
-        raise RuntimeError(f"system_profile_seed[{seed_key!r}] is missing")
+        raise ProfileSeedUnavailableError(seed_key)
     return row
 
 

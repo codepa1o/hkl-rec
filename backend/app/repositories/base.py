@@ -11,7 +11,7 @@ from backend.app.schemas.event import (
 from backend.app.schemas.event_track import EventTrackRequest, EventTrackResponse
 from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
 from backend.app.schemas.persona import PersonaListResponse
-from backend.app.schemas.profile import DebugProfileResponse
+from backend.app.schemas.profile import DebugProfileResponse, ProfileResponse
 from backend.app.schemas.search import SearchRequest, SearchResponse
 from backend.app.schemas.suggestion import SuggestionListResponse
 
@@ -41,6 +41,10 @@ class RuntimeRepository(Protocol):
     def record_search_result_click(self, payload: SearchResultClickRequest) -> EventAckResponse: ...
 
     def get_debug_profile(self, user_id: int) -> DebugProfileResponse: ...
+
+    def get_profile(self, user_id: int) -> ProfileResponse: ...
+
+    def reset_profile(self, user_id: int) -> ProfileResponse: ...
 
     def list_personas(self, limit: int) -> PersonaListResponse: ...
 

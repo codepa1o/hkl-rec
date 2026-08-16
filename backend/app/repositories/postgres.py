@@ -12,6 +12,7 @@ from backend.app.observability import (
     PROFILE_V2_LATE_EVENTS,
     PROFILE_V2_PROJECTION_DURATION,
     PROFILE_V2_PROJECTION_UPDATES,
+    PROFILE_V2_RESET,
     SEARCH_RESOLUTIONS,
     SEARCH_RETRIEVAL_DURATION,
 )
@@ -58,8 +59,10 @@ from backend.app.repositories.profile_dao import (
 )
 from backend.app.repositories.profile_v2_dao import (
     apply_profile_v2_event_with_outcome,
+    load_profile_v2,
     profile_event_is_before_reset,
     profile_signal_config,
+    reset_profile_projections,
 )
 from backend.app.repositories.query_resolver import resolve_search_query
 from backend.app.repositories.ranker import (
@@ -109,7 +112,7 @@ from backend.app.schemas.feed import (
     SponsoredFeedMetadata,
 )
 from backend.app.schemas.persona import PersonaCard, PersonaListResponse
-from backend.app.schemas.profile import DebugProfileResponse
+from backend.app.schemas.profile import DebugProfileResponse, ProfileResponse
 from backend.app.schemas.search import (
     SearchArtifactDebug,
     SearchDebugPayload,
@@ -1002,6 +1005,40 @@ class PostgresRuntimeRepository(RuntimeRepository):
         connection = self._connection_pool.connect()
         try:
             return profile_from_row(fetch_profile_row(connection, user_id))
+        finally:
+            connection.close()
+
+    def get_profile(self, user_id: int) -> ProfileResponse:
+        connection = self._connection_pool.connect()
+        try:
+            return load_profile_v2(
+                connection,
+                user_id=user_id,
+                now_ts=int(time.time()),
+                config=profile_signal_config(self._settings),
+            )
+        finally:
+            connection.close()
+
+    def reset_profile(self, user_id: int) -> ProfileResponse:
+        connection = self._connection_pool.connect()
+        try:
+            connection.begin()
+            reset_ts = int(time.time())
+            reset_profile_projections(connection, user_id=user_id, reset_ts=reset_ts)
+            profile = load_profile_v2(
+                connection,
+                user_id=user_id,
+                now_ts=reset_ts,
+                config=profile_signal_config(self._settings),
+            )
+            connection.commit()
+            PROFILE_V2_RESET.labels(status="success").inc()
+            return profile
+        except Exception:
+            connection.rollback()
+            PROFILE_V2_RESET.labels(status="failure").inc()
+            raise
         finally:
             connection.close()
 
