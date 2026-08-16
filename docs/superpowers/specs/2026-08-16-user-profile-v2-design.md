@@ -54,6 +54,7 @@ V2 通过独立的 `profile_v2` 推荐实验分组参与召回和重排。现有
 - `profile_v2_evidence_count INTEGER NOT NULL DEFAULT 0`
 - `profile_v2_last_event_ts BIGINT NULL`
 - `profile_reset_before_ts BIGINT NULL`
+- `profile_reset_before_event_id BIGINT NULL`：记录重置事务可见的最大事实事件 ID，供重建精确排除同秒内的重置前事件。
 - `profile_v2_updated_at TIMESTAMPTZ NULL`
 
 这些字段只保存用户级投影状态，不改变现有 V1 字段含义。
@@ -114,7 +115,7 @@ API 和推荐读取时会把存储分数衰减到请求时间。有效绝对净�
 
 - 继续使用现有 `claim_event_id` 保证重复事件不重复更新。
 - Kafka 按用户分区仍是正常顺序保证。
-- `event_ts <= profile_reset_before_ts` 的晚到事件保留审计和训练用途，但不改变 V1/V2 当前画像。
+- `event_ts < profile_reset_before_ts` 的晚到事件保留审计和训练用途，但不改变 V1/V2 当前画像。重置和在线投影都锁定同一用户行，因此同秒事件以锁的先后顺序确定因果边界；离线重建再用 `profile_reset_before_event_id` 排除同秒内的重置前事实。
 - 比某个主题 `last_event_ts` 更旧的乱序事件不改变该主题投影，并增加晚到事件指标。
 - 同一事件的用户级证据数只有在至少一个主题成功投影时才增加一次。
 - 画像查询不在读取时写回衰减结果，避免 GET 引起更新；下一个有效事件到达时再物化衰减后的新值。
@@ -175,7 +176,7 @@ last_event_ts
 3. 用种子恢复 V1 `topic_weights_json`、近期点击、近期查询和 `behavior_score`。
 4. 删除该用户全部 `user_topic_profile` 行。
 5. 将 V2 证据数归零，并清空 V2 最近事件状态。
-6. 把服务器当前时间写入 `profile_reset_before_ts`。
+6. 把服务器当前时间写入 `profile_reset_before_ts`，并把事务当前可见的最大 `user_event.event_id` 写入 `profile_reset_before_event_id`。
 7. 提交后返回新的冷启动 V2 画像。
 
 重置不删除 `user_event`、`event_idempotency`、训练消息、Feed 请求或赞助归因。它是“停止使用既有行为形成当前画像”，不是账户数据删除接口。
@@ -226,7 +227,7 @@ final_score = existing_final_score + profile_v2_boost * profile_v2_score
 - 按用户、`event_ts`、稳定事件 ID 顺序重放 `user_event`。
 - 在事务中删除目标 V2 行并重新投影，失败时回滚该用户。
 - 复用在线消费者相同的信号和衰减纯函数，不维护第二套公式。
-- 尊重 `profile_reset_before_ts`，不重放重置截止时间之前的事件。
+- 在用户行锁内读取重置边界；按 `profile_reset_before_ts` 与 `profile_reset_before_event_id` 联合过滤，不重放重置前事件。
 
 数据库迁移不从 V1 JSONB 猜测证据，也不自动长事务回放历史。没有可重放事件的用户从冷 V2 开始，V1 推荐不受影响。
 

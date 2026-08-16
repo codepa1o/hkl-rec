@@ -7,6 +7,7 @@ import type {
   EventTrackResponse,
   FeedResponse,
   PersonaListResponse,
+  ProfileResponse,
   LoginInput,
   RegisterInput,
   SearchResponse,
@@ -158,9 +159,42 @@ export function getDebugProfile(userId: number): Promise<DebugProfileResponse> {
   return request<DebugProfileResponse>("/debug/profile", { params: { user_id: userId } });
 }
 
+export function getProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile");
+}
+
+export function resetProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile/reset", { method: "POST" });
+}
+
 export function trackEvent(payload: EventTrackRequest): Promise<EventTrackResponse> {
   return request<EventTrackResponse>("/event/track", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function sendTrackedEventKeepalive(payload: EventTrackRequest): void {
+  const url = new URL("/event/track", BASE_URL);
+  const beaconUrl = new URL("/event/track/beacon", BASE_URL);
+  const serialized = JSON.stringify(payload);
+  let acceptedByBeacon = false;
+  try {
+    acceptedByBeacon = Boolean(
+      globalThis.navigator?.sendBeacon?.(
+        beaconUrl.toString(),
+        serialized,
+      ),
+    );
+  } catch {
+    acceptedByBeacon = false;
+  }
+  if (acceptedByBeacon) return;
+  void fetch(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: serialized,
+    keepalive: true,
+  }).catch(() => undefined);
 }

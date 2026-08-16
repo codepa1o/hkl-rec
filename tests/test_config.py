@@ -88,3 +88,37 @@ def test_auth_secret_can_be_loaded_from_file(monkeypatch, tmp_path: Path):
         config.get_settings.cache_clear()
 
     assert settings.auth_secret_key == secret
+
+
+def test_profile_v2_settings_have_safe_mvp_defaults() -> None:
+    from backend.app.config import Settings
+
+    settings = Settings()
+
+    assert settings.profile_v2_enabled is False
+    assert settings.profile_v2_short_half_life_seconds == 21_600
+    assert settings.profile_v2_long_half_life_seconds == 2_592_000
+    assert settings.profile_v2_long_term_factor == 0.25
+    assert settings.profile_v2_boost == 0.10
+
+
+def test_profile_v2_settings_can_be_overridden_from_the_environment(monkeypatch) -> None:
+    from backend.app.config import get_settings
+
+    monkeypatch.setenv("NEWSREC_PROFILE_V2_ENABLED", "true")
+    monkeypatch.setenv("NEWSREC_PROFILE_V2_SHORT_HALF_LIFE_SECONDS", "3600")
+    monkeypatch.setenv("NEWSREC_PROFILE_V2_LONG_HALF_LIFE_SECONDS", "86400")
+    monkeypatch.setenv("NEWSREC_PROFILE_V2_LONG_TERM_FACTOR", "0.4")
+    monkeypatch.setenv("NEWSREC_PROFILE_V2_BOOST", "0.2")
+    get_settings.cache_clear()
+
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.profile_v2_enabled is True
+    assert settings.profile_v2_short_half_life_seconds == 3_600
+    assert settings.profile_v2_long_half_life_seconds == 86_400
+    assert settings.profile_v2_long_term_factor == 0.4
+    assert settings.profile_v2_boost == 0.2

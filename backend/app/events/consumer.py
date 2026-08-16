@@ -21,7 +21,11 @@ from backend.app.observability import (
     CONSUMER_EVENTS,
     CONSUMER_LAG,
     CONSUMER_RETRIES,
+    PROFILE_V2_LATE_EVENTS,
+    PROFILE_V2_PROJECTION_DURATION,
+    PROFILE_V2_PROJECTION_UPDATES,
 )
+from backend.app.profiles.signals import topic_strengths_for_event
 from backend.app.repositories._utils import json_text
 from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
 from backend.app.repositories.content_dao import load_news_topic_ids, load_query_topics
@@ -35,6 +39,11 @@ from backend.app.repositories.event_dao import (
     record_search_query,
 )
 from backend.app.repositories.profile_dao import fetch_profile_row
+from backend.app.repositories.profile_v2_dao import (
+    apply_profile_v2_event_with_outcome,
+    profile_event_is_before_reset,
+    profile_signal_config,
+)
 from backend.app.repositories.sponsored_dao import (
     confirm_sponsored_impression,
     load_sponsored_attribution,
@@ -68,16 +77,43 @@ class ProfileEventApplier:
             connection.begin()
             claimed = claim_event_id(connection, event)
             if claimed:
+                project_profile = not profile_event_is_before_reset(
+                    connection,
+                    user_id=event.user_id,
+                    event_ts=event.event_ts,
+                )
+                if not project_profile and self._settings.profile_v2_enabled:
+                    PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
                 if event.event_type == "search_query":
-                    self._apply_search_query(connection, event)
+                    self._apply_search_query(
+                        connection,
+                        event,
+                        project_profile=project_profile,
+                    )
                 elif event.event_type == "recommendation_click":
-                    self._apply_recommendation_click(connection, event)
+                    self._apply_recommendation_click(
+                        connection,
+                        event,
+                        project_profile=project_profile,
+                    )
                 elif event.event_type == "search_result_click":
-                    self._apply_search_result_click(connection, event)
+                    self._apply_search_result_click(
+                        connection,
+                        event,
+                        project_profile=project_profile,
+                    )
                 elif event.event_type == "upvote":
-                    self._apply_upvote(connection, event)
+                    self._apply_upvote(
+                        connection,
+                        event,
+                        project_profile=project_profile,
+                    )
                 elif event.event_type in LOG_ONLY_EVENTS:
-                    self._apply_log_only(connection, event)
+                    self._apply_log_only(
+                        connection,
+                        event,
+                        project_profile=project_profile,
+                    )
                 else:
                     raise ValueError(f"unsupported event_type: {event.event_type}")
 
@@ -91,7 +127,7 @@ class ProfileEventApplier:
                     payload_json=training.model_dump_json(exclude_none=True),
                 )
             connection.commit()
-            return claimed
+            return bool(claimed)
         except Exception:
             connection.rollback()
             raise
@@ -117,10 +153,15 @@ class ProfileEventApplier:
         finally:
             connection.close()
 
-    def _apply_search_query(self, connection: Any, event: UserEventMessage) -> None:
+    def _apply_search_query(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        *,
+        project_profile: bool = True,
+    ) -> None:
         if not event.query_key:
             raise ValueError("search_query event requires query_key")
-        profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
         record_search_query(
             connection=connection,
             user_id=event.user_id,
@@ -128,6 +169,9 @@ class ProfileEventApplier:
             event_ts=event.event_ts,
             external_event_id=event.event_id,
         )
+        if not project_profile:
+            return
+        profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
         append_recent_query(
             connection=connection,
             profile_row=profile_row,
@@ -136,7 +180,13 @@ class ProfileEventApplier:
             behavior_delta=self._settings.search_query_behavior_delta,
         )
 
-    def _apply_recommendation_click(self, connection: Any, event: UserEventMessage) -> None:
+    def _apply_recommendation_click(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        *,
+        project_profile: bool = True,
+    ) -> None:
         if event.news_id is None:
             raise ValueError("recommendation_click event requires news_id")
         self._apply_news_click(
@@ -146,9 +196,16 @@ class ProfileEventApplier:
             surface=event.surface or "feed",
             behavior_delta=self._settings.recommendation_click_behavior_delta,
             topic_delta=self._settings.recommendation_click_topic_delta,
+            project_profile=project_profile,
         )
 
-    def _apply_upvote(self, connection: Any, event: UserEventMessage) -> None:
+    def _apply_upvote(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        *,
+        project_profile: bool = True,
+    ) -> None:
         if event.news_id is None:
             raise ValueError("upvote event requires news_id")
         self._apply_news_click(
@@ -158,12 +215,23 @@ class ProfileEventApplier:
             surface=event.surface or "home_feed",
             behavior_delta=self._settings.recommendation_click_behavior_delta,
             topic_delta=self._settings.recommendation_click_topic_delta,
+            project_profile=project_profile,
         )
 
-    def _apply_search_result_click(self, connection: Any, event: UserEventMessage) -> None:
+    def _apply_search_result_click(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        *,
+        project_profile: bool = True,
+    ) -> None:
         if event.news_id is None or not event.query_key:
             raise ValueError("search_result_click event requires news_id and query_key")
-        profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
+        profile_row = (
+            fetch_profile_row(connection, event.user_id, for_update=True)
+            if project_profile
+            else None
+        )
         sponsored_attribution = (
             load_sponsored_attribution(
                 connection,
@@ -203,27 +271,39 @@ class ProfileEventApplier:
             creative_id=event.creative_id,
             dwell_ms=event.dwell_ms,
         )
-        confirm_recent_query(
-            connection,
-            profile_row,
-            query_key=event.query_key,
-            event_ts=event.event_ts,
-        )
+        if profile_row is not None:
+            confirm_recent_query(
+                connection,
+                profile_row,
+                query_key=event.query_key,
+                event_ts=event.event_ts,
+            )
         if sponsored_attribution is not None:
             record_sponsored_click(
                 connection,
                 attribution=sponsored_attribution,
                 event_ts=event.event_ts,
             )
-        apply_click_profile_update(
-            connection=connection,
-            profile_row=profile_row,
-            news_id=event.news_id,
-            event_ts=event.event_ts,
-            topic_deltas=topic_deltas,
-            behavior_delta=self._settings.search_result_click_behavior_delta,
-            decay_factor=self._settings.profile_topic_decay,
-        )
+        if profile_row is not None:
+            apply_click_profile_update(
+                connection=connection,
+                profile_row=profile_row,
+                news_id=event.news_id,
+                event_ts=event.event_ts,
+                topic_deltas=topic_deltas,
+                behavior_delta=self._settings.search_result_click_behavior_delta,
+                decay_factor=self._settings.profile_topic_decay,
+            )
+            self._project_profile_v2(
+                connection,
+                event,
+                topic_strengths_for_event(
+                    event.event_type,
+                    article_topic_ids=news_topic_set,
+                    query_topic_ids=query_topic_ids,
+                    dwell_ms=event.dwell_ms,
+                ),
+            )
 
     def _apply_news_click(
         self,
@@ -234,10 +314,15 @@ class ProfileEventApplier:
         surface: str,
         behavior_delta: float,
         topic_delta: float,
+        project_profile: bool,
     ) -> None:
         if event.news_id is None:
             raise ValueError(f"{event_type} event requires news_id")
-        profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
+        profile_row = (
+            fetch_profile_row(connection, event.user_id, for_update=True)
+            if project_profile
+            else None
+        )
         sponsored_attribution = (
             load_sponsored_attribution(
                 connection,
@@ -273,17 +358,33 @@ class ProfileEventApplier:
                 attribution=sponsored_attribution,
                 event_ts=event.event_ts,
             )
-        apply_click_profile_update(
-            connection=connection,
-            profile_row=profile_row,
-            news_id=event.news_id,
-            event_ts=event.event_ts,
-            topic_deltas=topic_deltas,
-            behavior_delta=behavior_delta,
-            decay_factor=self._settings.profile_topic_decay,
-        )
+        if profile_row is not None:
+            apply_click_profile_update(
+                connection=connection,
+                profile_row=profile_row,
+                news_id=event.news_id,
+                event_ts=event.event_ts,
+                topic_deltas=topic_deltas,
+                behavior_delta=behavior_delta,
+                decay_factor=self._settings.profile_topic_decay,
+            )
+            self._project_profile_v2(
+                connection,
+                event,
+                topic_strengths_for_event(
+                    event.event_type,
+                    article_topic_ids=news_topic_ids,
+                    dwell_ms=event.dwell_ms,
+                ),
+            )
 
-    def _apply_log_only(self, connection: Any, event: UserEventMessage) -> None:
+    def _apply_log_only(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        *,
+        project_profile: bool = True,
+    ) -> None:
         sponsored_attribution = (
             load_sponsored_attribution(
                 connection,
@@ -317,6 +418,50 @@ class ProfileEventApplier:
                 attribution=sponsored_attribution,
                 event_ts=event.event_ts,
             )
+        if (
+            inserted
+            and project_profile
+            and event.news_id is not None
+            and event.event_type in {"dwell", "downvote"}
+        ):
+            news_topic_ids = load_news_topic_ids(connection, event.news_id)
+            self._project_profile_v2(
+                connection,
+                event,
+                topic_strengths_for_event(
+                    event.event_type,
+                    article_topic_ids=news_topic_ids,
+                    dwell_ms=event.dwell_ms,
+                ),
+            )
+
+    def _project_profile_v2(
+        self,
+        connection: Any,
+        event: UserEventMessage,
+        topic_strengths: dict[int, float],
+    ) -> bool:
+        if not self._settings.profile_v2_enabled:
+            return False
+        started_at = time.perf_counter()
+        try:
+            outcome = apply_profile_v2_event_with_outcome(
+                connection,
+                user_id=event.user_id,
+                event_type=event.event_type,
+                event_ts=event.event_ts,
+                topic_strengths=topic_strengths,
+                config=profile_signal_config(self._settings),
+            )
+        finally:
+            PROFILE_V2_PROJECTION_DURATION.observe(time.perf_counter() - started_at)
+        if outcome.updated:
+            PROFILE_V2_PROJECTION_UPDATES.labels(event_type=event.event_type).inc()
+        if outcome.reason in {"pre_reset", "out_of_order"}:
+            PROFILE_V2_LATE_EVENTS.labels(reason=outcome.reason).inc()
+        elif outcome.late_topic_count:
+            PROFILE_V2_LATE_EVENTS.labels(reason="out_of_order").inc()
+        return outcome.updated
 
     def _training_message(self, event: UserEventMessage) -> TrainingInteractionMessage | None:
         label_by_type = {

@@ -52,6 +52,7 @@ describe("ProfileDebugPanel", () => {
     );
 
     await waitFor(() => expect(screen.getByText("你的兴趣")).toBeInTheDocument());
+    expect(getDebugProfile).toHaveBeenCalledWith(7248);
     expect(screen.getByText("兴趣活跃度")).toBeInTheDocument();
     expect(screen.getByText("最近阅读")).toBeInTheDocument();
     expect(screen.queryByText("冷启动种子")).not.toBeInTheDocument();

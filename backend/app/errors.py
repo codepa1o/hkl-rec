@@ -38,3 +38,19 @@ class UnknownCategoryError(ValueError):
     def __init__(self, category: str) -> None:
         super().__init__(f"未知新闻分类：{category}")
         self.category = category
+
+
+class ProfileNotInitializedError(LookupError):
+    """Raised when an authenticated account has no profile projection row."""
+
+    def __init__(self, user_id: int) -> None:
+        super().__init__(f"Profile is not initialized for user_id={user_id}.")
+        self.user_id = user_id
+
+
+class ProfileSeedUnavailableError(RuntimeError):
+    """Raised when reset cannot restore the user's configured cold-start seed."""
+
+    def __init__(self, seed_key: str) -> None:
+        super().__init__(f"Cold-start profile seed {seed_key!r} is unavailable.")
+        self.seed_key = seed_key
