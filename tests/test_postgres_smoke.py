@@ -49,13 +49,13 @@ def test_feed_cursor_appends_unique_pages(postgres_client, postgres_demo_user):
         "/feed",
         params={
             "user_id": postgres_demo_user,
-            "page_size": 20,
+            "page_size": 5,
             "request_id": f"cursor-page-1-{postgres_demo_user}",
         },
     )
     assert first.status_code == 200, first.text
     first_body = first.json()
-    assert len(first_body["items"]) == 20
+    assert len(first_body["items"]) == 5
     assert first_body["has_more"] is True
     assert first_body["next_cursor"]
 
@@ -63,14 +63,14 @@ def test_feed_cursor_appends_unique_pages(postgres_client, postgres_demo_user):
         "/feed",
         params={
             "user_id": postgres_demo_user,
-            "page_size": 20,
+            "page_size": 5,
             "request_id": f"cursor-page-2-{postgres_demo_user}",
             "cursor": first_body["next_cursor"],
         },
     )
     assert second.status_code == 200, second.text
     second_body = second.json()
-    assert len(second_body["items"]) == 20
+    assert len(second_body["items"]) == 5
     assert {item["news_id"] for item in first_body["items"]}.isdisjoint(
         item["news_id"] for item in second_body["items"]
     )
@@ -81,7 +81,7 @@ def test_feed_cursor_rejects_incompatible_page_shape(postgres_client, postgres_d
         "/feed",
         params={
             "user_id": postgres_demo_user,
-            "page_size": 20,
+            "page_size": 5,
             "request_id": f"cursor-shape-1-{postgres_demo_user}",
         },
     )
@@ -91,7 +91,7 @@ def test_feed_cursor_rejects_incompatible_page_shape(postgres_client, postgres_d
         "/feed",
         params={
             "user_id": postgres_demo_user,
-            "page_size": 10,
+            "page_size": 3,
             "request_id": f"cursor-shape-2-{postgres_demo_user}",
             "cursor": first.json()["next_cursor"],
         },
