@@ -17,6 +17,7 @@ MIND 提供真实的文章曝光、已曝光未点击项、点击项以及请求
 - 精确别名 + BM25 + sentence-transformer/FAISS 混合搜索，并带校准后的拒绝机制；
 - FastAPI + PostgreSQL 在线服务、Alembic 迁移、Outbox/Kafka、幂等消费者、健康检查与指标；
 - React 信息流/搜索界面、来源/类别标签、用户画像与推荐解释；
+- 可解释的短/长期主题画像、点踩/可见停留反馈、置信度与一键冷启动重置；
 - Argon2 密码哈希、HttpOnly Cookie 会话、登录注册和受保护前端路由；
 - 相互独立的全量数据模型证据与紧凑、确定性的在线服务/CI 数据世界。
 
@@ -135,6 +136,30 @@ NEWSREC_AUTH_SECRET_KEY='<generated-secret>'
 添加 `--smoke-test` 可执行一次性检查，添加 `--with-kafka` 可启动 Kafka 工作进程。
 默认数据库为 `newsrec_demo`，种子目录为 `build/mind_demo_world`，
 公共 API 使用文章字段和 `/articles/{article_id}`。
+
+## 用户画像 V2 MVP
+
+画像 V2 以 PostgreSQL 为事实源，使用推荐点击、搜索结果点击、点赞、点踩和可见停留时间
+生成带时间衰减的短期/长期主题证据；本期不引入语义向量。正式产品接口为登录态专用的
+`GET /profile` 与 `POST /profile/reset`，用户 ID 只从 HttpOnly Cookie 会话确定。
+研究与演示兼容接口 `GET /debug/profile?user_id=...` 保持不变。
+
+V2 默认关闭，且不会改变默认 Feed 排序。迁移数据库后，可按以下顺序灰度：
+
+```bash
+python -m alembic upgrade head
+NEWSREC_PROFILE_V2_ENABLED=1 python scripts/rebuild_profile_v2.py --all --dry-run
+NEWSREC_PROFILE_V2_ENABLED=1 python scripts/rebuild_profile_v2.py --all
+```
+
+通过 `GET /feed?...&experiment_arm=profile_v2` 显式进入实验分组；读取 V2 失败时会在数据库
+保存点回滚并继续使用原排序。将 `NEWSREC_PROFILE_V2_ENABLED=0` 即可停止新投影并让该实验
+分组退化为原排序，`default` 分组始终不受影响。重置画像只清理派生投影并恢复冷启动种子，
+不会删除历史事件；重置时间边界也会阻止旧事件在消费重试或重建时重新写回画像。
+
+MIND 只提供曝光与点击行为，不提供真实搜索、点踩或停留标签。因此现有离线数据只能验证
+画像投影、衰减、降级和重建机制，不能证明点踩/停留带来线上 CTR 或因果收益；
+`profile_v2` 必须在获得独立离线与在线实验依据后才可考虑升级为默认分组。
 
 ## 开发质量门禁
 

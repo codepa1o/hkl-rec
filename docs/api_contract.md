@@ -11,6 +11,8 @@ MySQL 兼容模式仍使用 answer/question 表名，但 OpenAPI 不会暴露这
 - `POST /event/track`
 - `POST /event/recommendation_click`
 - `POST /event/search_result_click`
+- `GET /profile`
+- `POST /profile/reset`
 - `GET /personas`
 - `GET /debug/profile`
 - `GET /livez`、`/readyz`、`/healthz`、`/metrics`
@@ -32,6 +34,58 @@ MySQL 兼容模式仍使用 answer/question 表名，但 OpenAPI 不会暴露这
 `lgb_plus_als_plus_search_mmr` 是非默认自然信息流实验分组：它保留
 `scores.final_score` 作为 LightGBM 相关性分数，只通过混合 ALS/主题 MMR 改变返回顺序。
 赞助内容的固定槽位混排仍是 `default` 分组的产品行为。
+
+`profile_v2` 是显式选择的画像实验分组，不会自动替换 `default`。它沿用默认分组的召回与
+排序配置，仅把 V2 正向主题加入额外召回，并将候选文章命中的正负主题分数乘以
+`NEWSREC_PROFILE_V2_BOOST` 后加到最终分数。调试分数增加可空字段
+`scores.profile_v2_score`。V2 为空时顺序与原排序一致；V2 查询失败时服务会回滚到读取前的
+数据库保存点、记录 `profile_v2_read_fallback_total`，并继续返回原排序结果。
+
+## 正式用户画像
+
+`GET /profile` 和 `POST /profile/reset` 始终要求有效登录会话，不接受 `user_id` 参数，
+目标用户只由服务端会话确定。`GET /debug/profile?user_id=...` 保留用于受控研究和演示；
+启用鉴权时仍执行本人/演示用户授权检查。
+
+正式画像响应只返回结构化证据，解释文案由客户端本地生成：
+
+```json
+{
+  "user_id": 7004,
+  "profile_version": "v2",
+  "status": "learning",
+  "confidence": 0.632121,
+  "evidence_count": 8,
+  "short_term": {
+    "interests": [{
+      "topic_id": 12,
+      "display_name": "technology",
+      "score": 0.72,
+      "positive_score": 0.9,
+      "negative_score": 0.18,
+      "positive_evidence_count": 4,
+      "negative_evidence_count": 1,
+      "signal_counts": {"recommendation_click": 2, "dwell": 2, "downvote": 1},
+      "last_signal_type": "dwell",
+      "last_event_ts": 1786852800
+    }],
+    "reduced_topics": []
+  },
+  "long_term": {"interests": [], "reduced_topics": []},
+  "recent_clicked_news": [],
+  "recent_queries": [],
+  "last_updated_at": "2026-08-16T12:00:00Z"
+}
+```
+
+`status` 取值为 `cold`、`learning` 或 `established`；`confidence` 范围为 0–1。
+重置成功返回新的冷启动画像。重置保留 `user_event` 审计记录，并设置事件时间边界，确保
+旧的 Kafka 重试或重建不会恢复重置前兴趣。本接口可能返回：
+
+- 401：会话缺失或失效；
+- 404 `PROFILE_NOT_INITIALIZED`：账号尚无 `user_profile` 行；
+- 503 `PROFILE_SEED_UNAVAILABLE`：配置的系统冷启动种子不存在；
+- 503 `repository_not_ready`：PostgreSQL 运行时不可用。
 
 `POST /search` 接受规范化 `query_key` 或英文 `query_text`。
 数值键以及精确的类别/子类别别名使用确定性主题路径；其他自由文本使用 BM25、
