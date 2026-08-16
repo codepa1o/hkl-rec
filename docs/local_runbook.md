@@ -9,90 +9,85 @@
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-dev.txt
-cd product-frontend && npm ci && cd ..
+npm --prefix product-frontend ci
 ```
 
-## 初始化
+## 一键初始化
+
+Linux/macOS：
 
 ```bash
-PYTHON=.venv/bin/python scripts/init_local.sh --product-frontend
+BUILD_SEARCH_INDEX=1 scripts/init_local.sh
 ```
 
-使用 `--smoke-test` 执行一次性检查；使用 `--with-kafka` 启动 Kafka、
-画像消费者和 Outbox 发布器。仅在首次从旧库迁移且 PostgreSQL 业务表为空时使用
-`--migrate-legacy-mysql`。
+Windows PowerShell：
+
+```powershell
+./scripts/init_local.ps1 -BuildSearchIndex
+```
+
+初始化会启动 PostgreSQL、升级 Alembic、下载 MIND-small train/dev、生成规范化 Parquet、
+把全部 65,238 篇唯一新闻导入数据库，并按需构建全目录混合搜索索引。下载操作表示你已阅读并
+接受 MIND 数据许可；原始数据、Parquet 和索引均只保存在本地。
+
+在线新闻事实只落在八字段 `mind_news`；`mind_news_stats` 是训练统计，`mind_news_topic` 是
+严格的两条 category/subcategory 关联，`mind_catalog_import` 是指纹与行数证明。这些辅助表
+不复制或改写 MIND 新闻正文。
+
+首页使用每批 20 篇的游标式无限滚动。分页会话状态只保存在 `feed_request`，不会改变
+`mind_news` 的八字段结构。详情接口解析两个实体 JSON 字段，页面只在文章详情中展示人物、
+机构、地点和其他实体。
 
 关键变量：
 
 - `NEWSREC_DATABASE_URL`
-- `NEWSREC_MYSQL_SOURCE_URL`（仅历史数据迁移使用）
-- `NEWSREC_DEMO_SEED_DIR`（默认值 `build/mind_demo_world`）
-- `NEWSREC_MODEL_DIR`（默认值 `build/mind_models`）
-- `NEWSREC_SEARCH_RETRIEVAL_MODE`（默认值 `hybrid_v1`）
-- `NEWSREC_SEARCH_INDEX_DIR`（默认值 `build/mind_search/demo`）
+- `NEWSREC_MIND_NORMALIZED_DIR`（默认 `build/mind_normalized`）
+- `NEWSREC_SEARCH_RETRIEVAL_MODE`（默认 `hybrid_v1`）
+- `NEWSREC_SEARCH_INDEX_DIR`（默认 `build/mind_search/full`）
+- `NEWSREC_DEFAULT_DEMO_USER_ID`（默认 `7001`）
+- `NEWSREC_MODEL_DIR`（默认 `build/mind_models`）
 - `NEWSREC_EVENT_MODE`
 - `NEWSREC_KAFKA_*`
 - `VITE_NEWSREC_API_BASE`
 
-在一个迁移周期内仍接受 `ZHIHUREC_*` 别名，并会记录弃用日志。
-
-## 重建数据和模型
-
-```bash
-python scripts/download_mind.py --variant small --split all --accept-license --source huyva
-python scripts/inspect_mind.py --variant small
-python scripts/normalize_mind.py
-python scripts/build_mind_demo_world.py
-python scripts/build_search_index.py \
-  --corpus full \
-  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
-  --config evaluation/search_relevance/selected_config.json
-python scripts/calibrate_search_relevance.py
-python scripts/eval_search_relevance.py \
-  --config evaluation/search_relevance/selected_config.json
-python scripts/build_search_index.py \
-  --corpus demo \
-  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
-  --config evaluation/search_relevance/selected_config.json \
-  --online-config evaluation/search_relevance/online_demo_config.json
-python scripts/import_demo_world.py \
-  --input-dir build/mind_demo_world \
-  --output-sql build/mind_demo_world/import_demo_world.sql \
-  --truncate-first
-python scripts/train_eval_mind.py
-python scripts/report_mind_data.py
-```
-
-## 手动启动服务
+## 分阶段重建
 
 ```bash
 docker compose up -d --wait postgres
 export NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo'
 python -m alembic upgrade head
+python scripts/download_mind.py --variant small --split all --accept-license --source huyva
+python scripts/inspect_mind.py --variant small
+python scripts/normalize_mind.py
+python scripts/import_mind_catalog.py \
+  --normalized-root build/mind_normalized \
+  --replace-catalog
 python scripts/build_search_index.py \
-  --corpus demo \
+  --input-dir build/mind_normalized \
+  --output-dir build/mind_search/full \
   --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
-  --config evaluation/search_relevance/selected_config.json \
-  --online-config evaluation/search_relevance/online_demo_config.json
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+  --config evaluation/search_relevance/selected_config.json
+python scripts/train_eval_mind.py
+python scripts/report_mind_data.py
 ```
 
-## 一次性迁移旧 MySQL 历史数据
+`--replace-catalog` 会替换现有 MIND 新闻目录；对重要数据库执行前应先用 `pg_dump -Fc` 备份。
+导入器会校验 Parquet 清单、源指纹、唯一 `news_id`、新闻/统计行数和训练曝光/点击总数，失败时
+整个事务回滚。
+
+## 手动启动服务
 
 ```bash
-docker compose -f docker-compose.mysql-legacy.yml up -d --wait mysql
-export NEWSREC_MYSQL_SOURCE_URL='mysql+pymysql://root:root@127.0.0.1:3307/newsrec_demo'
-export NEWSREC_DATABASE_URL='postgresql+psycopg://newsrec:newsrec@127.0.0.1:5432/newsrec_demo'
-python -m alembic upgrade head
-python scripts/migrate_mysql_to_postgres.py
+export NEWSREC_MIND_NORMALIZED_DIR=build/mind_normalized
+export NEWSREC_SEARCH_INDEX_DIR=build/mind_search/full
+export NEWSREC_SEARCH_RETRIEVAL_MODE=hybrid_v1
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
-
-迁移器以一致性快照读取 MySQL，在单一 PostgreSQL 事务中写入 24 张表，并逐表校验源/目标行数和 SHA-256 内容摘要。失败时 PostgreSQL 整体回滚；MySQL 始终保持只读且不会删除。
 
 使用 Kafka 时：
 
 ```bash
-docker compose -f docker-compose.kafka.yml up -d
+docker compose -f docker-compose.kafka.yml up -d --wait
 docker compose -f docker-compose.kafka.yml run --rm kafka-init
 export NEWSREC_EVENT_MODE=kafka_async
 export NEWSREC_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092
@@ -103,11 +98,14 @@ python scripts/run_outbox_publisher.py
 ## 验证
 
 ```bash
+python -m pip check
 python -m ruff check backend scripts tests
+python -m ruff format --check backend scripts tests
 python -m mypy
 python -m pytest -q
-cd product-frontend && npm test -- --run && npm run build
+npm --prefix product-frontend test -- --run
+npm --prefix product-frontend run build
 ```
 
-健康检查端点包括 `/livez`、`/readyz`、`/healthz` 和 `/metrics`。
-启用混合搜索时，就绪检查还会验证搜索制品指纹、文件哈希、FAISS 行数和本地缓存的编码器修订号。
+健康检查端点包括 `/livez`、`/readyz`、`/healthz` 和 `/metrics`。启用混合搜索时，就绪检查会
+验证规范化数据指纹、搜索制品哈希、FAISS 行数和编码器修订号。

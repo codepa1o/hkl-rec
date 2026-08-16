@@ -9,8 +9,9 @@ class ProfileTopicWeight(ApiModel):
 
 
 class ProfileRecentClick(ApiModel):
-    article_id: int
+    news_id: str
     click_ts: int
+    title: str | None = None
 
 
 class ProfileRecentQuery(ApiModel):
@@ -29,6 +30,6 @@ class DebugProfileResponse(ApiModel):
     cold_start_seed_key: str
     behavior_score: float
     topic_weights: list[ProfileTopicWeight]
-    recent_clicked_articles: list[ProfileRecentClick]
+    recent_clicked_news: list[ProfileRecentClick]
     recent_queries: list[ProfileRecentQuery]
     vector_summary: VectorSummary

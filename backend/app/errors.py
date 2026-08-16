@@ -30,3 +30,11 @@ class SearchIndexNotReadyError(RuntimeError):
 
 class IdempotencyConflictError(ValueError):
     """同一事件 ID 被用于语义不同的载荷时抛出。"""
+
+
+class UnknownCategoryError(ValueError):
+    """请求的新闻一级分类不存在时抛出。"""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(f"未知新闻分类：{category}")
+        self.category = category

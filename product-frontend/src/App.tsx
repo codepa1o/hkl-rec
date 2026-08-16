@@ -21,7 +21,7 @@ function ProductShell() {
           <Routes>
             <Route path="/" element={<FeedPage />} />
             <Route path="/search" element={<SearchPage />} />
-            <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
+            <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <RightRail />

@@ -14,18 +14,18 @@ _BUSINESS_ENDPOINTS = [
         "POST",
         "/event/recommendation_click",
         None,
-        {"user_id": 7248, "article_id": 1},
+        {"user_id": 7248, "news_id": "N1"},
     ),
     (
         "POST",
         "/event/search_result_click",
         None,
-        {"user_id": 7248, "article_id": 1, "query_key": "248 12125"},
+        {"user_id": 7248, "news_id": "N1", "query_key": "248 12125"},
     ),
     ("GET", "/debug/profile", {"user_id": 7248}, None),
     ("GET", "/personas", {"limit": 10}, None),
     ("GET", "/search/suggestions", {"limit": 12}, None),
-    ("GET", "/articles/1", None, None),
+    ("GET", "/articles/N1", None, None),
     (
         "POST",
         "/event/track",
@@ -34,7 +34,7 @@ _BUSINESS_ENDPOINTS = [
             "user_id": 7248,
             "event_type": "feed_impression",
             "surface": "home_feed",
-            "article_id": 1,
+            "news_id": "N1",
         },
     ),
 ]
@@ -56,7 +56,7 @@ def test_unwired_business_endpoint_returns_503(unwired_client, method, path, par
 def test_openapi_exposes_only_article_product_fields(unwired_client):
     document = unwired_client.get("/openapi.json").json()
 
-    assert "/articles/{article_id}" in document["paths"]
+    assert "/articles/{news_id}" in document["paths"]
     assert not any(path.startswith("/answers") for path in document["paths"])
     forbidden = {
         "answer_id",
@@ -64,6 +64,8 @@ def test_openapi_exposes_only_article_product_fields(unwired_client):
         "question_title",
         "answer_summary",
         "recent_clicked_answers",
+        "article_id",
+        "recent_clicked_articles",
     }
     for schema in document["components"]["schemas"].values():
         assert forbidden.isdisjoint(schema.get("properties", {}))

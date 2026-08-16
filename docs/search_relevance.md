@@ -12,11 +12,9 @@
 - AI 辅助标注，以及用户批准的 12 条分层人工抽样检查。
 
 MIND 不包含观察到的搜索日志。这些指标衡量固定标注集上的离线相关性，
-并不估计点击率、用户因果收益或生产质量。在线演示仍只索引
-`build/mind_demo_world` 中的 174 篇文章。由于 BM25 IDF 的量级取决于语料规模，
-演示制品保留全语料融合权重，但使用单独纳入版本控制的
-`evaluation/search_relevance/online_demo_config.json` 置信度配置。
-该配置属于运行时行为设置，不纳入所报告的全语料相关性指标。
+并不估计点击率、用户因果收益或生产质量。在线服务使用
+`build/mind_search/full` 中覆盖 65,238 篇新闻的同一全目录索引，索引元数据必须与
+规范化目录以及 PostgreSQL `mind_catalog_import` 中的活动指纹和新闻行数同时一致。
 
 机器可读证据：
 
@@ -53,7 +51,7 @@ MIND 不包含观察到的搜索日志。这些指标衡量固定标注集上的
 - `backend/app/search_retrieval.py`
 - `backend/app/repositories/query_resolver.py::resolve_search_query`
 - `backend/app/repositories/content_dao.py::load_search_candidates`
-- `backend/app/repositories/mysql.py::MysqlRuntimeRepository.search`
+- `backend/app/repositories/postgres.py::PostgresRuntimeRepository.search`
 
 搜索不会再用不相关热门文章填满不足一页的结果。低置信度自由文本查询返回
 422 `unresolved_query`。混合搜索制品缺失或不兼容时返回 503
@@ -90,20 +88,20 @@ MIND 不包含观察到的搜索日志。这些指标衡量固定标注集上的
 
 | 实验分组 | Recall@5 | Recall@10 | NDCG@10 | MRR@10 | OOD 拒绝准确率 | 误拒率 |
 |---|---:|---:|---:|---:|---:|---:|
-| 旧版词法搜索 | 0.1378 | 0.2895 | 0.2854 | 0.3158 | 0.0 | 0.0 |
-| BM25 | 0.4334 | 0.6847 | 0.6790 | 0.7444 | 1.0 | 0.1053 |
-| 稠密检索 | **0.6492** | **0.8806** | **0.8319** | **0.8772** | 1.0 | 0.0 |
-| 混合检索 | 0.5966 | 0.8122 | 0.8131 | 0.8596 | 1.0 | 0.0 |
+| 旧版词法搜索 | 0.0000 | 0.0058 | 0.0043 | 0.0075 | 0.0 | 0.0 |
+| BM25 | 0.3219 | 0.4274 | 0.4415 | 0.4887 | 1.0 | 0.1053 |
+| 稠密检索 | **0.5377** | **0.6233** | **0.5944** | **0.6216** | 1.0 | 0.0 |
+| 混合检索 | 0.4850 | 0.5548 | 0.5756 | 0.6040 | 1.0 | 0.0 |
 
 混合检索相对旧版词法路径：
 
-- NDCG@10 变化：`+0.5277`，配对 95% 置信区间 `[+0.3130, +0.7257]`；
-- Recall@10 变化：`+0.5227`，配对 95% 置信区间 `[+0.3122, +0.7174]`；
-- MRR@10 变化：`+0.5439`，配对 95% 置信区间 `[+0.3158, +0.7544]`；
+- NDCG@10 变化：`+0.5712`，配对 95% 置信区间 `[+0.3501, +0.7651]`；
+- Recall@10 变化：`+0.5490`，配对 95% 置信区间 `[+0.3281, +0.7421]`；
+- MRR@10 变化：`+0.5965`，配对 95% 置信区间 `[+0.3684, +0.8070]`；
 - OOD 拒绝准确率：`0.0 -> 1.0`。
 
 稠密检索是整体留出评估中最强的分组。混合检索的整体 NDCG@10 未超过稠密检索，
-项目保留了这一负面结果。混合检索在拼写/噪声切片上最强（NDCG@10 为 `0.8945`，
+项目保留了这一负面结果。混合检索在拼写/噪声切片上最强（NDCG@10 为 `0.8979`，
 稠密检索为 `0.6372`），同时保持了词法加语义的产品设计目标。
 预先声明的上线门槛将混合检索与旧版在线路径比较并已通过，因此 `hybrid_v1`
 是默认方案，稠密检索则保留为已测量的替代方案。
@@ -116,15 +114,15 @@ MIND 不包含观察到的搜索日志。这些指标衡量固定标注集上的
 - Prometheus 暴露搜索解析结果和检索耗时。
 - BM25/稠密搜索制品与现有 ALS FAISS 制品相互独立。
 
-在包含 174 篇文档的演示索引上，预热后的进程内检索在 100 次调用中的
-p50 为 `6.433 ms`、p95 为 `9.568 ms`。该测量不包含 HTTP、MySQL、事件写入、
-并发和生产容量。
+全量 65,238 篇新闻索引预热后的 100 次进程内调用 p50 为 `173.501 ms`、
+p95 为 `270.299 ms`。该测量不包含 HTTP、PostgreSQL、事件写入、并发和生产容量。
 
 ## 复现
 
 ```bash
 python scripts/build_search_index.py \
-  --corpus full \
+  --input-dir build/mind_normalized \
+  --output-dir build/mind_search/full \
   --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
   --config evaluation/search_relevance/selected_config.json
 
@@ -133,13 +131,9 @@ python scripts/calibrate_search_relevance.py
 python scripts/eval_search_relevance.py \
   --config evaluation/search_relevance/selected_config.json
 
-python scripts/build_search_index.py \
-  --corpus demo \
-  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
-  --config evaluation/search_relevance/selected_config.json \
-  --online-config evaluation/search_relevance/online_demo_config.json
-
-python scripts/benchmark_search_retrieval.py --iterations 100
+python scripts/benchmark_search_retrieval.py \
+  --artifact-dir build/mind_search/full \
+  --iterations 100
 ```
 
 ## 限制

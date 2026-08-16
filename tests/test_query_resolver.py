@@ -196,7 +196,8 @@ def test_resolve_falls_back_to_real_article_text():
 
     assert resolved == "42"
     sql, params = connection._cursor.executed[-1]
-    assert "LOWER(q.display_title) LIKE %s" in sql
+    assert "LOWER(news.title)" in sql
+    assert '{" OR ".join(predicates)}' not in sql
     assert params == ("%quarterback%", "%quarterback%")
 
 
@@ -297,9 +298,9 @@ def test_hybrid_mode_preserves_exact_alias_without_loading_candidates():
     assert index.queries == []
 
 
-def test_hybrid_mode_maps_article_hits_to_canonical_query_key():
+def test_hybrid_mode_maps_news_hits_to_canonical_query_key():
     hit = HybridHit(
-        article_id=42,
+        news_id="N42",
         bm25_score=12.0,
         dense_score=0.7,
         fusion_score=0.03,
@@ -310,7 +311,7 @@ def test_hybrid_mode_maps_article_hits_to_canonical_query_key():
         script=[
             [],
             [],
-            [{"answer_id": 42, "topic_id": 14, "source_rank": 0}],
+            [{"news_id": "N42", "topic_id": 14, "source_rank": 0}],
             [{"query_key": "14", "topic_id": 14, "score": 1.0, "match_rank": 1}],
         ]
     )
@@ -342,7 +343,7 @@ def test_hybrid_mode_maps_article_hits_to_canonical_query_key():
 
 def test_hybrid_mode_falls_back_to_top_hit_topic_when_alias_map_is_missing():
     top_hit = HybridHit(
-        article_id=42,
+        news_id="N42",
         bm25_score=12.0,
         dense_score=0.7,
         fusion_score=0.03,
@@ -350,7 +351,7 @@ def test_hybrid_mode_falls_back_to_top_hit_topic_when_alias_map_is_missing():
         dense_rank=1,
     )
     second_hit = HybridHit(
-        article_id=7,
+        news_id="N7",
         bm25_score=10.0,
         dense_score=0.6,
         fusion_score=0.02,
@@ -362,8 +363,8 @@ def test_hybrid_mode_falls_back_to_top_hit_topic_when_alias_map_is_missing():
             [],
             [],
             [
-                {"answer_id": 7, "topic_id": 2, "source_rank": 0},
-                {"answer_id": 42, "topic_id": 14, "source_rank": 0},
+                {"news_id": "N7", "topic_id": 2, "source_rank": 0},
+                {"news_id": "N42", "topic_id": 14, "source_rank": 0},
             ],
             [],
         ]

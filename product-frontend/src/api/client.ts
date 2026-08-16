@@ -1,6 +1,7 @@
 import type {
   ArticleCardResponse,
   AuthUser,
+  CategoryListResponse,
   DebugProfileResponse,
   EventTrackRequest,
   EventTrackResponse,
@@ -98,6 +99,10 @@ export function listPersonas(limit = 10): Promise<PersonaListResponse> {
   return request<PersonaListResponse>("/personas", { params: { limit } });
 }
 
+export function listCategories(): Promise<CategoryListResponse> {
+  return request<CategoryListResponse>("/categories");
+}
+
 export function listSearchSuggestions(limit = 12): Promise<SuggestionListResponse> {
   return request<SuggestionListResponse>("/search/suggestions", { params: { limit } });
 }
@@ -107,9 +112,18 @@ export function getFeed(
   pageSize = 10,
   debug = false,
   requestId?: string,
+  cursor?: string,
+  category?: string,
 ): Promise<FeedResponse> {
   return request<FeedResponse>("/feed", {
-    params: { user_id: userId, page_size: pageSize, debug, request_id: requestId },
+    params: {
+      user_id: userId,
+      page_size: pageSize,
+      debug,
+      request_id: requestId,
+      cursor,
+      category,
+    },
   });
 }
 
@@ -136,8 +150,8 @@ export function postSearch(
   });
 }
 
-export function getArticleCard(articleId: number): Promise<ArticleCardResponse> {
-  return request<ArticleCardResponse>(`/articles/${articleId}`);
+export function getArticleCard(newsId: string): Promise<ArticleCardResponse> {
+  return request<ArticleCardResponse>(`/articles/${newsId}`);
 }
 
 export function getDebugProfile(userId: number): Promise<DebugProfileResponse> {

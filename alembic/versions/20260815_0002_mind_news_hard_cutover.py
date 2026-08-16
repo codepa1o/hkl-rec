@@ -30,8 +30,7 @@ def _migrate_news_id_column(
     op.add_column(table_name, sa.Column("news_id", sa.String(length=32), nullable=True))
     op.execute(
         sa.text(
-            f"UPDATE {table_name} SET news_id = 'N' || answer_id::text "
-            "WHERE answer_id IS NOT NULL"
+            f"UPDATE {table_name} SET news_id = 'N' || answer_id::text WHERE answer_id IS NOT NULL"
         )
     )
     if not nullable:
@@ -136,12 +135,8 @@ def upgrade() -> None:
         sa.Column("news_id", sa.String(length=32), nullable=False),
         sa.Column("first_seen_ts", sa.BigInteger(), nullable=True),
         sa.Column("click_count", sa.BigInteger(), server_default=sa.text("0"), nullable=False),
-        sa.Column(
-            "impression_count", sa.BigInteger(), server_default=sa.text("0"), nullable=False
-        ),
-        sa.Column(
-            "hot_score", sa.DOUBLE_PRECISION(), server_default=sa.text("0"), nullable=False
-        ),
+        sa.Column("impression_count", sa.BigInteger(), server_default=sa.text("0"), nullable=False),
+        sa.Column("hot_score", sa.DOUBLE_PRECISION(), server_default=sa.text("0"), nullable=False),
         sa.Column("normalized_fingerprint", sa.String(length=64), nullable=False),
         sa.CheckConstraint("click_count >= 0", name="chk_mind_news_stats_click_count"),
         sa.CheckConstraint(
@@ -149,9 +144,7 @@ def upgrade() -> None:
             name="chk_mind_news_stats_impression_count",
         ),
         sa.CheckConstraint("hot_score >= 0", name="chk_mind_news_stats_hot_score"),
-        sa.ForeignKeyConstraint(
-            ["news_id"], ["mind_news.news_id"], name="fk_mind_news_stats_news"
-        ),
+        sa.ForeignKeyConstraint(["news_id"], ["mind_news.news_id"], name="fk_mind_news_stats_news"),
         sa.ForeignKeyConstraint(
             ["normalized_fingerprint"],
             ["mind_catalog_import.normalized_fingerprint"],
@@ -244,9 +237,7 @@ def upgrade() -> None:
         "sponsored_creative",
         ["campaign_id", "news_id"],
     )
-    op.create_index(
-        "idx_sponsored_creative_news", "sponsored_creative", ["news_id"], unique=False
-    )
+    op.create_index("idx_sponsored_creative_news", "sponsored_creative", ["news_id"], unique=False)
     op.drop_column("sponsored_creative", "answer_id")
 
     _migrate_news_id_column(
@@ -305,9 +296,7 @@ def upgrade() -> None:
         "topic",
         sa.Column("news_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
     )
-    op.execute(
-        sa.text("UPDATE topic SET news_count = GREATEST(answer_count, question_count)")
-    )
+    op.execute(sa.text("UPDATE topic SET news_count = GREATEST(answer_count, question_count)"))
     op.drop_column("topic", "answer_count")
     op.drop_column("topic", "question_count")
     op.drop_column("app_user", "answer_count")

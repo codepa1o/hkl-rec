@@ -59,7 +59,7 @@ NDCG@10 从 0.2854 提升到 0.8131，OOD 拒绝率从 0 到 1.0。dense 单路�
 POST /search
 -> backend/app/routers/search.py::search
 -> backend/app/services/search.py::SearchService.search
--> backend/app/repositories/mysql.py::MysqlRuntimeRepository.search
+-> backend/app/repositories/postgres.py::PostgresRuntimeRepository.search
 -> backend/app/repositories/query_resolver.py::resolve_search_query
 -> backend/app/search_retrieval.py::HybridSearchIndex.search
 -> backend/app/search_retrieval.py::build_hybrid_search_result

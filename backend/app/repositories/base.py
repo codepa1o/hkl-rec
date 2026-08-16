@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.category import CategoryListResponse
 from backend.app.schemas.event import (
     EventAckResponse,
     RecommendationClickRequest,
@@ -29,7 +30,9 @@ class RuntimeRepository(Protocol):
         experiment_arm: FeedExperimentArm = "default",
         include_sponsored: bool = True,
         request_id: str | None = None,
+        cursor: str | None = None,
         as_of_ts: int | None = None,
+        category: str | None = None,
     ) -> FeedResponse: ...
 
     def search(self, payload: SearchRequest) -> SearchResponse: ...
@@ -44,8 +47,10 @@ class RuntimeRepository(Protocol):
 
     def list_personas(self, limit: int) -> PersonaListResponse: ...
 
+    def list_categories(self) -> CategoryListResponse: ...
+
     def list_search_suggestions(self, limit: int) -> SuggestionListResponse: ...
 
-    def get_article_card(self, article_id: int) -> ArticleCardResponse: ...
+    def get_article_card(self, news_id: str) -> ArticleCardResponse: ...
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse: ...

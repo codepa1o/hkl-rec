@@ -8,7 +8,7 @@ from .common import ApiModel
 class RecommendationClickRequest(ApiModel):
     event_id: str | None = None
     user_id: int
-    article_id: int
+    news_id: str = Field(pattern=r"^N[0-9]+$")
     request_id: str | None = None
     sponsored_delivery_id: str | None = None
     debug: bool = False
@@ -24,7 +24,7 @@ class RecommendationClickRequest(ApiModel):
 class SearchResultClickRequest(ApiModel):
     event_id: str | None = None
     user_id: int
-    article_id: int
+    news_id: str = Field(pattern=r"^N[0-9]+$")
     query_key: str
     request_id: str | None = None
     sponsored_delivery_id: str | None = None
@@ -43,8 +43,8 @@ class UpdatedTopicDelta(ApiModel):
     delta: float
 
 
-class RecentClickedArticle(ApiModel):
-    article_id: int
+class RecentClickedNews(ApiModel):
+    news_id: str
     click_ts: int
 
 
@@ -53,7 +53,7 @@ class SearchQueryTopic(ApiModel):
     score: float
 
 
-class ArticleTopic(ApiModel):
+class NewsTopic(ApiModel):
     topic_id: int
 
 
@@ -64,13 +64,13 @@ class OverlapTopic(ApiModel):
 
 class RecommendationClickDebug(ApiModel):
     updated_topics: list[UpdatedTopicDelta]
-    recent_clicked_articles_tail: list[RecentClickedArticle]
+    recent_clicked_news_tail: list[RecentClickedNews]
     behavior_score: float
 
 
 class SearchResultClickDebug(ApiModel):
     query_topics: list[SearchQueryTopic]
-    article_topics: list[ArticleTopic]
+    news_topics: list[NewsTopic]
     overlap_topics: list[OverlapTopic]
     behavior_score: float
 

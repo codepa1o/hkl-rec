@@ -1,17 +1,12 @@
-import { LogOut, Moon, Sun } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTheme } from "../context/ThemeContext";
-import { useAuth } from "../context/AuthContext";
-import PersonaSwitcher from "./PersonaSwitcher";
+import AccountMenu from "./AccountMenu";
 import SearchBox from "./SearchBox";
 
 export default function TopNav() {
   const { resolvedTheme, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
   const isDark = resolvedTheme === "dark";
-  const handleLogout = () => {
-    void logout().catch(() => undefined);
-  };
 
   return (
     <header className="zr-topbar">
@@ -34,19 +29,7 @@ export default function TopNav() {
         >
           {isDark ? <Sun size={18} /> : <Moon size={18} />}
         </button>
-        <span className="zr-account" title={user?.email}>
-          {user?.display_name}
-        </span>
-        <button
-          type="button"
-          className="zr-icon-button"
-          aria-label="退出登录"
-          title="退出登录"
-          onClick={handleLogout}
-        >
-          <LogOut size={18} />
-        </button>
-        <PersonaSwitcher />
+        <AccountMenu />
       </div>
     </header>
   );

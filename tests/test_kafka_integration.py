@@ -29,7 +29,7 @@ pytestmark = [
 ]
 
 
-def test_raw_event_reaches_postgres_and_training_topic(mysql_client, mysql_demo_user):
+def test_raw_event_reaches_postgres_and_training_topic(postgres_client, postgres_demo_user):
     from confluent_kafka import Consumer, Producer
     from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -59,20 +59,20 @@ def test_raw_event_reaches_postgres_and_training_topic(mysql_client, mysql_demo_
         kafka_dlq_topic=dlq_topic,
         outbox_poll_interval_seconds=0.01,
     )
-    feed = mysql_client.get(
+    feed = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 1,
             "include_sponsored": "false",
         },
     ).json()
-    answer_id = int(feed["items"][0]["article_id"])
+    news_id = str(feed["items"][0]["news_id"])
     event = UserEventMessage(
         event_id=f"kafka-integration-{suffix}",
         event_type="feed_impression",
-        user_id=mysql_demo_user,
-        article_id=answer_id,
+        user_id=postgres_demo_user,
+        news_id=news_id,
         request_id=f"kafka-request-{suffix}",
         surface="feed",
         event_ts=int(time.time()),
@@ -119,7 +119,7 @@ def test_raw_event_reaches_postgres_and_training_topic(mysql_client, mysql_demo_
         training = TrainingInteractionMessage.model_validate_json(message.value())
         assert training.example_id == event.event_id
         assert training.request_id == event.request_id
-        assert training.article_id == answer_id
+        assert training.news_id == news_id
         assert training.label is None
     finally:
         consumer.close()

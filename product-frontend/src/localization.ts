@@ -30,6 +30,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   "middle east": "中东",
   middleeast: "中东",
   gaming: "游戏",
+  games: "游戏",
   sponsored: "赞助内容",
   "sponsored content": "赞助内容",
 };

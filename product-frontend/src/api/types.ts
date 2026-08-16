@@ -19,6 +19,15 @@ export interface PersonaListResponse {
   items: PersonaCard[];
 }
 
+export interface CategoryItem {
+  key: string;
+  news_count: number;
+}
+
+export interface CategoryListResponse {
+  items: CategoryItem[];
+}
+
 export interface AuthUser {
   user_id: number;
   email: string;
@@ -45,11 +54,27 @@ export interface SuggestionListResponse {
 }
 
 export interface ArticleCardResponse {
-  article_id: number;
-  headline: string;
+  news_id: string;
+  title: string;
   abstract: string;
+  url: string;
   source_domain: string;
+  category: string;
+  subcategory: string;
   categories: TopicCard[];
+  title_entities: ArticleEntity[];
+  abstract_entities: ArticleEntity[];
+}
+
+export type ArticleEntityType = "person" | "organization" | "location" | "other";
+
+export interface ArticleEntity {
+  label: string;
+  entity_type: ArticleEntityType;
+  type_code: string;
+  wikidata_id: string | null;
+  confidence: number | null;
+  surface_forms: string[];
 }
 
 export interface FeedItemScores {
@@ -70,10 +95,13 @@ export interface SponsoredFeedMetadata {
 }
 
 export interface FeedItem {
-  article_id: number;
-  headline: string;
+  news_id: string;
+  title: string;
   abstract: string;
+  url: string;
   source_domain: string;
+  category: string;
+  subcategory: string;
   categories: TopicCard[];
   selected_reason: string;
   scores: FeedItemScores;
@@ -87,6 +115,8 @@ export interface FeedResponse {
   user_id: number;
   request_id: string;
   items: FeedItem[];
+  next_cursor: string | null;
+  has_more: boolean;
   debug?: unknown;
 }
 
@@ -99,10 +129,13 @@ export interface SearchItemScores {
 }
 
 export interface SearchItem {
-  article_id: number;
-  headline: string;
+  news_id: string;
+  title: string;
   abstract: string;
+  url: string;
   source_domain: string;
+  category: string;
+  subcategory: string;
   categories: TopicCard[];
   scores: SearchItemScores;
 }
@@ -116,7 +149,8 @@ export interface SearchResponse {
 }
 
 export interface ProfileRecentClick {
-  article_id: number;
+  news_id: string;
+  title: string | null;
   click_ts: number;
 }
 
@@ -135,7 +169,7 @@ export interface DebugProfileResponse {
   cold_start_seed_key: string;
   behavior_score: number;
   topic_weights: ProfileTopicWeight[];
-  recent_clicked_articles: ProfileRecentClick[];
+  recent_clicked_news: ProfileRecentClick[];
   recent_queries: ProfileRecentQuery[];
   vector_summary?: DebugVectorSummary;
 }
@@ -155,7 +189,7 @@ export interface EventTrackRequest {
   user_id: number;
   event_type: EventTrackType;
   surface: string;
-  article_id?: number | null;
+  news_id?: string | null;
   query_key?: string | null;
   request_id?: string | null;
   sponsored_delivery_id?: string | null;

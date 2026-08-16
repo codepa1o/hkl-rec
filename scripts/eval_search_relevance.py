@@ -104,21 +104,10 @@ def load_qrels(path: Path) -> dict[str, dict[int, float]]:
 
 
 def load_documents(normalized_dir: Path) -> list[SearchDocument]:
-    rows = pq.read_table(
-        normalized_dir / "articles.parquet",
-        columns=[
-            "article_id",
-            "headline",
-            "abstract",
-            "category",
-            "subcategory",
-            "category_topic_id",
-            "subcategory_topic_id",
-        ],
-    ).to_pylist()
+    rows = pq.read_table(normalized_dir / "articles.parquet").to_pylist()
     return [
         SearchDocument(
-            article_id=int(row["article_id"]),
+            news_id=str(row.get("news_id") or f"N{int(row['article_id'])}"),
             headline=str(row.get("headline") or ""),
             abstract=str(row.get("abstract") or ""),
             topic_ids=(
@@ -151,8 +140,8 @@ def _run_lexical(
     return QueryRun(
         query=query,
         accepted=True,
-        article_ids=tuple(hit.article_id for hit in result.hits),
-        candidate_article_ids=tuple(hit.article_id for hit in result.hits),
+        article_ids=tuple(int(hit.news_id[1:]) for hit in result.hits),
+        candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in result.hits),
         query_key=result.query_key,
         resolution_source=result.source,
     )
@@ -171,8 +160,8 @@ def _run_bm25(
         return QueryRun(
             query=query,
             accepted=True,
-            article_ids=tuple(hit.article_id for hit in exact.hits),
-            candidate_article_ids=tuple(hit.article_id for hit in exact.hits),
+            article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
+            candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
             query_key=exact.query_key,
             resolution_source="exact_alias",
         )
@@ -182,8 +171,8 @@ def _run_bm25(
     return QueryRun(
         query=query,
         accepted=accepted,
-        article_ids=tuple(hit.article_id for hit in hits) if accepted else (),
-        candidate_article_ids=tuple(hit.article_id for hit in hits),
+        article_ids=tuple(int(hit.news_id[1:]) for hit in hits) if accepted else (),
+        candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in hits),
         query_key=None,
         resolution_source="bm25" if accepted else "unresolved",
         top_bm25_score=top_score,
@@ -203,8 +192,8 @@ def _run_dense(
         return QueryRun(
             query=query,
             accepted=True,
-            article_ids=tuple(hit.article_id for hit in exact.hits),
-            candidate_article_ids=tuple(hit.article_id for hit in exact.hits),
+            article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
+            candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
             query_key=exact.query_key,
             resolution_source="exact_alias",
         )
@@ -214,8 +203,8 @@ def _run_dense(
     return QueryRun(
         query=query,
         accepted=accepted,
-        article_ids=tuple(hit.article_id for hit in hits) if accepted else (),
-        candidate_article_ids=tuple(hit.article_id for hit in hits),
+        article_ids=tuple(int(hit.news_id[1:]) for hit in hits) if accepted else (),
+        candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in hits),
         query_key=None,
         resolution_source="dense" if accepted else "unresolved",
         top_dense_score=top_score,
@@ -234,8 +223,8 @@ def _run_hybrid(
         return QueryRun(
             query=query,
             accepted=True,
-            article_ids=tuple(hit.article_id for hit in exact.hits),
-            candidate_article_ids=tuple(hit.article_id for hit in exact.hits),
+            article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
+            candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in exact.hits),
             query_key=exact.query_key,
             resolution_source="exact_alias",
         )
@@ -243,8 +232,8 @@ def _run_hybrid(
     return QueryRun(
         query=query,
         accepted=result.accepted,
-        article_ids=(tuple(hit.article_id for hit in result.hits) if result.accepted else ()),
-        candidate_article_ids=tuple(hit.article_id for hit in result.hits),
+        article_ids=(tuple(int(hit.news_id[1:]) for hit in result.hits) if result.accepted else ()),
+        candidate_article_ids=tuple(int(hit.news_id[1:]) for hit in result.hits),
         query_key=None,
         resolution_source="hybrid" if result.accepted else "unresolved",
         top_bm25_score=result.top_bm25_score,

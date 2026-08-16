@@ -15,6 +15,7 @@ from backend.app.errors import (
     IdempotencyConflictError,
     RepositoryNotReadyError,
     SearchIndexNotReadyError,
+    UnknownCategoryError,
     UnresolvedQueryError,
 )
 from backend.app.events.publisher import EventPublishError
@@ -30,6 +31,7 @@ from backend.app.routers.auth import (
 from backend.app.routers.auth import (
     router as auth_router,
 )
+from backend.app.routers.categories import router as categories_router
 from backend.app.routers.debug import router as debug_router
 from backend.app.routers.event import router as event_router
 from backend.app.routers.event_track import router as event_track_router
@@ -197,6 +199,21 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.exception_handler(UnknownCategoryError)
+    async def unknown_category_handler(
+        request: Request,
+        exc: UnknownCategoryError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": str(exc),
+                "error_code": "unknown_category",
+                "category": exc.category,
+                "path": request.url.path,
+            },
+        )
+
     app.include_router(health_router)
     app.include_router(auth_router)
     auth_dependency = [Depends(require_current_user_when_auth_enabled)]
@@ -205,6 +222,7 @@ def create_app() -> FastAPI:
     app.include_router(event_router, dependencies=auth_dependency)
     app.include_router(debug_router, dependencies=auth_dependency)
     app.include_router(personas_router, dependencies=auth_dependency)
+    app.include_router(categories_router, dependencies=auth_dependency)
     app.include_router(suggestions_router, dependencies=auth_dependency)
     app.include_router(articles_router, dependencies=auth_dependency)
     app.include_router(event_track_router, dependencies=auth_dependency)

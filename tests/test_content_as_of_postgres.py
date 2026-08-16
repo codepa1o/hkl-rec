@@ -6,7 +6,7 @@ import pytest
 
 from backend.app.config import get_settings
 from backend.app.repositories.connection import connect, parse_database_url
-from backend.app.repositories.content_dao import load_answer_event_counts_as_of
+from backend.app.repositories.content_dao import load_news_event_counts_as_of
 from backend.app.repositories.postgres import PostgresRuntimeRepository
 
 pytestmark = [
@@ -22,39 +22,54 @@ def test_as_of_popularity_excludes_future_impressions():
     settings = get_settings()
     connection = connect(parse_database_url(settings.database_url))
     try:
-        with connection.cursor() as cursor:
+        event_ts = 1_900_000_000
+        with connection.transaction(), connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT answer_id, event_ts
-                FROM user_event
-                WHERE derived_from_raw IS TRUE
-                  AND event_type = 'feed_impression'
-                  AND answer_id IS NOT NULL
-                ORDER BY event_ts ASC, event_id ASC
+                SELECT news_id
+                FROM mind_news
+                ORDER BY news_id
                 LIMIT 1
                 """
             )
-            event = cursor.fetchone()
-        answer_id = int(event["answer_id"])
-        event_ts = int(event["event_ts"])
-        before = load_answer_event_counts_as_of(
+            news_id = str(cursor.fetchone()["news_id"])
+            cursor.execute(
+                """
+                DELETE FROM user_event
+                WHERE external_event_id = 'as-of-popularity-fixture'
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_event (
+                    external_event_id, user_id, event_type, news_id, surface,
+                    derived_from_raw, source_confidence, event_ts
+                ) VALUES (
+                    'as-of-popularity-fixture', %s, 'feed_impression', %s,
+                    'test', TRUE, 'confirmed', %s
+                )
+                """,
+                (settings.default_demo_user_id, news_id, event_ts),
+            )
+        before = load_news_event_counts_as_of(
             connection,
-            [answer_id],
+            [news_id],
             as_of_ts=event_ts,
         )
-        after = load_answer_event_counts_as_of(
+        after = load_news_event_counts_as_of(
             connection,
-            [answer_id],
+            [news_id],
             as_of_ts=event_ts + 1,
         )
     finally:
         connection.close()
 
-    assert before.get(answer_id, {}).get("impression_count", 0) == 0
-    assert int(after[answer_id]["impression_count"]) >= 1
+    assert int(after[news_id]["impression_count"]) >= (
+        int(before.get(news_id, {}).get("impression_count", 0)) + 1
+    )
 
 
-def test_as_of_feed_excludes_future_created_answers():
+def test_as_of_feed_excludes_future_news():
     settings = get_settings()
     repository = PostgresRuntimeRepository(settings)
     response = repository.get_feed(
@@ -65,21 +80,20 @@ def test_as_of_feed_excludes_future_created_answers():
         include_sponsored=False,
         as_of_ts=1,
     )
-    answer_ids = [item.answer_id for item in response.items]
+    news_ids = [item.news_id for item in response.items]
     connection = connect(parse_database_url(settings.database_url))
     try:
-        if answer_ids:
-            placeholders = ",".join(["%s"] * len(answer_ids))
+        if news_ids:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    f"""
+                    """
                     SELECT COUNT(*) AS future_count
-                    FROM answer
-                    WHERE answer_id IN ({placeholders})
-                      AND create_ts IS NOT NULL
-                      AND create_ts > 1
+                    FROM mind_news_stats
+                    WHERE news_id = ANY(%s)
+                      AND first_seen_ts IS NOT NULL
+                      AND first_seen_ts > 1
                     """,
-                    tuple(answer_ids),
+                    (news_ids,),
                 )
                 future_count = int(cursor.fetchone()["future_count"])
         else:

@@ -49,6 +49,7 @@ def check_readiness(settings: Settings) -> HealthResponse:
     worker_rows: list[dict[str, Any]] = []
     oldest_outbox_age = 0
     ready = True
+    search_metadata: dict[str, Any] | None = None
 
     if settings.search_retrieval_mode == "hybrid_v1":
         try:
@@ -94,6 +95,37 @@ def check_readiness(settings: Settings) -> HealthResponse:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT 1 AS ready")
                     cursor.fetchone()
+                    cursor.execute(
+                        """
+                        SELECT normalized_fingerprint, news_count
+                        FROM mind_catalog_import
+                        ORDER BY imported_at DESC
+                        LIMIT 2
+                        """
+                    )
+                    catalog_rows = cursor.fetchall()
+                    if len(catalog_rows) != 1:
+                        raise RuntimeError(
+                            f"expected one active MIND catalog, found {len(catalog_rows)}"
+                        )
+                    catalog_fingerprint = str(catalog_rows[0]["normalized_fingerprint"])
+                    catalog_news_count = int(catalog_rows[0]["news_count"])
+                    cursor.execute("SELECT COUNT(*) AS count FROM mind_news")
+                    actual_news_count = int(cursor.fetchone()["count"])
+                    if actual_news_count != catalog_news_count:
+                        raise RuntimeError(
+                            "mind_news count disagrees with active catalog: "
+                            f"{actual_news_count} != {catalog_news_count}"
+                        )
+                    if search_metadata is not None and (
+                        search_metadata.get("source_fingerprint") != catalog_fingerprint
+                        or int(search_metadata.get("document_count") or -1) != catalog_news_count
+                    ):
+                        dependencies["search_index"] = DependencyHealth(
+                            status="error",
+                            detail="search artifact fingerprint/count disagrees with PostgreSQL catalog",
+                        )
+                        ready = False
                 outbox_counts = outbox_status_counts(connection)
                 worker_rows = worker_readiness_rows(connection)
                 oldest_outbox_age = oldest_pending_outbox_age_seconds(connection)

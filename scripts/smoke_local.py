@@ -127,7 +127,7 @@ def main() -> None:
         (item for item in feed["items"] if item.get("content_type") == "organic"),
         feed["items"][0],
     )
-    event_id = f"smoke-click-{user_id}-{feed['request_id']}-{first['article_id']}"
+    event_id = f"smoke-click-{user_id}-{feed['request_id']}-{first['news_id']}"
     event = post_json(
         args.base_url,
         "/event/track",
@@ -136,7 +136,7 @@ def main() -> None:
             "user_id": user_id,
             "event_type": "recommendation_click",
             "surface": "feed",
-            "article_id": first["article_id"],
+            "news_id": first["news_id"],
             "request_id": feed["request_id"],
         },
     )

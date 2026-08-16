@@ -44,7 +44,11 @@ RANKER_FEATURE_COLUMNS = (
 )
 
 
-def load_model(model_dir: str | None = None) -> lgb.Booster | None:
+def load_model(
+    model_dir: str | None = None,
+    *,
+    expected_normalized_fingerprint: str | None = None,
+) -> lgb.Booster | None:
     global _MODEL, _FEATURE_ORDER, _METADATA, _MODEL_SIGNATURE
     base = Path(model_dir or environment_value("NEWSREC_MODEL_DIR") or "build/mind_models")
     model_path = base / "lgb_ranker_v1.txt"
@@ -55,6 +59,11 @@ def load_model(model_dir: str | None = None) -> lgb.Booster | None:
 
     signature = (model_path.stat().st_mtime_ns, meta_path.stat().st_mtime_ns)
     if _MODEL is not None and signature == _MODEL_SIGNATURE:
+        if (
+            expected_normalized_fingerprint is not None
+            and _METADATA.get("normalized_fingerprint") != expected_normalized_fingerprint
+        ):
+            return None
         return _MODEL
 
     metadata = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -62,6 +71,11 @@ def load_model(model_dir: str | None = None) -> lgb.Booster | None:
     if metadata.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
         return None
     if features != list(RANKER_FEATURE_COLUMNS):
+        return None
+    if (
+        expected_normalized_fingerprint is not None
+        and metadata.get("normalized_fingerprint") != expected_normalized_fingerprint
+    ):
         return None
 
     _MODEL = lgb.Booster(model_file=str(model_path))
@@ -71,17 +85,22 @@ def load_model(model_dir: str | None = None) -> lgb.Booster | None:
     return _MODEL
 
 
-def loaded_model_metadata() -> dict[str, Any]:
-    load_model()
+def loaded_model_metadata(*, expected_normalized_fingerprint: str | None = None) -> dict[str, Any]:
+    if load_model(expected_normalized_fingerprint=expected_normalized_fingerprint) is None:
+        return {}
     return dict(_METADATA)
 
 
-def score_candidates(feature_dicts: list[dict[str, float]]) -> list[float] | None:
+def score_candidates(
+    feature_dicts: list[dict[str, float]],
+    *,
+    expected_normalized_fingerprint: str | None = None,
+) -> list[float] | None:
     """返回每个候选记录的预测点击概率。
 
     模型文件尚未训练时返回 None；调用方应回退到手工评分。
     """
-    model = load_model()
+    model = load_model(expected_normalized_fingerprint=expected_normalized_fingerprint)
     if model is None:
         return None
 
@@ -130,7 +149,7 @@ def build_feature_dict(
     default_ts = sum(default_topic_weight_map.get(tid, 0.0) for tid in topic_ids)
     topic_match = alpha * personalized + (1.0 - alpha) * default_ts
     query_boost = sum(query_topic_scores.get(tid, 0.0) for tid in topic_ids)
-    create_ts = int(article_row.get("create_ts") or 0)
+    create_ts = int(article_row.get("first_seen_ts") or 0)
     if now_ts is None:
         now_ts = _time.time()
     age_hours = max(0.0, (now_ts - create_ts) / 3600.0) if create_ts > 0 else 0.0

@@ -38,6 +38,7 @@ topic = Table(
     "topic",
     metadata,
     Column("topic_id", BigInteger, primary_key=True, autoincrement=False),
+    Column("topic_key", String(512), nullable=False, unique=True),
     Column("display_name", String(128)),
     Column("news_count", Integer, nullable=False, server_default=text("0")),
     Column("source", String(32), nullable=False, server_default=text("'mind_small'")),
@@ -62,7 +63,7 @@ app_user = Table(
     Column("followed_topic_ids_json", JSONB),
     Column("is_demo_user", Boolean, nullable=False, server_default=text("false")),
     Column("source", String(32), nullable=False, server_default=text("'mind_small'")),
-    comment="MIND-derived demo users and compatibility records.",
+    comment="Research users and MIND-derived profile identities.",
 )
 
 auth_user_id_sequence = Table(
@@ -123,8 +124,16 @@ feed_request = Table(
     Column("include_sponsored", Boolean, nullable=False),
     Column("experiment_arm", String(64), nullable=False),
     Column("as_of_ts", BigInteger),
+    Column("category", String(64)),
+    Column("session_id", String(128), nullable=False),
+    Column("page_number", Integer, nullable=False, server_default=text("0")),
+    Column("cursor_token", String(128)),
+    Column("returned_news_ids_json", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     Index("idx_feed_request_user_created", "user_id", "created_at"),
+    Index("uq_feed_request_cursor_token", "cursor_token", unique=True),
+    Index("idx_feed_request_session_page", "session_id", "page_number"),
+    Index("idx_feed_request_category", "category"),
     comment="Idempotency claim for feed loads that may reserve sponsored delivery.",
 )
 
@@ -141,12 +150,33 @@ mind_news = Table(
     Column("abstract_entities", JSONB, nullable=False),
     CheckConstraint("news_id ~ '^N[0-9]+$'", name="news_id"),
     CheckConstraint("jsonb_typeof(title_entities) = 'array'", name="title_entities_array"),
-    CheckConstraint(
-        "jsonb_typeof(abstract_entities) = 'array'", name="abstract_entities_array"
-    ),
+    CheckConstraint("jsonb_typeof(abstract_entities) = 'array'", name="abstract_entities_array"),
     Index("idx_mind_news_category", "category"),
     Index("idx_mind_news_subcategory", "subcategory"),
     comment="Canonical MIND news.tsv rows with exactly the eight source fields.",
+)
+
+mind_news_topic = Table(
+    "mind_news_topic",
+    metadata,
+    Column(
+        "news_id",
+        String(32),
+        ForeignKey("mind_news.news_id", name="fk_mind_news_topic_news", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "topic_id",
+        BigInteger,
+        ForeignKey("topic.topic_id", name="fk_mind_news_topic_topic", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("source_rank", SmallInteger, nullable=False),
+    PrimaryKeyConstraint("news_id", "topic_id"),
+    UniqueConstraint("news_id", "source_rank", name="uq_mind_news_topic_news_rank"),
+    CheckConstraint("source_rank IN (0, 1)", name="source_rank"),
+    Index("idx_mind_news_topic_topic", "topic_id", "news_id"),
+    comment="Exact category and parent-qualified subcategory links for canonical MIND news.",
 )
 
 mind_catalog_import = Table(

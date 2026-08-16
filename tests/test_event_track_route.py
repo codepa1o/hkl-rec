@@ -15,23 +15,25 @@ pytestmark = [
 ]
 
 
-def _first_feed_answer_id(client, user_id: int) -> int:
+def _first_feed_news_id(client, user_id: int) -> str:
     feed = client.get("/feed", params={"user_id": user_id, "page_size": 1}).json()
-    return int(feed["items"][0]["article_id"])
+    return str(feed["items"][0]["news_id"])
 
 
-def test_event_track_log_only_event_acks_without_profile_change(mysql_client, mysql_demo_user):
-    before = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+def test_event_track_log_only_event_acks_without_profile_change(
+    postgres_client, postgres_demo_user
+):
+    before = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
     base_score = float(before["behavior_score"])
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
 
-    r = mysql_client.post(
+    r = postgres_client.post(
         "/event/track",
         json={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "feed_impression",
             "surface": "home_feed",
-            "article_id": answer_id,
+            "news_id": news_id,
         },
     )
     assert r.status_code == 200, r.text
@@ -41,27 +43,27 @@ def test_event_track_log_only_event_acks_without_profile_change(mysql_client, my
     assert body["profile_updated"] is False
     assert body["behavior_score"] is None
 
-    after = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+    after = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
     assert float(after["behavior_score"]) == pytest.approx(base_score, abs=1e-6)
 
 
-def test_event_track_impression_event_id_is_idempotent(mysql_client, mysql_demo_user):
+def test_event_track_impression_event_id_is_idempotent(postgres_client, postgres_demo_user):
     from backend.app.config import get_settings
     from backend.app.repositories.connection import connect, parse_database_url
 
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
-    event_id = f"test-impression-{mysql_demo_user}-{answer_id}"
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
+    event_id = f"test-impression-{postgres_demo_user}-{news_id}"
     payload = {
         "event_id": event_id,
-        "user_id": mysql_demo_user,
+        "user_id": postgres_demo_user,
         "event_type": "feed_impression",
         "surface": "home_feed",
-        "article_id": answer_id,
+        "news_id": news_id,
         "request_id": "test-request",
     }
 
-    first = mysql_client.post("/event/track", json=payload)
-    second = mysql_client.post("/event/track", json=payload)
+    first = postgres_client.post("/event/track", json=payload)
+    second = postgres_client.post("/event/track", json=payload)
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
 
@@ -79,19 +81,19 @@ def test_event_track_impression_event_id_is_idempotent(mysql_client, mysql_demo_
     assert int(row["event_count"]) == 1
 
 
-def test_event_track_upvote_mutates_behavior_score(mysql_client, mysql_demo_user):
+def test_event_track_upvote_mutates_behavior_score(postgres_client, postgres_demo_user):
     settings = Settings()
-    before = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+    before = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
     base_score = float(before["behavior_score"])
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
 
-    r = mysql_client.post(
+    r = postgres_client.post(
         "/event/track",
         json={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "upvote",
             "surface": "home_feed",
-            "article_id": answer_id,
+            "news_id": news_id,
         },
     )
     assert r.status_code == 200, r.text
@@ -104,25 +106,27 @@ def test_event_track_upvote_mutates_behavior_score(mysql_client, mysql_demo_user
         base_score + settings.recommendation_click_behavior_delta, abs=1e-3
     )
 
-    after = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
-    assert after["recent_clicked_articles"][0]["article_id"] == answer_id
+    after = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
+    assert after["recent_clicked_news"][0]["news_id"] == news_id
+    expected_title = postgres_client.get(f"/articles/{news_id}").json()["title"]
+    assert after["recent_clicked_news"][0]["title"] == expected_title
 
 
-def test_recommendation_click_route_uses_article_id(mysql_client, mysql_demo_user):
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
-    r = mysql_client.post(
+def test_recommendation_click_route_uses_news_id(postgres_client, postgres_demo_user):
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
+    r = postgres_client.post(
         "/event/recommendation_click",
-        json={"user_id": mysql_demo_user, "article_id": answer_id, "debug": True},
+        json={"user_id": postgres_demo_user, "news_id": news_id, "debug": True},
     )
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
 
-def test_event_track_feed_impression_requires_article_id(mysql_client, mysql_demo_user):
-    response = mysql_client.post(
+def test_event_track_feed_impression_requires_news_id(postgres_client, postgres_demo_user):
+    response = postgres_client.post(
         "/event/track",
         json={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "feed_impression",
             "surface": "home_feed",
         },
@@ -137,7 +141,7 @@ def test_event_track_replay_timestamp_requires_debug(unwired_client):
             "user_id": 7248,
             "event_type": "feed_impression",
             "surface": "feed",
-            "article_id": 1,
+            "news_id": "N1",
             "replay_event_ts": 100,
         },
     )
@@ -145,44 +149,44 @@ def test_event_track_replay_timestamp_requires_debug(unwired_client):
     assert response.status_code == 422
 
 
-def test_event_track_duplicate_upvote_is_idempotent(mysql_client, mysql_demo_user):
+def test_event_track_duplicate_upvote_is_idempotent(postgres_client, postgres_demo_user):
     settings = Settings()
-    before = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
+    before = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
     payload = {
-        "event_id": f"duplicate-upvote-{mysql_demo_user}-{answer_id}",
-        "user_id": mysql_demo_user,
+        "event_id": f"duplicate-upvote-{postgres_demo_user}-{news_id}",
+        "user_id": postgres_demo_user,
         "event_type": "upvote",
         "surface": "feed",
-        "article_id": answer_id,
+        "news_id": news_id,
     }
 
-    first = mysql_client.post("/event/track", json=payload)
-    second = mysql_client.post("/event/track", json=payload)
+    first = postgres_client.post("/event/track", json=payload)
+    second = postgres_client.post("/event/track", json=payload)
 
     assert first.status_code == 200
     assert second.status_code == 200
-    after = mysql_client.get("/debug/profile", params={"user_id": mysql_demo_user}).json()
+    after = postgres_client.get("/debug/profile", params={"user_id": postgres_demo_user}).json()
     assert float(after["behavior_score"]) - float(before["behavior_score"]) == pytest.approx(
         settings.recommendation_click_behavior_delta,
         abs=1e-3,
     )
 
 
-def test_event_track_persists_dwell_duration(mysql_client, mysql_demo_user):
+def test_event_track_persists_dwell_duration(postgres_client, postgres_demo_user):
     from backend.app.config import get_settings
     from backend.app.repositories.connection import connect, parse_database_url
 
-    answer_id = _first_feed_answer_id(mysql_client, mysql_demo_user)
-    event_id = f"dwell-{mysql_demo_user}-{answer_id}"
-    response = mysql_client.post(
+    news_id = _first_feed_news_id(postgres_client, postgres_demo_user)
+    event_id = f"dwell-{postgres_demo_user}-{news_id}"
+    response = postgres_client.post(
         "/event/track",
         json={
             "event_id": event_id,
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "dwell",
             "surface": "feed",
-            "article_id": answer_id,
+            "news_id": news_id,
             "dwell_ms": 4321,
         },
     )
@@ -202,39 +206,39 @@ def test_event_track_persists_dwell_duration(mysql_client, mysql_demo_user):
     assert int(row["dwell_ms"]) == 4321
 
 
-def test_event_id_conflicting_payload_returns_409(mysql_client, mysql_demo_user):
-    first_answer = _first_feed_answer_id(mysql_client, mysql_demo_user)
-    feed = mysql_client.get(
+def test_event_id_conflicting_payload_returns_409(postgres_client, postgres_demo_user):
+    first_news = _first_feed_news_id(postgres_client, postgres_demo_user)
+    feed = postgres_client.get(
         "/feed",
         params={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "page_size": 2,
             "include_sponsored": "false",
         },
     ).json()
-    second_answer = next(
-        int(item["article_id"]) for item in feed["items"] if int(item["article_id"]) != first_answer
+    second_news = next(
+        str(item["news_id"]) for item in feed["items"] if str(item["news_id"]) != first_news
     )
-    event_id = f"conflicting-event-{mysql_demo_user}"
+    event_id = f"conflicting-event-{postgres_demo_user}"
 
-    first = mysql_client.post(
+    first = postgres_client.post(
         "/event/track",
         json={
             "event_id": event_id,
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "feed_impression",
             "surface": "feed",
-            "article_id": first_answer,
+            "news_id": first_news,
         },
     )
-    conflict = mysql_client.post(
+    conflict = postgres_client.post(
         "/event/track",
         json={
             "event_id": event_id,
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "event_type": "feed_impression",
             "surface": "feed",
-            "article_id": second_answer,
+            "news_id": second_news,
         },
     )
 

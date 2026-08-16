@@ -73,11 +73,11 @@ def parse_recent_clicks(value: Any) -> list[ProfileRecentClick]:
     rows = parse_json(value, [])
     return [
         ProfileRecentClick(
-            article_id=int(row["answer_id"]),
+            news_id=str(row["news_id"]),
             click_ts=int(row.get("click_ts") or 0),
         )
         for row in rows
-        if "answer_id" in row
+        if "news_id" in row
     ]
 
 
@@ -97,14 +97,14 @@ def parse_recent_queries(value: Any) -> list[ProfileRecentQuery]:
 
 
 def add_feed_candidate(
-    candidates: dict[int, dict[str, Any]],
-    answer_id: int,
+    candidates: dict[str, dict[str, Any]],
+    news_id: str,
     source: str,
     is_fallback: bool,
     raw_base_score: float,
 ) -> None:
     candidate = candidates.setdefault(
-        answer_id,
+        news_id,
         {
             "sources": set(),
             "is_fallback": is_fallback,

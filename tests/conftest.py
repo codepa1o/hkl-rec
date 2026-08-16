@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -59,8 +59,8 @@ def _database_url() -> str:
 
 
 @pytest.fixture
-def mysql_demo_user() -> int:
-    """重置已配置的第一个演示画像，使可变状态保持可预测。"""
+def postgres_demo_user() -> int:
+    """重置 PostgreSQL 中的默认研究用户，使可变状态保持可预测。"""
     if not _database_url():
         pytest.skip("NEWSREC_DATABASE_URL not set")
     subprocess.run(
@@ -68,18 +68,11 @@ def mysql_demo_user() -> int:
         check=True,
         cwd=ROOT,
     )
-    seed_dir = Path(os.environ.get("NEWSREC_DEMO_SEED_DIR", "build/mind_demo_world"))
-    if not seed_dir.is_absolute():
-        seed_dir = ROOT / seed_dir
-    seed_path = seed_dir / "demo_user_profile_seed.json"
-    if not seed_path.is_file():
-        seed_path = ROOT / "build" / "mind_demo_fixture" / "demo_user_profile_seed.json"
-    seed = json.loads(seed_path.read_text(encoding="utf-8"))
-    return int(seed["user_id"])
+    return int(os.environ.get("NEWSREC_DEFAULT_DEMO_USER_ID", "7001"))
 
 
 @pytest.fixture
-def mysql_client() -> Iterator[TestClient]:
+def postgres_client() -> Iterator[TestClient]:
     """由真实 PostgresRuntimeRepository 支持的 TestClient。
 
     测试进程启动时必须设置 NEWSREC_DATABASE_URL。
@@ -89,6 +82,7 @@ def mysql_client() -> Iterator[TestClient]:
     from backend.app.config import get_settings
     from backend.app.dependencies import (
         close_runtime_repository,
+        get_app_settings,
         get_auth_repository,
         get_runtime_repository,
     )
@@ -97,7 +91,13 @@ def mysql_client() -> Iterator[TestClient]:
     get_settings.cache_clear()
     get_runtime_repository.cache_clear()
     get_auth_repository.cache_clear()
-    with TestClient(create_app()) as client:
+    app = create_app()
+    app.dependency_overrides[get_app_settings] = lambda: replace(
+        get_settings(),
+        auth_secret_key="",
+        allow_unauthenticated_research_api=True,
+    )
+    with TestClient(app) as client:
         yield client
     close_runtime_repository()
     get_runtime_repository.cache_clear()

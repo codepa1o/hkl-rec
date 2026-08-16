@@ -116,10 +116,13 @@ def test_search_numeric_query_key_reaches_repository():
             query_key=payload.query_key or "",
             items=[
                 SearchItem(
-                    article_id=1,
-                    headline="t",
+                    news_id="N1",
+                    title="t",
                     abstract="s",
+                    url="https://example.com/1",
                     source_domain="example.com",
+                    category="news",
+                    subcategory="local",
                     categories=[TopicCard(topic_id=3, display_name="Falafel")],
                     scores=SearchItemScores(
                         topic_match_score=1.0,

@@ -1,5 +1,6 @@
 import { Activity, BookOpen, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { getDebugProfile } from "../api/client";
 import type { DebugProfileResponse } from "../api/types";
 import { localizeInterfaceError } from "../localization";
@@ -74,17 +75,23 @@ export default function ProfileDebugPanel({ userId, refreshTick }: Props) {
         {sortedWeights.length === 0 && <p className="zr-muted-copy">阅读后将逐渐形成兴趣画像。</p>}
       </div>
 
-      {data.recent_clicked_articles.length > 0 && (
+      {data.recent_clicked_news.length > 0 && (
         <div className="zr-interest-section">
           <div className="zr-interest-section__title">
             <BookOpen size={15} />
             最近阅读
           </div>
           <div className="zr-recent-list">
-            {data.recent_clicked_articles.slice(0, 4).map((article, index) => (
-              <div key={`${article.article_id}-${index}`} className="zr-recent-row">
-                <span>文章 {article.article_id}</span>
-                <time>{new Date(article.click_ts * 1000).toLocaleDateString("zh-CN")}</time>
+            {data.recent_clicked_news.map((news, index) => (
+              <div key={`${news.news_id}-${index}`} className="zr-recent-row">
+                <Link
+                  to={`/articles/${news.news_id}`}
+                  className="zr-recent-link"
+                  title={news.title ?? news.news_id}
+                >
+                  {news.title ?? news.news_id}
+                </Link>
+                <time>{new Date(news.click_ts * 1000).toLocaleDateString("zh-CN")}</time>
               </div>
             ))}
           </div>

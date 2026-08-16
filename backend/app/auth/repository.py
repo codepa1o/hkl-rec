@@ -103,7 +103,7 @@ class PostgresAuthRepository:
                 cursor.execute(
                     "INSERT INTO user_profile "
                     "(user_id, cold_start_seed_key, topic_weights_json, "
-                    "recent_clicked_answers_json, recent_queries_json, behavior_score, notes) "
+                    "recent_clicked_news_json, recent_queries_json, behavior_score, notes) "
                     "SELECT %s, seed_key, topic_weights_json, '[]'::jsonb, '[]'::jsonb, 0, "
                     "'registered cold-start profile' FROM system_profile_seed WHERE seed_key = %s",
                     (user_id, self._cold_start_seed_key),

@@ -8,6 +8,7 @@ import pytest
 from backend.app.repositories.connection import connect, parse_database_url
 from scripts.import_mind_catalog import (
     MindCatalogImportError,
+    _assert_replacement_has_no_removed_news_references,
     import_catalog,
     parse_entity_array,
     prepare_catalog,
@@ -68,6 +69,14 @@ def test_prepare_catalog_preserves_news_and_uses_only_train_outcomes(
     assert prepared.train_request_count == 2
     assert prepared.train_impression_count == 4
     assert prepared.train_click_count == 3
+    topics = {row.key: row for row in prepared.topics}
+    assert topics["category:News"].news_count == 1
+    assert topics["subcategory:Sports/Golf"].display_name == "Golf"
+    assert topics["subcategory:Sports/Golf"].news_count == 1
+    assert len(prepared.news_topics) == 6
+    mappings = {(row.news_id, row.source_rank): row.topic_id for row in prepared.news_topics}
+    assert mappings[("N2", 0)] == topics["category:Sports"].topic_id
+    assert mappings[("N2", 1)] == topics["subcategory:Sports/Golf"].topic_id
 
     news = {row.news_id: row for row in prepared.news}
     assert news["N1"].title == "One"
@@ -95,6 +104,22 @@ def test_parse_entity_array_rejects_non_object_arrays(raw: str) -> None:
         parse_entity_array(raw, "title_entities")
 
 
+def test_catalog_replacement_reports_referenced_removed_news() -> None:
+    class Cursor:
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchone(self) -> dict[str, int]:
+            return {
+                "user_events": 2,
+                "sponsored_creatives": 1,
+                "sponsored_deliveries": 0,
+            }
+
+    with pytest.raises(MindCatalogImportError, match="user_events=2"):
+        _assert_replacement_has_no_removed_news_references(Cursor())
+
+
 @pytest.mark.postgres
 def test_import_is_idempotent_records_fingerprint_and_preserves_events(
     normalized_catalog: Path,
@@ -106,7 +131,8 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
     try:
         with connection.transaction(), connection.cursor() as cursor:
             cursor.execute("SELECT current_database() AS database_name")
-            assert str(cursor.fetchone()["database_name"]).endswith("_test")
+            if not str(cursor.fetchone()["database_name"]).endswith("_test"):
+                pytest.skip("destructive importer integration requires a database ending in _test")
             cursor.execute("DELETE FROM user_event")
             cursor.execute("DELETE FROM sponsored_delivery")
             cursor.execute("DELETE FROM sponsored_creative")
@@ -127,17 +153,36 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
                 """
             )
 
+        prepared = prepare_catalog(normalized_catalog)
         first = import_catalog(normalized_catalog, connection, replace_catalog=True)
         second = import_catalog(normalized_catalog, connection)
         assert first == second
         assert first.news_rows == 3
         assert first.stats_rows == 3
+        assert first.topic_rows == len(prepared.topics)
+        assert first.news_topic_rows == 6
 
         with connection.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS count FROM mind_news")
             assert cursor.fetchone()["count"] == 3
             cursor.execute("SELECT COUNT(*) AS count FROM user_event")
             assert cursor.fetchone()["count"] == 1
+            cursor.execute("SELECT COUNT(*) AS count FROM mind_news_topic")
+            assert cursor.fetchone()["count"] == 6
+            cursor.execute(
+                """
+                SELECT MIN(topic_count) AS minimum, MAX(topic_count) AS maximum
+                FROM (
+                    SELECT news_id, COUNT(*) AS topic_count
+                    FROM mind_news_topic
+                    GROUP BY news_id
+                ) AS counts
+                """
+            )
+            counts = cursor.fetchone()
+            assert (counts["minimum"], counts["maximum"]) == (2, 2)
+            cursor.execute("SELECT COUNT(*) AS count FROM query_topic_map")
+            assert cursor.fetchone()["count"] == len(prepared.topics)
             cursor.execute(
                 """
                 SELECT normalized_fingerprint, news_count

@@ -27,26 +27,12 @@ def new_event_id() -> str:
     return f"evt-{uuid.uuid4().hex}"
 
 
-def _migrate_v2_article_id(value: Any) -> Any:
-    if not isinstance(value, dict):
-        return value
-    if (
-        int(value.get("schema_version", 3)) <= 2
-        and "article_id" not in value
-        and "answer_id" in value
-    ):
-        migrated = dict(value)
-        migrated["article_id"] = migrated.pop("answer_id")
-        return migrated
-    return value
-
-
 class UserEventMessage(ApiModel):
-    schema_version: int = 3
+    schema_version: Literal[4] = 4
     event_id: str = Field(default_factory=new_event_id)
     event_type: UserEventType
     user_id: int
-    article_id: int | None = None
+    news_id: str | None = Field(None, pattern=r"^N[0-9]+$")
     query_key: str | None = None
     query_text: str | None = None
     request_id: str | None = None
@@ -59,11 +45,6 @@ class UserEventMessage(ApiModel):
     source: str = "api"
     dwell_ms: int | None = None
     debug: dict[str, Any] | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_v2_payload(cls, value: Any) -> Any:
-        return _migrate_v2_article_id(value)
 
     @model_validator(mode="after")
     def validate_dwell(self) -> UserEventMessage:
@@ -93,7 +74,7 @@ class UserEventMessage(ApiModel):
             "dwell_ms": self.dwell_ms,
             "source": self.source,
         }
-        payload["answer_id" if self.schema_version <= 2 else "article_id"] = self.article_id
+        payload["news_id"] = self.news_id
         encoded = json.dumps(
             payload,
             sort_keys=True,
@@ -104,10 +85,10 @@ class UserEventMessage(ApiModel):
 
 
 class TrainingInteractionMessage(ApiModel):
-    schema_version: int = 3
+    schema_version: Literal[4] = 4
     example_id: str
     user_id: int
-    article_id: int | None = None
+    news_id: str | None = Field(None, pattern=r"^N[0-9]+$")
     query_key: str | None = None
     request_id: str | None = None
     surface: str | None = None
@@ -118,11 +99,6 @@ class TrainingInteractionMessage(ApiModel):
     event_type: UserEventType
     event_ts: int
     source: str = "profile-consumer"
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_v2_payload(cls, value: Any) -> Any:
-        return _migrate_v2_article_id(value)
 
     @property
     def partition_key(self) -> str:

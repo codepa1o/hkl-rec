@@ -15,9 +15,22 @@ from backend.app.repositories.search_signal import (
 )
 from backend.app.schemas.profile import (
     DebugProfileResponse,
+    ProfileRecentClick,
     ProfileRecentQuery,
     VectorSummary,
 )
+
+
+def attach_recent_click_titles(
+    recent_clicks: list[ProfileRecentClick],
+    news_rows: dict[str, dict[str, Any]],
+) -> list[ProfileRecentClick]:
+    return [
+        click.model_copy(
+            update={"title": str(news_rows.get(click.news_id, {}).get("title") or click.news_id)}
+        )
+        for click in recent_clicks
+    ]
 
 
 def fetch_profile_row(
@@ -34,7 +47,7 @@ def fetch_profile_row(
               user_id,
               cold_start_seed_key,
               topic_weights_json,
-              recent_clicked_answers_json,
+              recent_clicked_news_json,
               recent_queries_json,
               behavior_score
             FROM user_profile
@@ -51,14 +64,14 @@ def fetch_profile_row(
 
 def profile_from_row(row: dict[str, Any]) -> DebugProfileResponse:
     topic_weights = parse_topic_weights(row.get("topic_weights_json"))
-    recent_clicks = parse_recent_clicks(row.get("recent_clicked_answers_json"))
+    recent_clicks = parse_recent_clicks(row.get("recent_clicked_news_json"))
     recent_queries = parse_recent_queries(row.get("recent_queries_json"))
     return DebugProfileResponse(
         user_id=int(row["user_id"]),
         cold_start_seed_key=row.get("cold_start_seed_key") or "cold_start_default",
         behavior_score=float(row.get("behavior_score") or 0.0),
         topic_weights=topic_weights,
-        recent_clicked_articles=recent_clicks,
+        recent_clicked_news=recent_clicks,
         recent_queries=recent_queries,
         vector_summary=VectorSummary(
             vector_key_count=len(topic_weights),

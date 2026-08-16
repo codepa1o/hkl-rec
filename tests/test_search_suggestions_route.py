@@ -13,8 +13,8 @@ pytestmark = [
 ]
 
 
-def test_search_suggestions_returns_submit_ready_query_keys(mysql_client, mysql_demo_user):
-    r = mysql_client.get("/search/suggestions", params={"limit": 12})
+def test_search_suggestions_returns_submit_ready_query_keys(postgres_client, postgres_demo_user):
+    r = postgres_client.get("/search/suggestions", params={"limit": 12})
     assert r.status_code == 200, r.text
     body = r.json()
     assert isinstance(body["items"], list)
@@ -26,10 +26,10 @@ def test_search_suggestions_returns_submit_ready_query_keys(mysql_client, mysql_
 
     # 第一个建议项的 query_key 必须可由 POST /search 直接使用。
     query_key = body["items"][0]["query_key"]
-    search = mysql_client.post(
+    search = postgres_client.post(
         "/search",
         json={
-            "user_id": mysql_demo_user,
+            "user_id": postgres_demo_user,
             "query_key": query_key,
             "page_size": 5,
             "debug": True,

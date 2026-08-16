@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from backend.app.errors import IdempotencyConflictError
-from backend.app.repositories._utils import placeholders
+from backend.app.repositories._utils import json_text, placeholders
 from backend.app.repositories.sponsored import (
     expected_spend_micros,
     sponsored_score,
@@ -18,7 +18,7 @@ class SponsoredCandidate:
     campaign_id: int
     campaign_name: str
     creative_id: int
-    answer_id: int
+    news_id: str
     bid_micros: int
     predicted_ctr: float
     quality_score: float
@@ -26,11 +26,11 @@ class SponsoredCandidate:
 
     @property
     def score(self) -> float:
-        return sponsored_score(self.bid_micros, self.predicted_ctr, self.quality_score)
+        return float(sponsored_score(self.bid_micros, self.predicted_ctr, self.quality_score))
 
     @property
     def expected_spend_micros(self) -> int:
-        return expected_spend_micros(self.bid_micros, self.predicted_ctr)
+        return int(expected_spend_micros(self.bid_micros, self.predicted_ctr))
 
 
 @dataclass(frozen=True)
@@ -41,11 +41,19 @@ class SponsoredDelivery:
     campaign_id: int
     campaign_name: str
     creative_id: int
-    answer_id: int
+    news_id: str
     slot_position: int
     expected_spend_micros: int
     sponsored_score: float
     target_topic_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class FeedRequestClaim:
+    is_new: bool
+    session_id: str
+    page_number: int
+    next_cursor: str | None
 
 
 def claim_feed_request(
@@ -58,8 +66,58 @@ def claim_feed_request(
     include_sponsored: bool,
     experiment_arm: str,
     as_of_ts: int | None,
-) -> bool:
+    category: str | None = None,
+    cursor_token: str | None = None,
+) -> FeedRequestClaim:
     with connection.cursor() as cursor:
+        if cursor_token is None:
+            session_id = request_id
+            page_number = 0
+        else:
+            cursor.execute(
+                """
+                SELECT
+                  session_id,
+                  page_number,
+                  user_id,
+                  page_size,
+                  debug,
+                  include_sponsored,
+                  experiment_arm,
+                  as_of_ts,
+                  category
+                FROM feed_request
+                WHERE cursor_token = %s
+                FOR UPDATE
+                """,
+                (cursor_token,),
+            )
+            parent = cursor.fetchone()
+            if parent is None:
+                raise IdempotencyConflictError("feed cursor is invalid or expired")
+            parent_shape = (
+                int(parent["user_id"]),
+                int(parent["page_size"]),
+                bool(parent["debug"]),
+                bool(parent["include_sponsored"]),
+                str(parent["experiment_arm"]),
+                int(parent["as_of_ts"]) if parent.get("as_of_ts") is not None else None,
+                str(parent["category"]) if parent.get("category") is not None else None,
+            )
+            parent_requested_shape = (
+                user_id,
+                page_size,
+                debug,
+                include_sponsored,
+                experiment_arm,
+                as_of_ts,
+                category,
+            )
+            if parent_shape != parent_requested_shape:
+                raise IdempotencyConflictError("feed cursor reused with incompatible parameters")
+            session_id = str(parent["session_id"])
+            page_number = int(parent["page_number"]) + 1
+
         cursor.execute(
             """
             INSERT INTO feed_request (
@@ -69,9 +127,13 @@ def claim_feed_request(
               debug,
               include_sponsored,
               experiment_arm,
-              as_of_ts
+              as_of_ts,
+              category,
+              session_id,
+              page_number,
+              returned_news_ids_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '[]'::jsonb)
             ON CONFLICT (request_id) DO NOTHING
             """,
             (
@@ -82,11 +144,19 @@ def claim_feed_request(
                 include_sponsored,
                 experiment_arm,
                 as_of_ts,
+                category,
+                session_id,
+                page_number,
             ),
         )
         inserted = int(cursor.rowcount) == 1
         if inserted:
-            return True
+            return FeedRequestClaim(
+                is_new=True,
+                session_id=session_id,
+                page_number=page_number,
+                next_cursor=None,
+            )
         cursor.execute(
             """
             SELECT
@@ -95,7 +165,11 @@ def claim_feed_request(
               debug,
               include_sponsored,
               experiment_arm,
-              as_of_ts
+              as_of_ts,
+              category,
+              session_id,
+              page_number,
+              cursor_token
             FROM feed_request
             WHERE request_id = %s
             FOR UPDATE
@@ -112,20 +186,87 @@ def claim_feed_request(
         bool(row["include_sponsored"]),
         str(row["experiment_arm"]),
         int(row["as_of_ts"]) if row.get("as_of_ts") is not None else None,
+        str(row["category"]) if row.get("category") is not None else None,
+        str(row["session_id"]),
+        int(row["page_number"]),
     )
-    requested_shape = (
+    existing_requested_shape = (
         user_id,
         page_size,
         debug,
         include_sponsored,
         experiment_arm,
         as_of_ts,
+        category,
+        session_id,
+        page_number,
     )
-    if existing_shape != requested_shape:
+    if existing_shape != existing_requested_shape:
         raise IdempotencyConflictError(
             f"request_id reused with incompatible feed parameters: {request_id}"
         )
-    return False
+    return FeedRequestClaim(
+        is_new=False,
+        session_id=session_id,
+        page_number=page_number,
+        next_cursor=str(row["cursor_token"]) if row.get("cursor_token") else None,
+    )
+
+
+def load_feed_session_news_ids(
+    connection: Any,
+    *,
+    session_id: str,
+    exclude_request_id: str | None = None,
+) -> set[str]:
+    params: list[object] = [session_id]
+    exclude_clause = ""
+    if exclude_request_id is not None:
+        exclude_clause = "AND request_id <> %s"
+        params.append(exclude_request_id)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT DISTINCT returned.news_id
+            FROM feed_request
+            CROSS JOIN LATERAL jsonb_array_elements_text(
+              returned_news_ids_json
+            ) AS returned(news_id)
+            WHERE session_id = %s
+              {exclude_clause}
+            """,
+            tuple(params),
+        )
+        return {str(row["news_id"]) for row in cursor.fetchall()}
+
+
+def complete_feed_request(
+    connection: Any,
+    *,
+    request_id: str,
+    news_ids: list[str],
+    next_cursor: str | None,
+) -> str | None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE feed_request
+            SET
+              returned_news_ids_json = CASE
+                WHEN jsonb_array_length(returned_news_ids_json) = 0
+                  THEN %s::jsonb
+                ELSE returned_news_ids_json
+              END,
+              cursor_token = COALESCE(cursor_token, %s)
+            WHERE request_id = %s
+            RETURNING cursor_token
+            """,
+            (json_text(news_ids), next_cursor, request_id),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError(f"feed request disappeared before completion: {request_id}")
+    return str(row["cursor_token"]) if row.get("cursor_token") else None
 
 
 def load_sponsored_deliveries_for_request(
@@ -144,7 +285,7 @@ def load_sponsored_deliveries_for_request(
               sd.campaign_id,
               sc.campaign_name,
               sd.creative_id,
-              sd.answer_id,
+              sd.news_id,
               sd.slot_position,
               sd.expected_spend_micros,
               scr.bid_micros,
@@ -168,7 +309,7 @@ def load_sponsored_deliveries_for_request(
               sd.campaign_id,
               sc.campaign_name,
               sd.creative_id,
-              sd.answer_id,
+              sd.news_id,
               sd.slot_position,
               sd.expected_spend_micros,
               scr.bid_micros,
@@ -187,7 +328,7 @@ def load_sponsored_deliveries_for_request(
             campaign_id=int(row["campaign_id"]),
             campaign_name=str(row["campaign_name"]),
             creative_id=int(row["creative_id"]),
-            answer_id=int(row["answer_id"]),
+            news_id=str(row["news_id"]),
             slot_position=int(row["slot_position"]),
             expected_spend_micros=int(row["expected_spend_micros"]),
             sponsored_score=sponsored_score(
@@ -210,10 +351,13 @@ def load_sponsored_candidates(
     target_topic_ids: list[int],
     now_ts: int,
     limit: int = 20,
+    category: str | None = None,
 ) -> list[SponsoredCandidate]:
     if not target_topic_ids:
         return []
     topic_placeholders = placeholders(target_topic_ids)
+    category_clause = "AND news.category = %s" if category is not None else ""
+    category_params: tuple[object, ...] = (category,) if category is not None else ()
     budget_date = datetime.fromtimestamp(now_ts, UTC).date()
     with connection.cursor() as cursor:
         cursor.execute(
@@ -222,7 +366,7 @@ def load_sponsored_candidates(
               sc.campaign_id,
               sc.campaign_name,
               scr.creative_id,
-              scr.answer_id,
+              scr.news_id,
               scr.bid_micros,
               scr.predicted_ctr,
               scr.quality_score,
@@ -235,6 +379,8 @@ def load_sponsored_candidates(
               ON sct.campaign_id = sc.campaign_id
             JOIN sponsored_creative scr
               ON scr.campaign_id = sc.campaign_id
+            JOIN mind_news AS news
+              ON news.news_id = scr.news_id
             LEFT JOIN sponsored_campaign_daily_state daily
               ON daily.campaign_id = sc.campaign_id
              AND daily.budget_date = %s
@@ -247,6 +393,7 @@ def load_sponsored_candidates(
               AND sc.start_ts <= %s
               AND sc.end_ts >= %s
               AND sct.topic_id IN ({topic_placeholders})
+              {category_clause}
               AND COALESCE(daily.expected_spend_micros, 0) < sc.daily_budget_micros
               AND COALESCE(frequency.served_impression_count, 0)
                     < sc.frequency_cap_per_user_per_day
@@ -254,7 +401,7 @@ def load_sponsored_candidates(
               sc.campaign_id,
               sc.campaign_name,
               scr.creative_id,
-              scr.answer_id,
+              scr.news_id,
               scr.bid_micros,
               scr.predicted_ctr,
               scr.quality_score
@@ -270,6 +417,7 @@ def load_sponsored_candidates(
                 now_ts,
                 now_ts,
                 *target_topic_ids,
+                *category_params,
                 limit,
             ),
         )
@@ -279,7 +427,7 @@ def load_sponsored_candidates(
             campaign_id=int(row["campaign_id"]),
             campaign_name=str(row["campaign_name"]),
             creative_id=int(row["creative_id"]),
-            answer_id=int(row["answer_id"]),
+            news_id=str(row["news_id"]),
             bid_micros=int(row["bid_micros"]),
             predicted_ctr=float(row["predicted_ctr"]),
             quality_score=float(row["quality_score"]),
@@ -314,7 +462,7 @@ def reserve_sponsored_delivery(
               sc.pacing_mode,
               sc.frequency_cap_per_user_per_day,
               scr.status AS creative_status,
-              scr.answer_id,
+              scr.news_id,
               scr.bid_micros,
               scr.predicted_ctr,
               scr.quality_score
@@ -335,7 +483,7 @@ def reserve_sponsored_delivery(
             or row["creative_status"] != "active"
             or int(row["start_ts"]) > now_ts
             or int(row["end_ts"]) < now_ts
-            or int(row["answer_id"]) != candidate.answer_id
+            or str(row["news_id"]) != candidate.news_id
         ):
             return None
 
@@ -414,7 +562,7 @@ def reserve_sponsored_delivery(
               user_id,
               campaign_id,
               creative_id,
-              answer_id,
+              news_id,
               slot_position,
               budget_date,
               expected_spend_micros,
@@ -428,7 +576,7 @@ def reserve_sponsored_delivery(
                 user_id,
                 candidate.campaign_id,
                 candidate.creative_id,
-                candidate.answer_id,
+                candidate.news_id,
                 slot_position,
                 budget_date,
                 expected_spend,
@@ -465,7 +613,7 @@ def reserve_sponsored_delivery(
         campaign_id=candidate.campaign_id,
         campaign_name=str(row["campaign_name"]),
         creative_id=candidate.creative_id,
-        answer_id=candidate.answer_id,
+        news_id=candidate.news_id,
         slot_position=slot_position,
         expected_spend_micros=expected_spend,
         sponsored_score=sponsored_score(bid_micros, predicted_ctr, quality_score),
@@ -478,7 +626,7 @@ def load_sponsored_attribution(
     *,
     delivery_id: str,
     user_id: int,
-    article_id: int,
+    news_id: str,
     for_update: bool = False,
 ) -> dict[str, Any]:
     lock_clause = " FOR UPDATE" if for_update else ""
@@ -491,7 +639,7 @@ def load_sponsored_attribution(
               user_id,
               campaign_id,
               creative_id,
-              answer_id,
+              news_id,
               budget_date,
               confirmed_impression_ts,
               clicked_ts
@@ -504,8 +652,8 @@ def load_sponsored_attribution(
         row = cursor.fetchone()
     if row is None:
         raise ValueError(f"unknown sponsored_delivery_id: {delivery_id}")
-    if int(row["user_id"]) != user_id or int(row["answer_id"]) != article_id:
-        raise ValueError("sponsored delivery does not match user_id and article_id")
+    if int(row["user_id"]) != user_id or str(row["news_id"]) != news_id:
+        raise ValueError("sponsored delivery does not match user_id and news_id")
     return dict(row)
 
 

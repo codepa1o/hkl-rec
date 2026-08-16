@@ -8,10 +8,13 @@ import PostCard from "./PostCard";
 vi.mock("../api/client", () => ({ trackEvent: vi.fn().mockResolvedValue({ ok: true }) }));
 
 const sponsoredItem: FeedItem = {
-  article_id: 301,
-  headline: "Sponsored finance briefing",
+  news_id: "N301",
+  title: "Sponsored finance briefing",
   abstract: "A sponsored news summary.",
+  url: "https://finance.example.com/301",
   source_domain: "finance.example.com",
+  category: "finance",
+  subcategory: "markets",
   categories: [{ topic_id: 1, display_name: "Finance" }],
   selected_reason: "Selected because its categories match the user profile.",
   scores: {
@@ -72,7 +75,7 @@ describe("PostCard", () => {
     expect(trackEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 7248,
-        article_id: 301,
+        news_id: "N301",
         event_type: "share",
         request_id: "feed-1",
       }),

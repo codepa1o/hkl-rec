@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -16,9 +17,15 @@ import numpy as np
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
 
 
+def configure_transformer_backend() -> None:
+    """Search embeddings are PyTorch-only; ignore unrelated TensorFlow installs."""
+    os.environ["USE_TF"] = "0"
+    os.environ["USE_TORCH"] = "1"
+
+
 @dataclass(frozen=True)
 class SearchDocument:
-    article_id: int
+    news_id: str
     headline: str
     abstract: str
     topic_ids: tuple[int, ...] = ()
@@ -28,14 +35,14 @@ class SearchDocument:
 
 @dataclass(frozen=True)
 class RetrievalHit:
-    article_id: int
+    news_id: str
     score: float
     rank: int
 
 
 @dataclass(frozen=True)
 class HybridHit:
-    article_id: int
+    news_id: str
     bm25_score: float
     dense_score: float
     fusion_score: float
@@ -145,16 +152,15 @@ def lexical_retrieve(
     limit: int,
 ) -> list[RetrievalHit]:
     scored = [
-        (lexical_document_score(document, query_text), document.article_id)
-        for document in documents
+        (lexical_document_score(document, query_text), document.news_id) for document in documents
     ]
     ordered = sorted(
-        ((score, article_id) for score, article_id in scored if score > 0),
+        ((score, news_id) for score, news_id in scored if score > 0),
         key=lambda row: (-row[0], row[1]),
     )
     return [
-        RetrievalHit(article_id=article_id, score=score, rank=rank)
-        for rank, (score, article_id) in enumerate(ordered[:limit], start=1)
+        RetrievalHit(news_id=news_id, score=score, rank=rank)
+        for rank, (score, news_id) in enumerate(ordered[:limit], start=1)
     ]
 
 
@@ -177,7 +183,7 @@ def document_embedding_text(document: SearchDocument) -> str:
 
 def search_document_to_dict(document: SearchDocument) -> dict[str, object]:
     return {
-        "article_id": document.article_id,
+        "news_id": document.news_id,
         "headline": document.headline,
         "abstract": document.abstract,
         "topic_ids": list(document.topic_ids),
@@ -188,7 +194,7 @@ def search_document_to_dict(document: SearchDocument) -> dict[str, object]:
 
 def search_document_from_dict(value: dict[str, Any]) -> SearchDocument:
     return SearchDocument(
-        article_id=int(value["article_id"]),
+        news_id=str(value["news_id"]),
         headline=str(value.get("headline") or ""),
         abstract=str(value.get("abstract") or ""),
         topic_ids=tuple(int(topic_id) for topic_id in value.get("topic_ids", [])),
@@ -280,11 +286,11 @@ class LexicalBaselineIndex:
             return None
         topic_id, source = alias_resolution
         hits = tuple(
-            RetrievalHit(article_id=document.article_id, score=1.0, rank=rank)
+            RetrievalHit(news_id=document.news_id, score=1.0, rank=rank)
             for rank, document in enumerate(
                 sorted(
                     self._topic_documents.get(topic_id, []),
-                    key=lambda document: document.article_id,
+                    key=lambda document: document.news_id,
                 )[:limit],
                 start=1,
             )
@@ -303,11 +309,11 @@ class LexicalBaselineIndex:
         else:
             if not lexical_hits:
                 return None
-            matching_article_ids = {hit.article_id for hit in lexical_hits}
+            matching_news_ids = {hit.news_id for hit in lexical_hits}
             topic_ids = [
                 topic_id
                 for document in self._documents
-                if document.article_id in matching_article_ids
+                if document.news_id in matching_news_ids
                 for topic_id in document.topic_ids
             ]
             if not topic_ids:
@@ -315,13 +321,13 @@ class LexicalBaselineIndex:
             topic_id = min(topic_ids)
             source = "article_text"
 
-        scores = {document.article_id: 1.0 for document in self._topic_documents.get(topic_id, [])}
+        scores = {document.news_id: 1.0 for document in self._topic_documents.get(topic_id, [])}
         for hit in lexical_hits:
-            scores[hit.article_id] = max(scores.get(hit.article_id, 0.0), hit.score)
+            scores[hit.news_id] = max(scores.get(hit.news_id, 0.0), hit.score)
         ordered = sorted(scores.items(), key=lambda row: (-row[1], row[0]))
         hits = tuple(
-            RetrievalHit(article_id=article_id, score=score, rank=rank)
-            for rank, (article_id, score) in enumerate(ordered[:limit], start=1)
+            RetrievalHit(news_id=news_id, score=score, rank=rank)
+            for rank, (news_id, score) in enumerate(ordered[:limit], start=1)
         )
         return LexicalResolution(query_key=str(topic_id), source=source, hits=hits)
 
@@ -391,11 +397,11 @@ class BM25Index:
 
         ordered = sorted(
             scores.items(),
-            key=lambda row: (-row[1], self._documents[row[0]].article_id),
+            key=lambda row: (-row[1], self._documents[row[0]].news_id),
         )
         return [
             RetrievalHit(
-                article_id=self._documents[document_index].article_id,
+                news_id=self._documents[document_index].news_id,
                 score=score,
                 rank=rank,
             )
@@ -451,7 +457,7 @@ class DenseSearchIndex:
                 continue
             hits.append(
                 RetrievalHit(
-                    article_id=self._documents[int(index_value)].article_id,
+                    news_id=self._documents[int(index_value)].news_id,
                     score=float(distance),
                     rank=rank,
                 )
@@ -467,7 +473,7 @@ class DenseSearchIndex:
         encoder_factory: Callable[[str, str], SearchEncoder] | None = None,
     ) -> DenseSearchIndex:
         documents_path = artifact_dir / "documents.jsonl"
-        id_map_path = artifact_dir / "article_id_map.json"
+        id_map_path = artifact_dir / "news_id_map.json"
         index_path = artifact_dir / "dense.faiss"
         metadata_path = artifact_dir / "metadata.json"
         required_paths = (documents_path, id_map_path, index_path, metadata_path)
@@ -476,7 +482,7 @@ class DenseSearchIndex:
             raise SearchArtifactError(f"missing search artifact files: {', '.join(missing)}")
 
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if int(metadata.get("schema_version", 0)) != 1:
+        if int(metadata.get("schema_version", 0)) != 2:
             raise SearchArtifactError("unsupported search artifact schema_version")
         if metadata.get("similarity") != "cosine_via_normalized_inner_product":
             raise SearchArtifactError("search artifact similarity must be normalized cosine")
@@ -496,9 +502,9 @@ class DenseSearchIndex:
 
         documents = load_search_documents(documents_path)
         id_map = json.loads(id_map_path.read_text(encoding="utf-8"))
-        article_ids = [int(value) for value in id_map.get("index_to_article_id", [])]
-        if article_ids != [document.article_id for document in documents]:
-            raise SearchArtifactError("search artifact article ID map does not match documents")
+        news_ids = [str(value) for value in id_map.get("index_to_news_id", [])]
+        if news_ids != [document.news_id for document in documents]:
+            raise SearchArtifactError("search artifact news ID map does not match documents")
         if int(metadata.get("document_count", -1)) != len(documents):
             raise SearchArtifactError("search artifact document_count mismatch")
 
@@ -521,6 +527,7 @@ class DenseSearchIndex:
 
 
 def _default_encoder_factory(model_id: str, model_revision: str) -> SearchEncoder:
+    configure_transformer_backend()
     from huggingface_hub.errors import LocalEntryNotFoundError
     from sentence_transformers import SentenceTransformer
 
@@ -671,13 +678,13 @@ def reciprocal_rank_fusion(
     if limit <= 0:
         return []
 
-    bm25_by_article = {hit.article_id: hit for hit in bm25_hits}
-    dense_by_article = {hit.article_id: hit for hit in dense_hits}
-    article_ids = bm25_by_article.keys() | dense_by_article.keys()
+    bm25_by_news = {hit.news_id: hit for hit in bm25_hits}
+    dense_by_news = {hit.news_id: hit for hit in dense_hits}
+    news_ids = bm25_by_news.keys() | dense_by_news.keys()
     fused: list[HybridHit] = []
-    for article_id in article_ids:
-        bm25_hit = bm25_by_article.get(article_id)
-        dense_hit = dense_by_article.get(article_id)
+    for news_id in news_ids:
+        bm25_hit = bm25_by_news.get(news_id)
+        dense_hit = dense_by_news.get(news_id)
         fusion_score = 0.0
         if bm25_hit is not None:
             fusion_score += bm25_weight / (rrf_k + bm25_hit.rank)
@@ -685,7 +692,7 @@ def reciprocal_rank_fusion(
             fusion_score += dense_weight / (rrf_k + dense_hit.rank)
         fused.append(
             HybridHit(
-                article_id=article_id,
+                news_id=news_id,
                 bm25_score=bm25_hit.score if bm25_hit is not None else 0.0,
                 dense_score=dense_hit.score if dense_hit is not None else 0.0,
                 fusion_score=fusion_score,
@@ -696,5 +703,5 @@ def reciprocal_rank_fusion(
 
     return sorted(
         fused,
-        key=lambda hit: (-hit.fusion_score, hit.article_id),
+        key=lambda hit: (-hit.fusion_score, hit.news_id),
     )[:limit]

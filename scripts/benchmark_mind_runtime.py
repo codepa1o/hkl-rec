@@ -100,7 +100,7 @@ def main() -> None:
         args.iterations,
     )
     report = {
-        "environment": "local macOS, FastAPI + MySQL, loopback HTTP",
+        "environment": "local workstation, FastAPI + PostgreSQL, loopback HTTP",
         "user_id": user_id,
         "feed": feed,
         "search": search,

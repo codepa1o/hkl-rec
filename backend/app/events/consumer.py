@@ -24,7 +24,7 @@ from backend.app.observability import (
 )
 from backend.app.repositories._utils import json_text
 from backend.app.repositories.connection import PostgresConnectionPool, parse_database_url
-from backend.app.repositories.content_dao import load_answer_topic_ids, load_query_topics
+from backend.app.repositories.content_dao import load_news_topic_ids, load_query_topics
 from backend.app.repositories.event_dao import (
     append_recent_query,
     apply_click_profile_update,
@@ -137,9 +137,9 @@ class ProfileEventApplier:
         )
 
     def _apply_recommendation_click(self, connection: Any, event: UserEventMessage) -> None:
-        if event.article_id is None:
-            raise ValueError("recommendation_click event requires article_id")
-        self._apply_answer_click(
+        if event.news_id is None:
+            raise ValueError("recommendation_click event requires news_id")
+        self._apply_news_click(
             connection=connection,
             event=event,
             event_type="recommendation_click",
@@ -149,9 +149,9 @@ class ProfileEventApplier:
         )
 
     def _apply_upvote(self, connection: Any, event: UserEventMessage) -> None:
-        if event.article_id is None:
-            raise ValueError("upvote event requires article_id")
-        self._apply_answer_click(
+        if event.news_id is None:
+            raise ValueError("upvote event requires news_id")
+        self._apply_news_click(
             connection=connection,
             event=event,
             event_type="upvote",
@@ -161,28 +161,28 @@ class ProfileEventApplier:
         )
 
     def _apply_search_result_click(self, connection: Any, event: UserEventMessage) -> None:
-        if event.article_id is None or not event.query_key:
-            raise ValueError("search_result_click event requires article_id and query_key")
+        if event.news_id is None or not event.query_key:
+            raise ValueError("search_result_click event requires news_id and query_key")
         profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
         sponsored_attribution = (
             load_sponsored_attribution(
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                article_id=event.article_id,
+                news_id=event.news_id,
                 for_update=True,
             )
             if event.sponsored_delivery_id
             else None
         )
         query_topics = load_query_topics(connection, event.query_key)
-        answer_topic_ids = load_answer_topic_ids(connection, event.article_id)
+        news_topic_ids = load_news_topic_ids(connection, event.news_id)
         query_topic_ids = {topic.topic_id for topic in query_topics}
-        answer_topic_set = set(answer_topic_ids)
-        overlap_topic_ids = query_topic_ids & answer_topic_set
+        news_topic_set = set(news_topic_ids)
+        overlap_topic_ids = query_topic_ids & news_topic_set
         topic_deltas = {
             topic_id: self._settings.search_result_click_topic_delta
-            for topic_id in query_topic_ids | answer_topic_set
+            for topic_id in query_topic_ids | news_topic_set
         }
         for topic_id in overlap_topic_ids:
             topic_deltas[topic_id] = self._settings.search_result_overlap_topic_delta
@@ -191,12 +191,12 @@ class ProfileEventApplier:
             connection=connection,
             user_id=event.user_id,
             event_type="search_result_click",
-            article_id=event.article_id,
+            news_id=event.news_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=event.surface or "search",
             event_ts=event.event_ts,
-            topic_ids=sorted(query_topic_ids | answer_topic_set),
+            topic_ids=sorted(query_topic_ids | news_topic_set),
             external_event_id=event.event_id,
             sponsored_delivery_id=event.sponsored_delivery_id,
             campaign_id=event.campaign_id,
@@ -218,14 +218,14 @@ class ProfileEventApplier:
         apply_click_profile_update(
             connection=connection,
             profile_row=profile_row,
-            article_id=event.article_id,
+            news_id=event.news_id,
             event_ts=event.event_ts,
             topic_deltas=topic_deltas,
             behavior_delta=self._settings.search_result_click_behavior_delta,
             decay_factor=self._settings.profile_topic_decay,
         )
 
-    def _apply_answer_click(
+    def _apply_news_click(
         self,
         *,
         connection: Any,
@@ -235,32 +235,32 @@ class ProfileEventApplier:
         behavior_delta: float,
         topic_delta: float,
     ) -> None:
-        if event.article_id is None:
-            raise ValueError(f"{event_type} event requires article_id")
+        if event.news_id is None:
+            raise ValueError(f"{event_type} event requires news_id")
         profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
         sponsored_attribution = (
             load_sponsored_attribution(
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                article_id=event.article_id,
+                news_id=event.news_id,
                 for_update=True,
             )
             if event.sponsored_delivery_id
             else None
         )
-        answer_topic_ids = load_answer_topic_ids(connection, event.article_id)
-        topic_deltas = {topic_id: topic_delta for topic_id in answer_topic_ids}
+        news_topic_ids = load_news_topic_ids(connection, event.news_id)
+        topic_deltas = {topic_id: topic_delta for topic_id in news_topic_ids}
         record_click_event(
             connection=connection,
             user_id=event.user_id,
             event_type=event_type,
-            article_id=event.article_id,
+            news_id=event.news_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=surface,
             event_ts=event.event_ts,
-            topic_ids=answer_topic_ids,
+            topic_ids=news_topic_ids,
             external_event_id=event.event_id,
             sponsored_delivery_id=event.sponsored_delivery_id,
             campaign_id=event.campaign_id,
@@ -276,7 +276,7 @@ class ProfileEventApplier:
         apply_click_profile_update(
             connection=connection,
             profile_row=profile_row,
-            article_id=event.article_id,
+            news_id=event.news_id,
             event_ts=event.event_ts,
             topic_deltas=topic_deltas,
             behavior_delta=behavior_delta,
@@ -289,10 +289,10 @@ class ProfileEventApplier:
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                article_id=int(event.article_id),
+                news_id=event.news_id,
                 for_update=True,
             )
-            if event.sponsored_delivery_id and event.article_id is not None
+            if event.sponsored_delivery_id and event.news_id is not None
             else None
         )
         inserted = record_log_only_event(
@@ -300,7 +300,7 @@ class ProfileEventApplier:
             user_id=event.user_id,
             event_type=event.event_type,
             surface=event.surface or "home_feed",
-            article_id=event.article_id,
+            news_id=event.news_id,
             query_key=event.query_key,
             request_id=event.request_id,
             event_ts=event.event_ts,
@@ -326,12 +326,12 @@ class ProfileEventApplier:
             "downvote": 0.0,
             "feed_impression": None,
         }
-        if event.event_type not in label_by_type or event.article_id is None:
+        if event.event_type not in label_by_type or event.news_id is None:
             return None
         return TrainingInteractionMessage(
             example_id=event.event_id,
             user_id=event.user_id,
-            article_id=event.article_id,
+            news_id=event.news_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=event.surface,

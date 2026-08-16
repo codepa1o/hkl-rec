@@ -15,6 +15,7 @@ EXPECTED_TABLES = {
     "event_idempotency",
     "feed_request",
     "mind_news",
+    "mind_news_topic",
     "mind_news_stats",
     "mind_catalog_import",
     "query_topic_map",
@@ -66,6 +67,11 @@ def test_mind_news_is_the_exact_eight_field_source_of_truth() -> None:
     assert isinstance(news.c.title_entities.type, JSONB)
     assert isinstance(news.c.abstract_entities.type, JSONB)
 
+    topic = metadata.tables["topic"]
+    assert topic.c.topic_key.nullable is False
+    mapping = metadata.tables["mind_news_topic"]
+    assert set(mapping.c.keys()) == {"news_id", "topic_id", "source_rank"}
+
 
 def test_all_content_references_use_news_id() -> None:
     for table_name in ("mind_news_stats", "sponsored_creative", "sponsored_delivery"):
@@ -115,8 +121,16 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 2
+    assert len(versions) == 5
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:
     assert inspect(metadata.tables["mind_news"]).primary_key.name == "pk_mind_news"
+
+
+def test_feed_request_metadata_includes_category_request_shape() -> None:
+    table = metadata.tables["feed_request"]
+
+    assert table.c.category.type.length == 64
+    assert table.c.category.nullable is True
+    assert "idx_feed_request_category" in {index.name for index in table.indexes}

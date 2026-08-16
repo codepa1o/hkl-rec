@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -16,23 +17,36 @@ sys.path.insert(0, str(ROOT))
 from backend.app.search_retrieval import (  # noqa: E402
     HybridSearchConfig,
     SearchDocument,
+    configure_transformer_backend,
     document_embedding_text,
     file_sha256,
     write_search_documents,
 )
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
-
-
 def _load_full_documents(input_dir: Path) -> tuple[list[SearchDocument], str]:
+    articles_path = input_dir / "articles.parquet"
+    manifest_path = input_dir / "normalization_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    output_hashes = manifest.get("output_hashes")
+    if not isinstance(output_hashes, dict):
+        raise RuntimeError(f"normalization manifest lacks output_hashes: {manifest_path}")
+    expected_articles_hash = output_hashes.get("articles.parquet")
+    actual_articles_hash = file_sha256(articles_path)
+    if expected_articles_hash != actual_articles_hash:
+        raise RuntimeError(
+            "normalized articles checksum mismatch: "
+            f"expected {expected_articles_hash}, got {actual_articles_hash}"
+        )
+    computed_fingerprint = hashlib.sha256(
+        json.dumps(output_hashes, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if manifest.get("normalized_fingerprint") != computed_fingerprint:
+        raise RuntimeError("normalization manifest fingerprint mismatch")
     rows = pq.read_table(
-        input_dir / "articles.parquet",
+        articles_path,
         columns=[
-            "article_id",
+            "news_id",
             "headline",
             "abstract",
             "category",
@@ -41,10 +55,9 @@ def _load_full_documents(input_dir: Path) -> tuple[list[SearchDocument], str]:
             "subcategory_topic_id",
         ],
     ).to_pylist()
-    manifest = json.loads((input_dir / "normalization_manifest.json").read_text(encoding="utf-8"))
     documents = [
         SearchDocument(
-            article_id=int(row["article_id"]),
+            news_id=str(row["news_id"]),
             headline=str(row.get("headline") or ""),
             abstract=str(row.get("abstract") or ""),
             topic_ids=(
@@ -59,28 +72,6 @@ def _load_full_documents(input_dir: Path) -> tuple[list[SearchDocument], str]:
     return documents, str(manifest["normalized_fingerprint"])
 
 
-def _load_demo_documents(input_dir: Path) -> tuple[list[SearchDocument], str]:
-    question_by_id = {
-        int(row["question_id"]): row for row in _read_jsonl(input_dir / "question.jsonl")
-    }
-    answer_rows = _read_jsonl(input_dir / "answer.jsonl")
-    manifest = json.loads((input_dir / "manifest.json").read_text(encoding="utf-8"))
-    documents = [
-        SearchDocument(
-            article_id=int(row["article_id"]),
-            headline=str(
-                question_by_id.get(int(row["question_id"]), {}).get("display_title") or ""
-            ),
-            abstract=str(row.get("display_summary") or ""),
-            topic_ids=tuple(int(topic_id) for topic_id in row.get("topic_ids", [])),
-            category=str(row.get("category") or ""),
-            subcategory=str(row.get("subcategory") or ""),
-        )
-        for row in answer_rows
-    ]
-    return documents, str(manifest["source_fingerprint"])
-
-
 def build_search_index(
     *,
     documents: list[SearchDocument],
@@ -91,6 +82,7 @@ def build_search_index(
     config: HybridSearchConfig,
     batch_size: int,
 ) -> dict[str, Any]:
+    configure_transformer_backend()
     import faiss
     from sentence_transformers import SentenceTransformer
 
@@ -117,14 +109,14 @@ def build_search_index(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     documents_path = output_dir / "documents.jsonl"
-    id_map_path = output_dir / "article_id_map.json"
+    id_map_path = output_dir / "news_id_map.json"
     index_path = output_dir / "dense.faiss"
     metadata_path = output_dir / "metadata.json"
 
     write_search_documents(documents_path, documents)
     id_map_path.write_text(
         json.dumps(
-            {"index_to_article_id": [document.article_id for document in documents]},
+            {"index_to_news_id": [document.news_id for document in documents]},
             indent=2,
             sort_keys=True,
         )
@@ -136,7 +128,7 @@ def build_search_index(
     faiss.write_index(index, str(index_path))
 
     metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
         "text_schema_version": 1,
         "source_fingerprint": source_fingerprint,
         "document_count": len(documents),
@@ -160,7 +152,6 @@ def build_search_index(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build BM25+dense search artifacts.")
-    parser.add_argument("--corpus", choices=("full", "demo"), required=True)
     parser.add_argument("--input-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
@@ -187,14 +178,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    if args.corpus == "full":
-        input_dir = args.input_dir or ROOT / "build" / "mind_normalized"
-        output_dir = args.output_dir or ROOT / "build" / "mind_search" / "full"
-        documents, source_fingerprint = _load_full_documents(input_dir)
-    else:
-        input_dir = args.input_dir or ROOT / "build" / "mind_demo_world"
-        output_dir = args.output_dir or ROOT / "build" / "mind_search" / "demo"
-        documents, source_fingerprint = _load_demo_documents(input_dir)
+    input_dir = args.input_dir or ROOT / "build" / "mind_normalized"
+    output_dir = args.output_dir or ROOT / "build" / "mind_search" / "full"
+    documents, source_fingerprint = _load_full_documents(input_dir)
 
     config = (
         HybridSearchConfig.from_dict(json.loads(args.config.read_text(encoding="utf-8")))

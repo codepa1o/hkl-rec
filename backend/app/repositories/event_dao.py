@@ -10,7 +10,7 @@ from backend.app.repositories._utils import (
     query_tokens,
     updated_topic_weights,
 )
-from backend.app.schemas.event import RecentClickedArticle
+from backend.app.schemas.event import RecentClickedNews
 from backend.app.schemas.profile import ProfileTopicWeight
 
 
@@ -169,7 +169,7 @@ def record_click_event(
     connection: Any,
     user_id: int,
     event_type: str,
-    article_id: int,
+    news_id: str,
     query_key: str | None,
     request_id: str | None,
     surface: str,
@@ -188,7 +188,7 @@ def record_click_event(
               external_event_id,
               user_id,
               event_type,
-              answer_id,
+              news_id,
               sponsored_delivery_id,
               campaign_id,
               creative_id,
@@ -210,7 +210,7 @@ def record_click_event(
                 external_event_id,
                 user_id,
                 event_type,
-                article_id,
+                news_id,
                 sponsored_delivery_id,
                 campaign_id,
                 creative_id,
@@ -230,7 +230,7 @@ def record_log_only_event(
     user_id: int,
     event_type: str,
     surface: str,
-    article_id: int | None,
+    news_id: str | None,
     query_key: str | None,
     request_id: str | None,
     event_ts: int,
@@ -252,7 +252,7 @@ def record_log_only_event(
               external_event_id,
               user_id,
               event_type,
-              answer_id,
+              news_id,
               sponsored_delivery_id,
               campaign_id,
               creative_id,
@@ -275,7 +275,7 @@ def record_log_only_event(
                 external_event_id,
                 user_id,
                 event_type,
-                article_id,
+                news_id,
                 sponsored_delivery_id,
                 campaign_id,
                 creative_id,
@@ -295,7 +295,7 @@ def record_log_only_event(
 def apply_click_profile_update(
     connection: Any,
     profile_row: dict[str, Any],
-    article_id: int,
+    news_id: str,
     event_ts: int,
     topic_deltas: dict[int, float],
     behavior_delta: float,
@@ -303,9 +303,9 @@ def apply_click_profile_update(
 ) -> dict[str, Any]:
     current_weights = parse_json(profile_row.get("topic_weights_json"), [])
     next_topic_weights = updated_topic_weights(current_weights, topic_deltas, decay_factor)
-    recent_clicks = parse_json(profile_row.get("recent_clicked_answers_json"), [])
+    recent_clicks = parse_json(profile_row.get("recent_clicked_news_json"), [])
     next_recent_clicks = [
-        {"answer_id": article_id, "click_ts": event_ts},
+        {"news_id": news_id, "click_ts": event_ts},
         *[row for row in recent_clicks if isinstance(row, dict)],
     ]
     next_recent_clicks.sort(key=lambda row: int(row.get("click_ts") or 0), reverse=True)
@@ -318,7 +318,7 @@ def apply_click_profile_update(
             UPDATE user_profile
             SET
               topic_weights_json = %s,
-              recent_clicked_answers_json = %s,
+              recent_clicked_news_json = %s,
               behavior_score = %s,
               last_event_ts = %s
             WHERE user_id = %s
@@ -337,9 +337,9 @@ def apply_click_profile_update(
             ProfileTopicWeight(topic_id=int(row["topic_id"]), weight=float(row["weight"]))
             for row in next_topic_weights
         ],
-        "recent_clicked_answers": [
-            RecentClickedArticle(
-                article_id=int(row["answer_id"]),
+        "recent_clicked_news": [
+            RecentClickedNews(
+                news_id=str(row["news_id"]),
                 click_ts=int(row.get("click_ts") or 0),
             )
             for row in next_recent_clicks

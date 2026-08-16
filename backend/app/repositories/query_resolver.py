@@ -89,7 +89,7 @@ def _match_topic_display_name(
                 SELECT topic_id
                 FROM topic
                 WHERE {predicate}
-                ORDER BY answer_count DESC, topic_id ASC
+                ORDER BY news_count DESC, topic_id ASC
                 LIMIT 20
                 """,
                 params,
@@ -116,7 +116,7 @@ def _match_topic_display_name(
     return None
 
 
-def _match_article_text(connection: Any, text: str) -> str | None:
+def _match_news_text(connection: Any, text: str) -> str | None:
     normalized = " ".join(text.lower().split())
     tokens = [token for token in normalized.split() if len(token) >= 3][:5]
     search_terms = [term for term in (normalized, *tokens) if len(term) >= 3]
@@ -126,17 +126,16 @@ def _match_article_text(connection: Any, text: str) -> str | None:
     predicates = []
     params: list[str] = []
     for term in search_terms:
-        predicates.append("(LOWER(q.display_title) LIKE %s OR LOWER(a.display_summary) LIKE %s)")
+        predicates.append("(LOWER(news.title) LIKE %s OR LOWER(news.abstract) LIKE %s)")
         contains = f"%{term}%"
         params.extend((contains, contains))
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
             SELECT qtm.query_key, MAX(qtm.score) AS best_score
-            FROM answer a
-            JOIN question q ON q.question_id = a.question_id
-            JOIN answer_topic at ON at.answer_id = a.answer_id
-            JOIN query_topic_map qtm ON qtm.topic_id = at.topic_id
+            FROM mind_news AS news
+            JOIN mind_news_topic AS mapping USING (news_id)
+            JOIN query_topic_map qtm ON qtm.topic_id = mapping.topic_id
             WHERE {" OR ".join(predicates)}
             GROUP BY qtm.query_key
             ORDER BY best_score DESC, qtm.query_key ASC
@@ -155,33 +154,36 @@ def _query_key_from_hybrid_hits(
     selected_hits = hits[:10]
     if not selected_hits:
         return None
-    score_by_article = {hit.article_id: max(hit.fusion_score, 1e-9) for hit in selected_hits}
-    article_ids = list(score_by_article)
+    score_by_news = {hit.news_id: max(hit.fusion_score, 1e-9) for hit in selected_hits}
+    news_ids = list(score_by_news)
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""
-            SELECT answer_id, topic_id, source_rank
-            FROM answer_topic
-            WHERE answer_id IN ({placeholders(article_ids)})
-            ORDER BY answer_id, source_rank ASC, topic_id ASC
+            """
+            SELECT
+                mapping.news_id,
+                mapping.topic_id,
+                mapping.source_rank
+            FROM mind_news_topic AS mapping
+            WHERE mapping.news_id = ANY(%s)
+            ORDER BY mapping.news_id, mapping.source_rank, mapping.topic_id
             """,
-            tuple(article_ids),
+            (news_ids,),
         )
         topic_rows = cursor.fetchall()
     topic_scores: dict[int, float] = {}
     first_topic_id: int | None = None
     any_topic_id: int | None = None
-    top_article_id = selected_hits[0].article_id
+    top_news_id = selected_hits[0].news_id
     for row in topic_rows:
-        article_id = int(row["answer_id"])
-        article_score = score_by_article.get(article_id, 0.0)
+        news_id = str(row["news_id"])
+        news_score = score_by_news.get(news_id, 0.0)
         source_weight = 1.25 if int(row.get("source_rank") or 0) > 0 else 1.0
         topic_id = int(row["topic_id"])
         if any_topic_id is None:
             any_topic_id = topic_id
-        if first_topic_id is None and article_id == top_article_id:
+        if first_topic_id is None and news_id == top_news_id:
             first_topic_id = topic_id
-        topic_scores[topic_id] = topic_scores.get(topic_id, 0.0) + (article_score * source_weight)
+        topic_scores[topic_id] = topic_scores.get(topic_id, 0.0) + (news_score * source_weight)
     if not topic_scores:
         return None
     if first_topic_id is None:
@@ -265,7 +267,7 @@ def resolve_search_query(
     if resolved is None:
         resolved = _match_topic_display_name(connection, candidate)
     if resolved is None:
-        resolved = _match_article_text(connection, candidate)
+        resolved = _match_news_text(connection, candidate)
     if resolved is None:
         raise UnresolvedQueryError(candidate)
     return QueryResolution(

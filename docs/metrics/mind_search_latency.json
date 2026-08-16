@@ -1,12 +1,12 @@
 {
-  "corpus_document_count": 174,
-  "evidence_boundary": "Warm in-process retrieval over the 174-document demo index on one local machine. This excludes HTTP, MySQL, event writes, concurrency, and production capacity.",
+  "corpus_document_count": 65238,
+  "evidence_boundary": "Warm in-process retrieval over the full 65,238-document MIND-small index on one local machine. This excludes HTTP, PostgreSQL, event writes, concurrency, and production capacity.",
   "iterations": 100,
-  "mean_ms": 6.935,
+  "mean_ms": 164.703,
   "metric_type": "local_in_process_search_retrieval_latency",
   "model_id": "sentence-transformers/all-MiniLM-L6-v2",
   "model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
-  "p50_ms": 6.433,
-  "p95_ms": 9.568,
+  "p50_ms": 173.501,
+  "p95_ms": 270.299,
   "query_count": 28
 }

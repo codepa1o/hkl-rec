@@ -12,6 +12,7 @@
   "dependencies": {
     "d3": "^7.9.0",
     "lucide-react": "^0.460.0",
+    "motion": "^13.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.27.0"

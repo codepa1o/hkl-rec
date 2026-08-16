@@ -30,7 +30,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifact-dir",
         type=Path,
-        default=ROOT / "build" / "mind_search" / "demo",
+        default=ROOT / "build" / "mind_search" / "full",
     )
     parser.add_argument(
         "--queries",
@@ -79,7 +79,7 @@ def main() -> None:
         "p95_ms": round(_percentile(durations_ms, 0.95), 3),
         "evidence_boundary": (
             "Warm in-process retrieval over the 174-document demo index on one local "
-            "machine. This excludes HTTP, MySQL, event writes, concurrency, and production "
+            "machine. This excludes HTTP, PostgreSQL, event writes, concurrency, and production "
             "capacity."
         ),
     }

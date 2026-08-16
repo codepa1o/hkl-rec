@@ -47,6 +47,10 @@ logs/
 /build/mind_models/
 /build/mind_search/
 /build/search_eval/
+/build/backups/
+/build/ci_mind_raw/
+/build/ci_mind_normalized/
+/build/ci_mind_search/
 
 # Research paper PDFs remain local; commit reading notes and source links only.
 /docs/papers/**/*.pdf
