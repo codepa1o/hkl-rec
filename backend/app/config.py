@@ -143,6 +143,11 @@ class Settings:
     recommendation_click_behavior_delta: float = 3.0
     search_result_click_behavior_delta: float = 5.0
     profile_topic_decay: float = 0.92
+    profile_v2_enabled: bool = False
+    profile_v2_short_half_life_seconds: int = 21_600
+    profile_v2_long_half_life_seconds: int = 2_592_000
+    profile_v2_long_term_factor: float = 0.25
+    profile_v2_boost: float = 0.10
     recommendation_click_topic_delta: float = 0.08
     search_result_click_topic_delta: float = 0.12
     search_result_overlap_topic_delta: float = 0.2
@@ -237,6 +242,17 @@ def get_settings() -> Settings:
             _env("NEWSREC_SEARCH_RESULT_CLICK_BEHAVIOR_DELTA", "5.0")
         ),
         profile_topic_decay=float(_env("NEWSREC_PROFILE_TOPIC_DECAY", "0.92")),
+        profile_v2_enabled=_env_bool("NEWSREC_PROFILE_V2_ENABLED", "0"),
+        profile_v2_short_half_life_seconds=int(
+            _env("NEWSREC_PROFILE_V2_SHORT_HALF_LIFE_SECONDS", "21600")
+        ),
+        profile_v2_long_half_life_seconds=int(
+            _env("NEWSREC_PROFILE_V2_LONG_HALF_LIFE_SECONDS", "2592000")
+        ),
+        profile_v2_long_term_factor=float(
+            _env("NEWSREC_PROFILE_V2_LONG_TERM_FACTOR", "0.25")
+        ),
+        profile_v2_boost=float(_env("NEWSREC_PROFILE_V2_BOOST", "0.10")),
         recommendation_click_topic_delta=float(
             _env("NEWSREC_RECOMMENDATION_CLICK_TOPIC_DELTA", "0.08")
         ),
