@@ -12,7 +12,8 @@ def test_migration_order_respects_foreign_keys_and_covers_all_tables() -> None:
 
     assert set(names) == set(metadata.tables)
     assert names.index("app_user") < names.index("user_account")
-    assert names.index("question") < names.index("answer")
+    assert names.index("mind_news") < names.index("mind_news_stats")
+    assert names.index("mind_catalog_import") < names.index("mind_news_stats")
     assert names.index("sponsored_creative") < names.index("sponsored_delivery")
     assert names.index("sponsored_delivery") < names.index("user_event")
 
