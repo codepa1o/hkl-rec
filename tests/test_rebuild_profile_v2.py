@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from backend.app.config import Settings
+from scripts import rebuild_profile_v2
+
+
+class TransactionConnection:
+    def __init__(self) -> None:
+        self.begins = 0
+        self.commits = 0
+        self.rollbacks = 0
+
+    def begin(self) -> None:
+        self.begins += 1
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _event(event_id: int, *, user_id: int, event_ts: int) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "external_event_id": f"evt-{event_id}",
+        "user_id": user_id,
+        "event_type": "upvote",
+        "answer_id": 101,
+        "query_key": None,
+        "surface": "feed",
+        "dwell_ms": None,
+        "topic_ids_json": [10],
+        "event_ts": event_ts,
+    }
+
+
+def test_cli_requires_exactly_one_user_scope() -> None:
+    parser = rebuild_profile_v2.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--user-id", "7", "--all"])
+
+    assert parser.parse_args(["--user-id", "7"]).user_id == 7
+    assert parser.parse_args(["--all"]).all_users is True
+
+
+def test_dry_run_counts_filtered_events_without_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = TransactionConnection()
+    monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7, 8])
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_reset_cutoff",
+        lambda connection_arg, user_id: 100 if user_id == 7 else None,
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_rebuild_events",
+        lambda connection_arg, user_id, reset_cutoff: (
+            [_event(2, user_id=user_id, event_ts=200)] if user_id == 7 else []
+        ),
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "clear_profile_v2_projection",
+        lambda *args, **kwargs: pytest.fail("dry-run must not clear projections"),
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "replay_event",
+        lambda *args, **kwargs: pytest.fail("dry-run must not replay events"),
+    )
+
+    summary = rebuild_profile_v2.rebuild_profiles(
+        connection,
+        settings=Settings(),
+        user_id=None,
+        all_users=True,
+        dry_run=True,
+    )
+
+    assert summary.target_user_count == 2
+    assert summary.selected_event_count == 1
+    assert summary.replayed_event_count == 0
+    assert summary.dry_run is True
+    assert connection.begins == 0
+    assert connection.commits == 0
+    assert connection.rollbacks == 0
+
+
+def test_live_rebuild_sorts_events_and_is_repeatable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = TransactionConnection()
+    source_events = [
+        _event(3, user_id=7, event_ts=200),
+        _event(2, user_id=7, event_ts=100),
+        _event(1, user_id=7, event_ts=100),
+    ]
+    projection: list[int] = []
+    snapshots: list[list[int]] = []
+
+    monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7])
+    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: None)
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_rebuild_events",
+        lambda *args: list(reversed(source_events)),
+    )
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "clear_profile_v2_projection",
+        lambda *args: projection.clear(),
+    )
+
+    def replay(connection_arg: Any, row: dict[str, Any], *, settings: Settings) -> bool:
+        projection.append(int(row["event_id"]))
+        return True
+
+    monkeypatch.setattr(rebuild_profile_v2, "replay_event", replay)
+
+    for _ in range(2):
+        summary = rebuild_profile_v2.rebuild_profiles(
+            connection,
+            settings=Settings(),
+            user_id=7,
+            all_users=False,
+            dry_run=False,
+        )
+        snapshots.append(list(projection))
+        assert summary.replayed_event_count == 3
+
+    assert snapshots == [[1, 2, 3], [1, 2, 3]]
+    assert connection.commits == 2
+    assert connection.rollbacks == 0
+
+
+def test_live_rebuild_rolls_back_only_failed_user_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = TransactionConnection()
+    replayed_users: list[int] = []
+    monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7, 8])
+    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: None)
+    monkeypatch.setattr(
+        rebuild_profile_v2,
+        "load_rebuild_events",
+        lambda connection_arg, user_id, reset_cutoff: [
+            _event(user_id, user_id=user_id, event_ts=100)
+        ],
+    )
+    monkeypatch.setattr(rebuild_profile_v2, "clear_profile_v2_projection", lambda *args: None)
+
+    def replay(connection_arg: Any, row: dict[str, Any], *, settings: Settings) -> bool:
+        user_id = int(row["user_id"])
+        if user_id == 7:
+            raise RuntimeError("broken user event")
+        replayed_users.append(user_id)
+        return True
+
+    monkeypatch.setattr(rebuild_profile_v2, "replay_event", replay)
+
+    summary = rebuild_profile_v2.rebuild_profiles(
+        connection,
+        settings=Settings(),
+        user_id=None,
+        all_users=True,
+        dry_run=False,
+    )
+
+    assert summary.failed_user_ids == [7]
+    assert replayed_users == [8]
+    assert connection.rollbacks == 1
+    assert connection.commits == 1
+
+
+def test_reset_cutoff_is_passed_to_event_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = TransactionConnection()
+    observed_cutoffs: list[int | None] = []
+    monkeypatch.setattr(rebuild_profile_v2, "load_target_user_ids", lambda *args: [7])
+    monkeypatch.setattr(rebuild_profile_v2, "load_reset_cutoff", lambda *args: 500)
+
+    def load_events(
+        connection_arg: Any,
+        user_id: int,
+        reset_cutoff: int | None,
+    ) -> list[dict[str, Any]]:
+        observed_cutoffs.append(reset_cutoff)
+        return []
+
+    monkeypatch.setattr(rebuild_profile_v2, "load_rebuild_events", load_events)
+
+    rebuild_profile_v2.rebuild_profiles(
+        connection,
+        settings=Settings(),
+        user_id=7,
+        all_users=False,
+        dry_run=True,
+    )
+
+    assert observed_cutoffs == [500]
+
+
+def test_replay_uses_production_topic_signal_and_projection_functions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    derived: list[tuple[str, tuple[int, ...]]] = []
+    projected: list[dict[str, Any]] = []
+
+    def derive(
+        event_type: str,
+        *,
+        article_topic_ids: list[int],
+        query_topic_ids: list[int],
+        dwell_ms: int | None,
+    ) -> dict[int, float]:
+        derived.append((event_type, tuple(article_topic_ids)))
+        return {10: 2.0}
+
+    def project(connection_arg: Any, **kwargs: Any) -> bool:
+        projected.append(kwargs)
+        return True
+
+    monkeypatch.setattr(rebuild_profile_v2, "topic_strengths_for_event", derive)
+    monkeypatch.setattr(rebuild_profile_v2, "apply_profile_v2_event", project)
+
+    updated = rebuild_profile_v2.replay_event(
+        object(),
+        _event(1, user_id=7, event_ts=123),
+        settings=Settings(),
+    )
+
+    assert updated is True
+    assert derived == [("upvote", (10,))]
+    assert projected[0]["user_id"] == 7
+    assert projected[0]["event_ts"] == 123
+    assert projected[0]["topic_strengths"] == {10: 2.0}
