@@ -6,6 +6,7 @@ import type {
   EventTrackResponse,
   FeedResponse,
   PersonaListResponse,
+  ProfileResponse,
   LoginInput,
   RegisterInput,
   SearchResponse,
@@ -142,6 +143,14 @@ export function getArticleCard(articleId: number): Promise<ArticleCardResponse> 
 
 export function getDebugProfile(userId: number): Promise<DebugProfileResponse> {
   return request<DebugProfileResponse>("/debug/profile", { params: { user_id: userId } });
+}
+
+export function getProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile");
+}
+
+export function resetProfile(): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile/reset", { method: "POST" });
 }
 
 export function trackEvent(payload: EventTrackRequest): Promise<EventTrackResponse> {

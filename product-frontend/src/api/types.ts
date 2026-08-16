@@ -59,6 +59,7 @@ export interface FeedItemScores {
   topic_match_score: number;
   query_recall_boost: number;
   final_score: number;
+  profile_v2_score?: number | null;
   sponsored_score?: number | null;
 }
 
@@ -123,6 +124,40 @@ export interface ProfileRecentClick {
 export interface ProfileRecentQuery {
   query_key: string;
   query_ts: number;
+  confirmed_ts?: number | null;
+}
+
+export type ProfileStatus = "cold" | "learning" | "established";
+
+export interface ProfileTopicEvidence {
+  topic_id: number;
+  display_name: string;
+  score: number;
+  positive_score: number;
+  negative_score: number;
+  positive_evidence_count: number;
+  negative_evidence_count: number;
+  signal_counts: Record<string, number>;
+  last_signal_type?: string | null;
+  last_event_ts: number;
+}
+
+export interface ProfileTermLayer {
+  interests: ProfileTopicEvidence[];
+  reduced_topics: ProfileTopicEvidence[];
+}
+
+export interface ProfileResponse {
+  user_id: number;
+  profile_version: "v2";
+  status: ProfileStatus;
+  confidence: number;
+  evidence_count: number;
+  short_term: ProfileTermLayer;
+  long_term: ProfileTermLayer;
+  recent_clicked_news: ProfileRecentClick[];
+  recent_queries: ProfileRecentQuery[];
+  last_updated_at?: string | null;
 }
 
 export interface DebugVectorSummary {
