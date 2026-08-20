@@ -501,7 +501,11 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
         """
         SELECT EXISTS (
             SELECT 1
-            FROM topic AS current
+            FROM (
+                SELECT topic_id, topic_key
+                FROM topic
+                WHERE source_space = 'mind'
+            ) AS current
             FULL OUTER JOIN mind_topic_import_stage AS stage USING (topic_id)
             WHERE current.topic_id IS NULL
                OR stage.topic_id IS NULL
@@ -514,22 +518,40 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
         topic_state["topics_changed"] if isinstance(topic_state, dict) else topic_state[0]
     )
 
-    cursor.execute("DELETE FROM query_topic_map")
-    cursor.execute("DELETE FROM sponsored_campaign_topic")
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM topic AS current
+        JOIN mind_topic_import_stage AS stage USING (topic_id)
+        WHERE current.source_space <> 'mind'
+        """
+    )
+    collision_row = cursor.fetchone()
+    collision_count = int(
+        collision_row["count"] if isinstance(collision_row, dict) else collision_row[0]
+    )
+    if collision_count:
+        raise MindCatalogImportError(
+            f"MIND topic IDs collide with {collision_count} non-MIND topic row(s)"
+        )
+
+    cursor.execute("DELETE FROM query_topic_map WHERE source_space = 'mind'")
+    cursor.execute(
+        """
+        DELETE FROM sponsored_campaign_topic AS mapping
+        USING topic
+        WHERE topic.topic_id = mapping.topic_id
+          AND topic.source_space = 'mind'
+        """
+    )
     cursor.execute("DELETE FROM mind_news_topic")
     if topics_changed:
-        cursor.execute(
-            """
-            UPDATE app_user
-            SET followed_topic_ids_json = '[]'::jsonb,
-                followed_topic_count = 0
-            """
-        )
         cursor.execute(
             """
             UPDATE system_profile_seed
             SET topic_weights_json = '[]'::jsonb,
                 recent_queries_json = '[]'::jsonb
+            WHERE source_space = 'mind'
             """
         )
         cursor.execute(
@@ -539,6 +561,7 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
                 recent_queries_json = '[]'::jsonb,
                 user_vector_json = NULL,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE source_space = 'mind'
             """
         )
         cursor.execute(
@@ -546,17 +569,22 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
             UPDATE user_event
             SET query_key = NULL,
                 topic_ids_json = NULL
-            WHERE query_key IS NOT NULL OR topic_ids_json IS NOT NULL
+            WHERE source_space = 'mind'
+              AND (query_key IS NOT NULL OR topic_ids_json IS NOT NULL)
             """
         )
-        cursor.execute("DELETE FROM topic")
+        cursor.execute("DELETE FROM user_topic_profile WHERE source_space = 'mind'")
+        cursor.execute("DELETE FROM topic WHERE source_space = 'mind'")
 
     cursor.execute(
         """
-        INSERT INTO topic (topic_id, topic_key, display_name, news_count, source)
-        SELECT topic_id, topic_key, display_name, news_count, 'mind_small'
+        INSERT INTO topic (
+            topic_id, source_space, topic_key, display_name, news_count, source
+        )
+        SELECT topic_id, 'mind', topic_key, display_name, news_count, 'mind_small'
         FROM mind_topic_import_stage
         ON CONFLICT (topic_id) DO UPDATE SET
+            source_space = 'mind',
             topic_key = EXCLUDED.topic_key,
             display_name = EXCLUDED.display_name,
             news_count = EXCLUDED.news_count,
@@ -566,7 +594,8 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
     cursor.execute(
         """
         DELETE FROM topic AS current
-        WHERE NOT EXISTS (
+        WHERE current.source_space = 'mind'
+          AND NOT EXISTS (
             SELECT 1 FROM mind_topic_import_stage AS stage
             WHERE stage.topic_id = current.topic_id
         )
@@ -651,10 +680,11 @@ def _upsert_catalog(cursor: Any, prepared: PreparedCatalog) -> None:
     cursor.execute(
         """
         INSERT INTO query_topic_map (
-            query_key, display_query, query_tokens_json, topic_id, score,
+            source_space, query_key, display_query, query_tokens_json, topic_id, score,
             evidence_query_count, evidence_user_count, match_rank, source_method
         )
         SELECT
+            'mind',
             topic_id::text,
             display_name,
             jsonb_build_array(LOWER(display_name)),
@@ -710,10 +740,11 @@ def _assert_replacement_has_no_removed_news_references(cursor: Any) -> None:
         """
         SELECT
             (SELECT COUNT(*) FROM user_event AS event
-             WHERE event.news_id IS NOT NULL
+             WHERE event.source_space = 'mind'
+               AND event.article_id IS NOT NULL
                AND NOT EXISTS (
                    SELECT 1 FROM mind_news_import_stage AS stage
-                   WHERE stage.news_id = event.news_id
+                   WHERE stage.news_id = event.article_id
                )) AS user_events,
             (SELECT COUNT(*) FROM sponsored_creative AS creative
              WHERE NOT EXISTS (

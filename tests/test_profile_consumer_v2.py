@@ -69,6 +69,8 @@ def event(event_type: str = "recommendation_click") -> UserEventMessage:
         event_id="evt-profile-v2",
         event_type=event_type,
         user_id=7,
+        source_space="mind",
+        article_id="N12",
         news_id="N12",
         query_key="sports" if event_type == "search_result_click" else None,
         event_ts=1_000,
@@ -128,7 +130,7 @@ def test_pre_reset_event_is_recorded_but_v1_projection_is_skipped(
     project_flags: list[bool] = []
     late: list[tuple[tuple[tuple[str, str], ...], float]] = []
 
-    monkeypatch.setattr(consumer, "claim_event_id", lambda *args: True)
+    monkeypatch.setattr(consumer, "claim_event_id", lambda *args, **kwargs: True)
     monkeypatch.setattr(consumer, "profile_event_is_before_reset", lambda *args, **kwargs: True)
     monkeypatch.setattr(consumer, "enqueue_outbox_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(consumer, "PROFILE_V2_LATE_EVENTS", FakeMetric(late))
@@ -152,7 +154,7 @@ def test_v2_projection_failure_rolls_back_the_whole_event_transaction(
     connection = FakeConnection()
     applier._connection_pool = FakePool(connection)
 
-    monkeypatch.setattr(consumer, "claim_event_id", lambda *args: True)
+    monkeypatch.setattr(consumer, "claim_event_id", lambda *args, **kwargs: True)
     monkeypatch.setattr(consumer, "profile_event_is_before_reset", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         applier,
@@ -167,3 +169,158 @@ def test_v2_projection_failure_rolls_back_the_whole_event_transaction(
     assert connection.committed is False
     assert connection.rolled_back is True
     assert connection.closed is True
+
+
+def test_outbound_click_is_claimed_in_space_and_applied_as_log_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applier = make_applier(enabled=True)
+    connection = FakeConnection()
+    applier._connection_pool = FakePool(connection)
+    calls: list[tuple[str, dict[str, Any]]] = []
+    outbound = UserEventMessage(
+        event_id="evt-outbound",
+        event_type="outbound_click",
+        user_id=7,
+        source_space="live",
+        article_id="L550e8400e29b41d4a716446655440000",
+        event_ts=1_000,
+    )
+
+    def claim(*args: Any, **kwargs: Any) -> bool:
+        calls.append(("claim", kwargs))
+        return True
+
+    def before_reset(*args: Any, **kwargs: Any) -> bool:
+        calls.append(("reset", kwargs))
+        return False
+
+    monkeypatch.setattr(consumer, "claim_event_id", claim)
+    monkeypatch.setattr(consumer, "profile_event_is_before_reset", before_reset)
+    monkeypatch.setattr(consumer, "enqueue_outbox_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        applier,
+        "_apply_log_only",
+        lambda *args, **kwargs: calls.append(("log", kwargs)),
+    )
+
+    assert applier.apply_event(outbound) is True
+    assert calls[0] == ("claim", {"source_space": "live"})
+    assert calls[1][0] == "reset"
+    assert calls[1][1]["source_space"] == "live"
+    assert calls[2][0] == "log"
+    assert connection.committed is True
+
+
+def test_live_click_never_loads_mind_topics_and_persists_canonical_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applier = make_applier(enabled=True)
+    calls: list[dict[str, Any]] = []
+    live_event = UserEventMessage(
+        event_id="evt-live-click",
+        event_type="recommendation_click",
+        user_id=7,
+        source_space="live",
+        article_id="L550e8400e29b41d4a716446655440000",
+        event_ts=1_000,
+    )
+    monkeypatch.setattr(
+        consumer,
+        "load_news_topic_ids",
+        lambda *args, **kwargs: pytest.fail("live events must not read MIND mappings"),
+    )
+    monkeypatch.setattr(
+        consumer,
+        "record_click_event",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    applier._apply_recommendation_click(object(), live_event, project_profile=False)
+
+    assert calls[0]["source_space"] == "live"
+    assert calls[0]["article_id"] == live_event.article_id
+
+
+def test_consumer_training_message_is_schema_v5_and_space_scoped() -> None:
+    applier = make_applier(enabled=True)
+    live_event = UserEventMessage(
+        event_id="evt-live-training",
+        event_type="feed_impression",
+        user_id=7,
+        source_space="live",
+        article_id="L550e8400e29b41d4a716446655440000",
+        event_ts=1_000,
+    )
+
+    training = applier._training_message(live_event)
+
+    assert training is not None
+    assert training.schema_version == 5
+    assert training.source_space == "live"
+    assert training.article_id == live_event.article_id
+    assert training.partition_key == "live:7"
+
+
+def test_duplicate_event_preserves_existing_legacy_training_outbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applier = make_applier(enabled=True)
+    connection = FakeConnection()
+    applier._connection_pool = FakePool(connection)
+    legacy_training_row = {
+        "schema_version": 4,
+        "example_id": "evt-profile-v2",
+        "user_id": 7,
+        "news_id": "N12",
+        "event_type": "feed_impression",
+        "event_ts": 1_000,
+    }
+    monkeypatch.setattr(consumer, "claim_event_id", lambda *args, **kwargs: False)
+
+    def existing(*args: Any, **kwargs: Any) -> bool:
+        assert legacy_training_row["schema_version"] == 4
+        assert kwargs["event_id"] == legacy_training_row["example_id"]
+        return True
+
+    monkeypatch.setattr(
+        consumer,
+        "outbox_message_exists",
+        existing,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        consumer,
+        "enqueue_outbox_message",
+        lambda *args, **kwargs: pytest.fail("existing v4 training row must not be rewritten"),
+    )
+
+    assert applier.apply_event(event("feed_impression")) is False
+    assert connection.committed is True
+
+
+def test_duplicate_event_backfills_missing_training_outbox_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applier = make_applier(enabled=True)
+    connection = FakeConnection()
+    applier._connection_pool = FakePool(connection)
+    existence = iter([False, True])
+    enqueued: list[dict[str, Any]] = []
+    monkeypatch.setattr(consumer, "claim_event_id", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        consumer,
+        "outbox_message_exists",
+        lambda *args, **kwargs: next(existence),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        consumer,
+        "enqueue_outbox_message",
+        lambda *args, **kwargs: enqueued.append(kwargs),
+    )
+
+    assert applier.apply_event(event("feed_impression")) is False
+    assert applier.apply_event(event("feed_impression")) is False
+    assert len(enqueued) == 1
+    assert '"schema_version":5' in enqueued[0]["payload_json"]

@@ -90,16 +90,38 @@ def test_auth_secret_can_be_loaded_from_file(monkeypatch, tmp_path: Path):
     assert settings.auth_secret_key == secret
 
 
-def test_profile_v2_settings_have_safe_mvp_defaults() -> None:
-    from backend.app.config import Settings
+def test_profile_v2_projection_is_enabled_by_default(monkeypatch) -> None:
+    from backend.app import config
 
-    settings = Settings()
+    monkeypatch.setattr(config, "_DOTENV_VALUES", {}, raising=False)
+    monkeypatch.delenv("NEWSREC_PROFILE_V2_ENABLED", raising=False)
+    config.get_settings.cache_clear()
 
-    assert settings.profile_v2_enabled is False
+    try:
+        settings = config.get_settings()
+    finally:
+        config.get_settings.cache_clear()
+
+    assert settings.profile_v2_enabled is True
     assert settings.profile_v2_short_half_life_seconds == 21_600
     assert settings.profile_v2_long_half_life_seconds == 2_592_000
     assert settings.profile_v2_long_term_factor == 0.25
     assert settings.profile_v2_boost == 0.10
+
+
+def test_kafka_source_partition_keys_are_opt_in(monkeypatch) -> None:
+    from backend.app import config
+
+    monkeypatch.setattr(config, "_DOTENV_VALUES", {}, raising=False)
+    monkeypatch.delenv("NEWSREC_KAFKA_SOURCE_PARTITION_KEYS_ENABLED", raising=False)
+    config.get_settings.cache_clear()
+    try:
+        assert config.get_settings().kafka_source_partition_keys_enabled is False
+        monkeypatch.setenv("NEWSREC_KAFKA_SOURCE_PARTITION_KEYS_ENABLED", "1")
+        config.get_settings.cache_clear()
+        assert config.get_settings().kafka_source_partition_keys_enabled is True
+    finally:
+        config.get_settings.cache_clear()
 
 
 def test_profile_v2_settings_can_be_overridden_from_the_environment(monkeypatch) -> None:

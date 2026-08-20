@@ -46,3 +46,16 @@ def test_kafka_readiness_requires_worker_heartbeats(monkeypatch):
     assert readiness.status == "error"
     assert readiness.dependencies["workers"].status == "error"
     assert "missing heartbeat" in str(readiness.dependencies["workers"].detail)
+
+
+def test_readiness_reports_live_collector_without_failing_mind():
+    settings = Settings(
+        database_url=os.environ["NEWSREC_DATABASE_URL"],
+        event_mode="sync_postgres",
+        search_retrieval_mode="lexical_v1",
+        live_news_collector_enabled=False,
+    )
+
+    readiness = check_readiness(settings)
+
+    assert readiness.dependencies["live_news_collector"].status == "disabled"

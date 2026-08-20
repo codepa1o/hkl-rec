@@ -1,9 +1,11 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { trackEvent } from "../api/client";
+import type { NewsSpace } from "../api/types";
 
 interface Props {
-  newsId: string;
+  sourceSpace: NewsSpace;
+  articleId: string;
   userId: number;
   requestId?: string;
   surface?: string;
@@ -13,7 +15,8 @@ interface Props {
 type VoteDirection = "upvote" | "downvote";
 
 export default function VoteActions({
-  newsId,
+  sourceSpace,
+  articleId,
   userId,
   requestId,
   surface = "feed",
@@ -25,9 +28,10 @@ export default function VoteActions({
     setSelected(direction);
     void trackEvent({
       user_id: userId,
+      source_space: sourceSpace,
       event_type: direction,
       surface,
-      news_id: newsId,
+      article_id: articleId,
       request_id: requestId ?? null,
     }).then(() => onVoted?.());
   };
@@ -41,7 +45,7 @@ export default function VoteActions({
         aria-pressed={selected === "upvote"}
         onClick={() => handleVote("upvote")}
       >
-        <ArrowUp size={16} />
+        <ThumbsUp size={16} aria-hidden="true" />
       </button>
       <span className="zr-vote-divider" aria-hidden="true" />
       <button
@@ -51,7 +55,7 @@ export default function VoteActions({
         aria-pressed={selected === "downvote"}
         onClick={() => handleVote("downvote")}
       >
-        <ArrowDown size={16} />
+        <ThumbsDown size={16} aria-hidden="true" />
       </button>
     </div>
   );

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Boolean, CheckConstraint, Identity, inspect
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -14,6 +16,10 @@ EXPECTED_TABLES = {
     "user_account",
     "event_idempotency",
     "feed_request",
+    "live_news",
+    "live_news_content_job",
+    "live_news_import",
+    "live_news_source_checkpoint",
     "mind_news",
     "mind_news_topic",
     "mind_news_stats",
@@ -74,7 +80,7 @@ def test_mind_news_is_the_exact_eight_field_source_of_truth() -> None:
     assert set(mapping.c.keys()) == {"news_id", "topic_id", "source_rank"}
 
 
-def test_all_content_references_use_news_id() -> None:
+def test_mind_content_references_use_news_id_and_events_use_article_id() -> None:
     for table_name in ("mind_news_stats", "sponsored_creative", "sponsored_delivery"):
         table = metadata.tables[table_name]
         assert "news_id" in table.c
@@ -86,7 +92,8 @@ def test_all_content_references_use_news_id() -> None:
         }
         assert "mind_news.news_id" in targets
 
-    assert "news_id" in metadata.tables["user_event"].c
+    assert "article_id" in metadata.tables["user_event"].c
+    assert "news_id" not in metadata.tables["user_event"].c
     assert "answer_id" not in metadata.tables["user_event"].c
     assert "recent_clicked_news_json" in metadata.tables["user_profile"].c
     assert "recent_clicked_answers_json" not in metadata.tables["user_profile"].c
@@ -122,7 +129,9 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 7
+    assert len(versions) == 10
+    script = ScriptDirectory.from_config(Config(root / "alembic.ini"))
+    assert script.get_heads() == ["20260818_0010"]
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:
@@ -140,7 +149,11 @@ def test_feed_request_metadata_includes_category_request_shape() -> None:
 def test_profile_v2_metadata_has_normalized_topic_projection() -> None:
     projection = metadata.tables["user_topic_profile"]
 
-    assert [column.name for column in projection.primary_key.columns] == ["user_id", "topic_id"]
+    assert [column.name for column in projection.primary_key.columns] == [
+        "user_id",
+        "source_space",
+        "topic_id",
+    ]
     assert {
         "short_positive_score",
         "short_negative_score",

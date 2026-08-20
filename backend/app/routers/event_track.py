@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from backend.app.auth.service import AuthenticatedUser, AuthService
 from backend.app.dependencies import get_product_service
 from backend.app.errors import IdempotencyConflictError
+from backend.app.observability import PROFILE_UPDATES, USER_EVENTS
 from backend.app.routers.auth import (
     authorize_user_access,
     get_auth_service_factory,
@@ -27,7 +28,14 @@ def _record_event(
 ) -> EventTrackResponse:
     authorize_user_access(payload.user_id, current_user, auth_service_factory)
     try:
-        return service.record_tracked_event(payload)
+        response = service.record_tracked_event(payload)
+        USER_EVENTS.labels(
+            source_space=response.source_space,
+            event_type=response.event_type,
+        ).inc()
+        if response.profile_updated:
+            PROFILE_UPDATES.labels(source_space=response.source_space).inc()
+        return response
     except IdempotencyConflictError:
         raise
     except ValueError as exc:

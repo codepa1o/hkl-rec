@@ -60,6 +60,7 @@ class KafkaEventPublisher:
         self._raw_topic = settings.kafka_raw_events_topic
         self._training_topic = settings.kafka_training_topic
         self._dlq_topic = settings.kafka_dlq_topic
+        self._source_partition_keys_enabled = settings.kafka_source_partition_keys_enabled
         self._flush_timeout_seconds = settings.kafka_producer_flush_timeout_seconds
         self._delivery_errors: list[str] = []
 
@@ -67,10 +68,18 @@ class KafkaEventPublisher:
         self._produce(topic, key, value)
 
     def publish_user_event(self, event: UserEventMessage) -> None:
-        self._produce(self._raw_topic, event.partition_key, event.to_json_bytes())
+        self._produce(
+            self._raw_topic,
+            event.publish_partition_key(self._source_partition_keys_enabled),
+            event.to_json_bytes(),
+        )
 
     def publish_training_interaction(self, message: TrainingInteractionMessage) -> None:
-        self._produce(self._training_topic, message.partition_key, message.to_json_bytes())
+        self._produce(
+            self._training_topic,
+            message.publish_partition_key(self._source_partition_keys_enabled),
+            message.to_json_bytes(),
+        )
 
     def publish_dlq_event(self, message: DlqEventMessage) -> None:
         self._produce(self._dlq_topic, message.partition_key, message.to_json_bytes())

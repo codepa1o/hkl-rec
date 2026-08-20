@@ -1,0 +1,3 @@
+{"date":"2026-08-17T02:07:00.000Z","url":"https://www.reuters.com/world/story/?utm_source=x#top","domain":"www.reuters.com","outletName":"Reuters","title":"A current English news test","image":"https://example.invalid/image.jpg","desc":"A complete description used for deterministic hashing.","lang":"en","author":"Reuters"}
+{"date":"2026-08-17T02:08:00.000Z","url":"https://www.xinhuanet.com/politics/20260817/example.html","domain":"www.xinhuanet.com","outletName":"新华网","title":"实时中文测试新闻","image":"","desc":"这是一条用于测试实时新闻导入的中文摘要。","lang":"zh","author":""}
+{"date":"2026-08-17T02:09:00.000Z","url":"https://unknown.invalid/article","domain":"unknown.invalid","outletName":"Unknown","title":"Rejected source","image":"","desc":"Not allowlisted.","lang":"en","author":""}

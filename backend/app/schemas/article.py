@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import Field
 
 from .common import ApiModel, TopicCard
+from .news_space import CanonicalArticleModel
 
 
 class ArticleEntity(ApiModel):
@@ -16,8 +18,7 @@ class ArticleEntity(ApiModel):
     surface_forms: list[str] = Field(default_factory=list)
 
 
-class ArticleCardResponse(ApiModel):
-    news_id: str = Field(pattern=r"^N[0-9]+$")
+class ArticleCardResponse(CanonicalArticleModel):
     title: str
     abstract: str
     url: str
@@ -27,3 +28,14 @@ class ArticleCardResponse(ApiModel):
     categories: list[TopicCard]
     title_entities: list[ArticleEntity]
     abstract_entities: list[ArticleEntity]
+    image_url: str | None = None
+    publisher: str | None = None
+    language: Literal["zh", "en"] | None = None
+    published_at: datetime | None = None
+    discovered_at: datetime | None = None
+    body_text: str | None = None
+    body_status: Literal["metadata_only", "pending", "available", "blocked", "failed"] = (
+        "metadata_only"
+    )
+    body_source: Literal["guardian_api", "rss", "html"] | None = None
+    content_rights: Literal["full_text", "excerpt_only", "link_only"] = "link_only"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -129,6 +130,8 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
         pytest.skip("NEWSREC_DATABASE_URL not set")
     connection = connect(parse_database_url(database_url))
     try:
+        with connection.cursor() as cursor:
+            cursor.execute("BEGIN")
         with connection.transaction(), connection.cursor() as cursor:
             cursor.execute("SELECT current_database() AS database_name")
             if not str(cursor.fetchone()["database_name"]).endswith("_test"):
@@ -148,13 +151,18 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
             )
             cursor.execute(
                 """
-                INSERT INTO user_event (user_id, event_type, event_ts)
-                VALUES (999999, 'search_query', 1)
+                INSERT INTO user_event (source_space, user_id, event_type, event_ts)
+                VALUES ('mind', 999999, 'search_query', 1)
                 """
             )
 
         prepared = prepare_catalog(normalized_catalog)
         first = import_catalog(normalized_catalog, connection, replace_catalog=True)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DROP TABLE mind_topic_import_stage, mind_news_import_stage, "
+                "mind_news_topic_import_stage, mind_news_stats_import_stage"
+            )
         second = import_catalog(normalized_catalog, connection)
         assert first == second
         assert first.news_rows == 3
@@ -181,7 +189,9 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
             )
             counts = cursor.fetchone()
             assert (counts["minimum"], counts["maximum"]) == (2, 2)
-            cursor.execute("SELECT COUNT(*) AS count FROM query_topic_map")
+            cursor.execute(
+                "SELECT COUNT(*) AS count FROM query_topic_map WHERE source_space = 'mind'"
+            )
             assert cursor.fetchone()["count"] == len(prepared.topics)
             cursor.execute(
                 """
@@ -193,4 +203,113 @@ def test_import_is_idempotent_records_fingerprint_and_preserves_events(
             assert import_row["normalized_fingerprint"] == first.normalized_fingerprint
             assert import_row["news_count"] == 3
     finally:
+        connection.rollback()
+        connection.close()
+
+
+@pytest.mark.postgres
+def test_mind_import_never_changes_live_catalog_or_profile_state(
+    normalized_catalog: Path,
+) -> None:
+    database_url = os.environ.get("NEWSREC_DATABASE_URL", "")
+    if not database_url:
+        pytest.skip("NEWSREC_DATABASE_URL not set")
+    connection = connect(parse_database_url(database_url))
+    live_user_id = 9_100_001
+    live_topic_id = 9_100_001
+    live_query_key = "live:test:mind-import-isolation"
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("BEGIN")
+        with connection.transaction(), connection.cursor() as cursor:
+            cursor.execute("SELECT current_database() AS database_name")
+            if not str(cursor.fetchone()["database_name"]).endswith("_test"):
+                pytest.fail("MIND import isolation test requires a database ending in _test")
+            cursor.execute("DELETE FROM sponsored_delivery")
+            cursor.execute("DELETE FROM sponsored_creative")
+            cursor.execute(
+                "INSERT INTO app_user (user_id, display_name) VALUES (%s, %s) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (live_user_id, "live-import-isolation"),
+            )
+            cursor.execute(
+                """
+                INSERT INTO topic (
+                    topic_id, source_space, topic_key, display_name, news_count, source
+                ) VALUES (%s, 'live', %s, 'Live isolation topic', 1, 'live')
+                ON CONFLICT (topic_id) DO UPDATE SET
+                    source_space = 'live', topic_key = EXCLUDED.topic_key,
+                    display_name = EXCLUDED.display_name, news_count = 1, source = 'live'
+                """,
+                (live_topic_id, "live:test/mind-import-isolation"),
+            )
+            cursor.execute(
+                """
+                INSERT INTO query_topic_map (
+                    source_space, query_key, topic_id, score, match_rank, source_method
+                ) VALUES ('live', %s, %s, 1, 0, 'test')
+                ON CONFLICT (source_space, query_key, topic_id) DO NOTHING
+                """,
+                (live_query_key, live_topic_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_profile (
+                    user_id, source_space, cold_start_seed_key, topic_weights_json,
+                    recent_clicked_news_json, recent_queries_json, behavior_score, notes
+                ) VALUES (
+                    %s, 'live', 'live_cold_start_default',
+                    %s::jsonb, '[]'::jsonb, '[]'::jsonb, 0, 'isolation test'
+                )
+                ON CONFLICT (user_id, source_space) DO UPDATE SET
+                    topic_weights_json = EXCLUDED.topic_weights_json
+                """,
+                (live_user_id, json.dumps([{"topic_id": live_topic_id, "weight": 1.0}])),
+            )
+            cursor.execute("SELECT COUNT(*) AS count FROM live_news")
+            live_news_before = int(cursor.fetchone()["count"])
+
+        import_catalog(normalized_catalog, connection, replace_catalog=True)
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) AS count FROM live_news")
+            assert int(cursor.fetchone()["count"]) == live_news_before
+            cursor.execute(
+                "SELECT source_space, topic_key FROM topic WHERE topic_id = %s",
+                (live_topic_id,),
+            )
+            assert cursor.fetchone() == {
+                "source_space": "live",
+                "topic_key": "live:test/mind-import-isolation",
+            }
+            cursor.execute(
+                "SELECT COUNT(*) AS count FROM query_topic_map "
+                "WHERE source_space = 'live' AND query_key = %s AND topic_id = %s",
+                (live_query_key, live_topic_id),
+            )
+            assert int(cursor.fetchone()["count"]) == 1
+            cursor.execute(
+                "SELECT topic_weights_json FROM user_profile "
+                "WHERE user_id = %s AND source_space = 'live'",
+                (live_user_id,),
+            )
+            assert cursor.fetchone()["topic_weights_json"] == [
+                {"topic_id": live_topic_id, "weight": 1.0}
+            ]
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM user_profile WHERE user_id = %s AND source_space = 'live'",
+                (live_user_id,),
+            )
+            cursor.execute(
+                "DELETE FROM query_topic_map WHERE source_space = 'live' AND query_key = %s",
+                (live_query_key,),
+            )
+            cursor.execute(
+                "DELETE FROM topic WHERE topic_id = %s AND source_space = 'live'",
+                (live_topic_id,),
+            )
+            cursor.execute("DELETE FROM app_user WHERE user_id = %s", (live_user_id,))
+        connection.rollback()
         connection.close()

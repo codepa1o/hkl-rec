@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {"domain": "theguardian.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "guardian_api", "display": "full_text", "feed_urls": []}},
+    {"domain": "bbc.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "reuters.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "apnews.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "xinhuanet.com", "languages": ["zh"], "quality_weight": 0.95, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "people.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "chinanews.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "thepaper.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}}
+  ]
+}

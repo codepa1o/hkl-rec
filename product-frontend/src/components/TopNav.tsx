@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useTheme } from "../context/ThemeContext";
 import AccountMenu from "./AccountMenu";
 import SearchBox from "./SearchBox";
+import SourceSpaceSwitcher from "./SourceSpaceSwitcher";
 
 export default function TopNav() {
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -20,6 +21,7 @@ export default function TopNav() {
       </div>
 
       <div className="zr-topbar__actions">
+        <SourceSpaceSwitcher />
         <button
           type="button"
           className="zr-icon-button"

@@ -8,6 +8,8 @@ import PostCard from "./PostCard";
 vi.mock("../api/client", () => ({ trackEvent: vi.fn().mockResolvedValue({ ok: true }) }));
 
 const sponsoredItem: FeedItem = {
+  source_space: "mind",
+  article_id: "N301",
   news_id: "N301",
   title: "Sponsored finance briefing",
   abstract: "A sponsored news summary.",
@@ -60,6 +62,10 @@ describe("PostCard", () => {
     expect(screen.getByText("分享")).toBeInTheDocument();
     expect(screen.getByText("Sponsored finance briefing")).toBeInTheDocument();
     expect(screen.getByText("A sponsored news summary.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sponsored finance briefing" })).toHaveAttribute(
+      "href",
+      "/articles/mind/N301",
+    );
   });
 
   it("分享按钮复制文章链接并记录分享行为", async () => {
@@ -75,10 +81,43 @@ describe("PostCard", () => {
     expect(trackEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 7248,
-        news_id: "N301",
+        source_space: "mind",
+        article_id: "N301",
         event_type: "share",
         request_id: "feed-1",
       }),
     );
+  });
+
+  it("为实时新闻生成来源限定链接并展示来源元数据", () => {
+    const liveItem: FeedItem = {
+      ...sponsoredItem,
+      source_space: "live",
+      article_id: "L0123456789abcdef0123456789abcdef",
+      news_id: null,
+      content_type: "organic",
+      sponsored: null,
+      publisher: "Reuters",
+      language: "en",
+      image_url: "https://example.com/live.jpg",
+      published_at: "2026-08-18T08:00:00Z",
+    };
+
+    render(
+      <MemoryRouter>
+        <PostCard item={liveItem} userId={7248} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: liveItem.title })).toHaveAttribute(
+      "href",
+      `/articles/live/${liveItem.article_id}`,
+    );
+    expect(screen.getByText(/Reuters/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: liveItem.title })).toHaveAttribute(
+      "src",
+      liveItem.image_url,
+    );
+    expect(screen.getByText(/2026/)).toBeInTheDocument();
   });
 });

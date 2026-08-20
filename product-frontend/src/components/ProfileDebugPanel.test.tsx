@@ -13,6 +13,7 @@ vi.mock("./TopicWeightChart", () => ({
 }));
 
 const profileWithRecentReading = {
+  source_space: "mind",
   user_id: 7248,
   cold_start_seed_key: "cold_start_default",
   behavior_score: 32,
@@ -47,12 +48,12 @@ describe("ProfileDebugPanel", () => {
 
     render(
       <MemoryRouter>
-        <ProfileDebugPanel userId={7248} refreshTick={0} />
+        <ProfileDebugPanel sourceSpace="mind" userId={7248} refreshTick={0} />
       </MemoryRouter>,
     );
 
     await waitFor(() => expect(screen.getByText("你的兴趣")).toBeInTheDocument());
-    expect(getDebugProfile).toHaveBeenCalledWith(7248);
+    expect(getDebugProfile).toHaveBeenCalledWith(7248, "mind");
     expect(screen.getByText("兴趣活跃度")).toBeInTheDocument();
     expect(screen.getByText("最近阅读")).toBeInTheDocument();
     expect(screen.queryByText("冷启动种子")).not.toBeInTheDocument();
@@ -63,12 +64,12 @@ describe("ProfileDebugPanel", () => {
   it("仅将最近阅读标题渲染为可跳转的详情链接", async () => {
     render(
       <MemoryRouter>
-        <ProfileDebugPanel userId={7248} refreshTick={0} />
+        <ProfileDebugPanel sourceSpace="mind" userId={7248} refreshTick={0} />
       </MemoryRouter>,
     );
 
     const titleLink = await screen.findByRole("link", { name: "Finance briefing" });
-    expect(titleLink).toHaveAttribute("href", "/articles/N1003");
+    expect(titleLink).toHaveAttribute("href", "/articles/mind/N1003");
     expect(screen.queryByText("新闻 N1003")).not.toBeInTheDocument();
 
     const date = screen.getByText(/2026/);
@@ -87,11 +88,36 @@ describe("ProfileDebugPanel", () => {
 
     render(
       <MemoryRouter>
-        <ProfileDebugPanel userId={7248} refreshTick={0} />
+        <ProfileDebugPanel sourceSpace="mind" userId={7248} refreshTick={0} />
       </MemoryRouter>,
     );
 
     expect(await screen.findAllByRole("link")).toHaveLength(7);
     expect(screen.getByRole("link", { name: "新闻标题 7" })).toBeInTheDocument();
+  });
+
+  it("实时画像的最近阅读链接保持在 Live 空间", async () => {
+    vi.mocked(getDebugProfile).mockResolvedValue({
+      ...profileWithRecentReading,
+      source_space: "live",
+      recent_clicked_news: [
+        {
+          news_id: "L0123456789abcdef0123456789abcdef",
+          title: "Live briefing",
+          click_ts: 1_786_838_400,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfileDebugPanel sourceSpace="live" userId={7248} refreshTick={0} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("link", { name: "Live briefing" })).toHaveAttribute(
+      "href",
+      "/articles/live/L0123456789abcdef0123456789abcdef",
+    );
   });
 });

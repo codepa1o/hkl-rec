@@ -25,6 +25,7 @@ export interface CategoryItem {
 }
 
 export interface CategoryListResponse {
+  source_space: NewsSpace;
   items: CategoryItem[];
 }
 
@@ -50,11 +51,14 @@ export interface SuggestionItem {
 }
 
 export interface SuggestionListResponse {
+  source_space: NewsSpace;
   items: SuggestionItem[];
 }
 
 export interface ArticleCardResponse {
-  news_id: string;
+  source_space: NewsSpace;
+  article_id: string;
+  news_id?: string | null;
   title: string;
   abstract: string;
   url: string;
@@ -64,6 +68,15 @@ export interface ArticleCardResponse {
   categories: TopicCard[];
   title_entities: ArticleEntity[];
   abstract_entities: ArticleEntity[];
+  image_url?: string | null;
+  publisher?: string | null;
+  language?: "zh" | "en" | null;
+  published_at?: string | null;
+  discovered_at?: string | null;
+  body_text?: string | null;
+  body_status?: "metadata_only" | "pending" | "available" | "blocked" | "failed";
+  body_source?: "guardian_api" | "rss" | "html" | null;
+  content_rights?: "full_text" | "excerpt_only" | "link_only";
 }
 
 export type ArticleEntityType = "person" | "organization" | "location" | "other";
@@ -96,7 +109,9 @@ export interface SponsoredFeedMetadata {
 }
 
 export interface FeedItem {
-  news_id: string;
+  source_space: NewsSpace;
+  article_id: string;
+  news_id?: string | null;
   title: string;
   abstract: string;
   url: string;
@@ -110,9 +125,15 @@ export interface FeedItem {
   is_fallback: boolean;
   content_type: "organic" | "sponsored";
   sponsored?: SponsoredFeedMetadata | null;
+  image_url?: string | null;
+  publisher?: string | null;
+  language?: "zh" | "en" | null;
+  published_at?: string | null;
+  discovered_at?: string | null;
 }
 
 export interface FeedResponse {
+  source_space: NewsSpace;
   user_id: number;
   request_id: string;
   items: FeedItem[];
@@ -130,7 +151,9 @@ export interface SearchItemScores {
 }
 
 export interface SearchItem {
-  news_id: string;
+  source_space: NewsSpace;
+  article_id: string;
+  news_id?: string | null;
   title: string;
   abstract: string;
   url: string;
@@ -139,9 +162,15 @@ export interface SearchItem {
   subcategory: string;
   categories: TopicCard[];
   scores: SearchItemScores;
+  image_url?: string | null;
+  publisher?: string | null;
+  language?: "zh" | "en" | null;
+  published_at?: string | null;
+  discovered_at?: string | null;
 }
 
 export interface SearchResponse {
+  source_space: NewsSpace;
   user_id: number;
   request_id: string;
   query_key: string;
@@ -182,6 +211,7 @@ export interface ProfileTermLayer {
 }
 
 export interface ProfileResponse {
+  source_space: NewsSpace;
   user_id: number;
   profile_version: "v2";
   status: ProfileStatus;
@@ -200,6 +230,7 @@ export interface DebugVectorSummary {
 }
 
 export interface DebugProfileResponse {
+  source_space: NewsSpace;
   user_id: number;
   cold_start_seed_key: string;
   behavior_score: number;
@@ -217,14 +248,17 @@ export type EventTrackType =
   | "downvote"
   | "share"
   | "recommendation_click"
-  | "search_result_click";
+  | "search_result_click"
+  | "outbound_click";
 
 export interface EventTrackRequest {
   event_id?: string | null;
   user_id: number;
+  source_space?: NewsSpace;
   event_type: EventTrackType;
   surface: string;
   news_id?: string | null;
+  article_id?: string | null;
   query_key?: string | null;
   request_id?: string | null;
   sponsored_delivery_id?: string | null;
@@ -235,6 +269,18 @@ export interface EventTrackRequest {
 export interface EventTrackResponse {
   ok: boolean;
   event_type: EventTrackType;
+  source_space: NewsSpace;
   profile_updated: boolean;
   behavior_score: number | null;
+}
+export type NewsSpace = "mind" | "live";
+export type LiveLanguage = "all" | "zh" | "en";
+
+export interface NewsSpaceCapability {
+  source_space: NewsSpace;
+  enabled: boolean;
+}
+
+export interface NewsSpaceListResponse {
+  items: NewsSpaceCapability[];
 }

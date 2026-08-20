@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { listCategories } from "../api/client";
 import type { CategoryItem } from "../api/types";
+import { useSourceSpace } from "../context/SourceSpaceContext";
 import { localizeCategoryName } from "../localization";
 import SlidingSelectionGroup from "./SlidingSelectionGroup";
 
@@ -11,6 +12,7 @@ function navClass({ isActive }: { isActive: boolean }) {
 }
 
 export default function LeftSidebar() {
+  const { sourceSpace } = useSourceSpace();
   const location = useLocation();
   const selectedCategory = new URLSearchParams(location.search).get("category");
   const [categories, setCategories] = useState<CategoryItem[]>([]);
@@ -44,9 +46,13 @@ export default function LeftSidebar() {
   useEffect(() => {
     let cancelled = false;
     setCategoryError(false);
-    void listCategories()
+    setCategories([]);
+    if (sourceSpace === "live") return;
+    void listCategories(sourceSpace)
       .then((response) => {
-        if (!cancelled) setCategories(response.items);
+        if (!cancelled && response.source_space === sourceSpace) {
+          setCategories(response.items);
+        }
       })
       .catch(() => {
         if (!cancelled) setCategoryError(true);
@@ -54,7 +60,7 @@ export default function LeftSidebar() {
     return () => {
       cancelled = true;
     };
-  }, [reloadToken]);
+  }, [reloadToken, sourceSpace]);
 
   return (
     <nav className="zr-left" aria-label="主导航">
@@ -79,6 +85,7 @@ export default function LeftSidebar() {
         </NavLink>
       </SlidingSelectionGroup>
 
+      {sourceSpace === "mind" && (
       <div className="zr-left__section zr-left__section--categories">
         <div className="zr-left__section-title">新闻分类</div>
         <SlidingSelectionGroup
@@ -119,10 +126,13 @@ export default function LeftSidebar() {
           )}
         </SlidingSelectionGroup>
       </div>
+      )}
 
       <div className="zr-left__footer">
         <FlaskConical size={16} />
-        <span>由个性化推荐模型驱动</span>
+        <span>
+          {sourceSpace === "mind" ? "由个性化推荐模型驱动" : "实时双语新闻持续更新"}
+        </span>
       </div>
     </nav>
   );

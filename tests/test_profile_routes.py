@@ -55,12 +55,13 @@ class SingleUserAuthRepository:
 class ProfileRouteRepository:
     profile_error: Exception | None = None
     reset_error: Exception | None = None
-    profile_user_ids: list[int] = field(default_factory=list)
-    reset_user_ids: list[int] = field(default_factory=list)
-    debug_user_ids: list[int] = field(default_factory=list)
+    profile_targets: list[tuple[int, str]] = field(default_factory=list)
+    reset_targets: list[tuple[int, str]] = field(default_factory=list)
+    debug_targets: list[tuple[int, str]] = field(default_factory=list)
 
-    def _profile(self, user_id: int) -> ProfileResponse:
+    def _profile(self, user_id: int, source_space: str = "mind") -> ProfileResponse:
         return ProfileResponse(
+            source_space=source_space,
             user_id=user_id,
             status="learning",
             confidence=0.25,
@@ -69,17 +70,18 @@ class ProfileRouteRepository:
             long_term=ProfileTermLayer(),
         )
 
-    def get_profile(self, user_id: int) -> ProfileResponse:
-        self.profile_user_ids.append(user_id)
+    def get_profile(self, user_id: int, source_space: str = "mind") -> ProfileResponse:
+        self.profile_targets.append((user_id, source_space))
         if self.profile_error is not None:
             raise self.profile_error
-        return self._profile(user_id)
+        return self._profile(user_id, source_space)
 
-    def reset_profile(self, user_id: int) -> ProfileResponse:
-        self.reset_user_ids.append(user_id)
+    def reset_profile(self, user_id: int, source_space: str = "mind") -> ProfileResponse:
+        self.reset_targets.append((user_id, source_space))
         if self.reset_error is not None:
             raise self.reset_error
         return ProfileResponse(
+            source_space=source_space,
             user_id=user_id,
             status="cold",
             confidence=0.0,
@@ -88,8 +90,8 @@ class ProfileRouteRepository:
             long_term=ProfileTermLayer(),
         )
 
-    def get_debug_profile(self, user_id: int) -> DebugProfileResponse:
-        self.debug_user_ids.append(user_id)
+    def get_debug_profile(self, user_id: int, source_space: str = "mind") -> DebugProfileResponse:
+        self.debug_targets.append((user_id, source_space))
         return DebugProfileResponse(
             user_id=user_id,
             cold_start_seed_key="cold_start_default",
@@ -133,17 +135,28 @@ def test_profile_requires_authenticated_session() -> None:
     assert response.status_code == 401
 
 
-def test_profile_uses_session_user_and_ignores_user_id_query() -> None:
+def test_profile_uses_session_user_when_target_is_omitted() -> None:
     repository = ProfileRouteRepository()
     client = _client(repository)
     _login(client)
 
-    response = client.get("/profile", params={"user_id": 7001})
+    response = client.get("/profile")
 
     assert response.status_code == 200
     assert response.json()["user_id"] == 7004
     assert response.json()["profile_version"] == "v2"
-    assert repository.profile_user_ids == [7004]
+    assert repository.profile_targets == [(7004, "mind")]
+
+
+def test_profile_rejects_an_unrelated_target_user() -> None:
+    repository = ProfileRouteRepository()
+    client = _client(repository)
+    _login(client)
+
+    response = client.get("/profile", params={"user_id": 7001, "source_space": "live"})
+
+    assert response.status_code == 403
+    assert repository.profile_targets == []
 
 
 def test_profile_not_initialized_returns_stable_404_error() -> None:
@@ -161,12 +174,16 @@ def test_profile_reset_uses_session_user_and_returns_cold_profile() -> None:
     client = _client(repository)
     _login(client)
 
-    response = client.post("/profile/reset")
+    response = client.post(
+        "/profile/reset",
+        json={"user_id": 7004, "source_space": "live"},
+    )
 
     assert response.status_code == 200
     assert response.json()["status"] == "cold"
     assert response.json()["evidence_count"] == 0
-    assert repository.reset_user_ids == [7004]
+    assert response.json()["source_space"] == "live"
+    assert repository.reset_targets == [(7004, "live")]
 
 
 def test_profile_reset_rejects_untrusted_origin() -> None:
@@ -177,10 +194,11 @@ def test_profile_reset_rejects_untrusted_origin() -> None:
     response = client.post(
         "/profile/reset",
         headers={"Origin": "https://attacker.example"},
+        json={"user_id": 7004, "source_space": "mind"},
     )
 
     assert response.status_code == 403
-    assert repository.reset_user_ids == []
+    assert repository.reset_targets == []
 
 
 def test_profile_reset_reports_missing_seed_as_service_unavailable() -> None:
@@ -190,7 +208,10 @@ def test_profile_reset_reports_missing_seed_as_service_unavailable() -> None:
     client = _client(repository)
     _login(client)
 
-    response = client.post("/profile/reset")
+    response = client.post(
+        "/profile/reset",
+        json={"user_id": 7004, "source_space": "mind"},
+    )
 
     assert response.status_code == 503
     assert response.json()["error_code"] == "PROFILE_SEED_UNAVAILABLE"
@@ -205,4 +226,4 @@ def test_debug_profile_route_remains_available_for_compatible_research_access() 
 
     assert response.status_code == 200
     assert response.json()["user_id"] == 7004
-    assert repository.debug_user_ids == [7004]
+    assert repository.debug_targets == [(7004, "mind")]

@@ -42,10 +42,10 @@ def test_as_of_popularity_excludes_future_impressions():
             cursor.execute(
                 """
                 INSERT INTO user_event (
-                    external_event_id, user_id, event_type, news_id, surface,
+                    external_event_id, source_space, user_id, event_type, article_id, surface,
                     derived_from_raw, source_confidence, event_ts
                 ) VALUES (
-                    'as-of-popularity-fixture', %s, 'feed_impression', %s,
+                    'as-of-popularity-fixture', 'mind', %s, 'feed_impression', %s,
                     'test', TRUE, 'confirmed', %s
                 )
                 """,

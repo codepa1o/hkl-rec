@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app.config import Settings, get_settings  # noqa: E402
 from backend.app.events.schema import UserEventMessage, UserEventType  # noqa: E402
+from backend.app.news_spaces.types import NewsSpace  # noqa: E402
 from backend.app.profiles.signals import topic_strengths_for_event  # noqa: E402
 from backend.app.repositories._utils import parse_json  # noqa: E402
 from backend.app.repositories.connection import (  # noqa: E402
@@ -39,12 +40,62 @@ _PROFILE_EVENT_TYPES = (
 
 
 @dataclass(frozen=True, slots=True)
+class ProfileTarget:
+    user_id: int
+    source_space: NewsSpace
+
+
+@dataclass(frozen=True, slots=True)
+class FailedTarget:
+    user_id: int
+    source_space: NewsSpace
+    error_type: str
+    error_message: str
+
+
+class RebuildTargetNotFoundError(LookupError):
+    def __init__(self, user_id: int, source_space: NewsSpace) -> None:
+        self.user_id = user_id
+        self.source_space = source_space
+        super().__init__(
+            f"profile target not found: user_id={user_id}, source_space={source_space!r}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RebuildSummary:
-    target_user_count: int
+    target_profiles: list[ProfileTarget]
     selected_event_count: int
     replayed_event_count: int
-    failed_user_ids: list[int]
+    failed_targets: list[FailedTarget]
     dry_run: bool
+
+    @property
+    def target_user_count(self) -> int:
+        return len({target.user_id for target in self.target_profiles})
+
+    @property
+    def target_profile_count(self) -> int:
+        return len(self.target_profiles)
+
+    @property
+    def failed_user_ids(self) -> list[int]:
+        return sorted({target.user_id for target in self.failed_targets})
+
+
+def rebuild_summary_payload(summary: RebuildSummary) -> dict[str, Any]:
+    return {
+        "report_schema_version": 2,
+        "source_aware": True,
+        "target_profiles": [asdict(target) for target in summary.target_profiles],
+        "failed_targets": [asdict(target) for target in summary.failed_targets],
+        "target_user_count": summary.target_user_count,
+        "target_profile_count": summary.target_profile_count,
+        "failed_user_ids": summary.failed_user_ids,
+        "selected_event_count": summary.selected_event_count,
+        "replayed_event_count": summary.replayed_event_count,
+        "dry_run": summary.dry_run,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rebuild every initialized user profile.",
     )
     parser.add_argument(
+        "--source-space",
+        choices=("mind", "live"),
+        default="mind",
+        help="News space for --user-id (default: mind). Ignored with --all.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Count selected users and events without changing projections.",
@@ -73,25 +130,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_target_user_ids(
+def load_target_profiles(
     connection: Any,
     user_id: int | None,
+    source_space: NewsSpace,
     all_users: bool,
-) -> list[int]:
+) -> list[ProfileTarget]:
     with connection.cursor() as cursor:
         if all_users:
-            cursor.execute("SELECT user_id FROM user_profile ORDER BY user_id")
+            cursor.execute(
+                "SELECT user_id, source_space FROM user_profile ORDER BY user_id, source_space"
+            )
         else:
             cursor.execute(
-                "SELECT user_id FROM user_profile WHERE user_id = %s",
-                (user_id,),
+                "SELECT user_id, source_space FROM user_profile "
+                "WHERE user_id = %s AND source_space = %s "
+                "ORDER BY user_id, source_space",
+                (user_id, source_space),
             )
-        return [int(row["user_id"]) for row in cursor.fetchall()]
+        return [
+            ProfileTarget(
+                user_id=int(row["user_id"]),
+                source_space=cast(NewsSpace, str(row["source_space"])),
+            )
+            for row in cursor.fetchall()
+        ]
 
 
 def load_reset_cutoff(
     connection: Any,
     user_id: int,
+    source_space: NewsSpace,
     *,
     for_update: bool = False,
 ) -> ResetBoundary | None:
@@ -101,10 +170,10 @@ def load_reset_cutoff(
             """
             SELECT profile_reset_before_ts, profile_reset_before_event_id
             FROM user_profile
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             """
             + lock_clause,
-            (user_id,),
+            (user_id, source_space),
         )
         row = cursor.fetchone()
     if row is None or row.get("profile_reset_before_ts") is None:
@@ -119,6 +188,7 @@ def load_reset_cutoff(
 def load_rebuild_events(
     connection: Any,
     user_id: int,
+    source_space: NewsSpace,
     reset_cutoff: ResetBoundary | None,
 ) -> list[dict[str, Any]]:
     reset_ts = reset_cutoff.event_ts if reset_cutoff is not None else None
@@ -131,7 +201,8 @@ def load_rebuild_events(
               external_event_id,
               user_id,
               event_type,
-              news_id,
+              source_space,
+              article_id,
               query_key,
               surface,
               dwell_ms,
@@ -139,13 +210,15 @@ def load_rebuild_events(
               event_ts
             FROM user_event
             WHERE user_id = %s
+              AND source_space = %s
               AND event_type = ANY(%s)
-              AND (%s IS NULL OR event_ts >= %s)
-              AND (%s IS NULL OR event_id > %s)
+              AND (%s::BIGINT IS NULL OR event_ts >= %s)
+              AND (%s::BIGINT IS NULL OR event_id > %s)
             ORDER BY user_id ASC, event_ts ASC, event_id ASC
             """,
             (
                 user_id,
+                source_space,
                 list(_PROFILE_EVENT_TYPES),
                 reset_ts,
                 reset_ts,
@@ -156,9 +229,16 @@ def load_rebuild_events(
         return [dict(row) for row in cursor.fetchall()]
 
 
-def clear_profile_v2_projection(connection: Any, user_id: int) -> None:
+def clear_profile_v2_projection(
+    connection: Any,
+    user_id: int,
+    source_space: NewsSpace,
+) -> None:
     with connection.cursor() as cursor:
-        cursor.execute("DELETE FROM user_topic_profile WHERE user_id = %s", (user_id,))
+        cursor.execute(
+            "DELETE FROM user_topic_profile WHERE user_id = %s AND source_space = %s",
+            (user_id, source_space),
+        )
         cursor.execute(
             """
             UPDATE user_profile
@@ -166,17 +246,19 @@ def clear_profile_v2_projection(connection: Any, user_id: int) -> None:
               profile_v2_evidence_count = 0,
               profile_v2_last_event_ts = NULL,
               profile_v2_updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             """,
-            (user_id,),
+            (user_id, source_space),
         )
 
 
 def _news_id(row: dict[str, Any]) -> str | None:
-    raw_value = row.get("news_id", row.get("answer_id", row.get("article_id")))
+    raw_value = row.get("article_id") or row.get("answer_id")
     if raw_value is None:
         return None
     text_value = str(raw_value)
+    if text_value.startswith("L"):
+        return text_value
     if text_value.startswith("N") and text_value[1:].isdigit():
         return text_value
     return f"N{text_value}" if text_value.isdigit() else None
@@ -191,11 +273,15 @@ def _stored_topic_ids(row: dict[str, Any]) -> list[int]:
 
 def _event_message(row: dict[str, Any]) -> UserEventMessage:
     database_event_id = int(row["event_id"])
+    source_space = cast(NewsSpace, str(row.get("source_space") or "mind"))
+    article_id = _news_id(row)
     return UserEventMessage(
         event_id=str(row.get("external_event_id") or f"db-event-{database_event_id}"),
         event_type=cast(UserEventType, str(row["event_type"])),
         user_id=int(row["user_id"]),
-        news_id=_news_id(row),
+        source_space=source_space,
+        article_id=article_id,
+        news_id=article_id if source_space == "mind" else None,
         query_key=(str(row["query_key"]) if row.get("query_key") is not None else None),
         surface=str(row.get("surface") or "feed"),
         dwell_ms=(int(row["dwell_ms"]) if row.get("dwell_ms") is not None else None),
@@ -212,11 +298,13 @@ def replay_event(
 ) -> bool:
     event = _event_message(row)
     news_topic_ids = [] if event.event_type == "search_result_click" else _stored_topic_ids(row)
-    if event.news_id is not None and not news_topic_ids:
-        news_topic_ids = load_news_topic_ids(connection, event.news_id)
+    if event.source_space == "mind" and event.article_id is not None and not news_topic_ids:
+        news_topic_ids = load_news_topic_ids(connection, event.article_id)
     query_topic_ids = (
         [item.topic_id for item in load_query_topics(connection, event.query_key)]
-        if event.event_type == "search_result_click" and event.query_key
+        if event.source_space == "mind"
+        and event.event_type == "search_result_click"
+        and event.query_key
         else []
     )
     strengths = topic_strengths_for_event(
@@ -229,6 +317,7 @@ def replay_event(
         apply_profile_v2_event(
             connection,
             user_id=event.user_id,
+            source_space=event.source_space,
             event_type=event.event_type,
             event_ts=event.event_ts,
             topic_strengths=strengths,
@@ -242,28 +331,37 @@ def rebuild_profiles(
     *,
     settings: Settings,
     user_id: int | None,
+    source_space: NewsSpace = "mind",
     all_users: bool,
     dry_run: bool,
 ) -> RebuildSummary:
     if (user_id is not None) == all_users:
         raise ValueError("exactly one of user_id or all_users is required")
-    target_user_ids = load_target_user_ids(connection, user_id, all_users)
+    target_profiles = load_target_profiles(connection, user_id, source_space, all_users)
+    if user_id is not None and not target_profiles:
+        raise RebuildTargetNotFoundError(user_id, source_space)
     if not dry_run:
         # psycopg starts a transaction for the discovery SELECT. Close it before
         # opening one isolated transaction per user.
         connection.commit()
     selected_event_count = 0
     replayed_event_count = 0
-    failed_user_ids: list[int] = []
+    failed_targets: list[FailedTarget] = []
 
-    for target_user_id in target_user_ids:
+    for target in target_profiles:
         if dry_run:
             reset_cutoff = load_reset_cutoff(
                 connection,
-                target_user_id,
+                target.user_id,
+                target.source_space,
                 for_update=False,
             )
-            events = load_rebuild_events(connection, target_user_id, reset_cutoff)
+            events = load_rebuild_events(
+                connection,
+                target.user_id,
+                target.source_space,
+                reset_cutoff,
+            )
             selected_event_count += len(events)
             continue
 
@@ -271,24 +369,41 @@ def rebuild_profiles(
             with transaction(connection):
                 reset_cutoff = load_reset_cutoff(
                     connection,
-                    target_user_id,
+                    target.user_id,
+                    target.source_space,
                     for_update=True,
                 )
-                events = load_rebuild_events(connection, target_user_id, reset_cutoff)
+                events = load_rebuild_events(
+                    connection,
+                    target.user_id,
+                    target.source_space,
+                    reset_cutoff,
+                )
                 events.sort(key=lambda row: (int(row["event_ts"]), int(row["event_id"])))
                 selected_event_count += len(events)
-                clear_profile_v2_projection(connection, target_user_id)
+                clear_profile_v2_projection(
+                    connection,
+                    target.user_id,
+                    target.source_space,
+                )
                 replayed_event_count += sum(
                     1 for row in events if replay_event(connection, row, settings=settings)
                 )
-        except Exception:
-            failed_user_ids.append(target_user_id)
+        except Exception as exc:
+            failed_targets.append(
+                FailedTarget(
+                    user_id=target.user_id,
+                    source_space=target.source_space,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+            )
 
     return RebuildSummary(
-        target_user_count=len(target_user_ids),
+        target_profiles=target_profiles,
         selected_event_count=selected_event_count,
         replayed_event_count=replayed_event_count,
-        failed_user_ids=failed_user_ids,
+        failed_targets=failed_targets,
         dry_run=dry_run,
     )
 
@@ -303,17 +418,35 @@ def main(argv: list[str] | None = None) -> int:
         connect_timeout=settings.postgres_connect_timeout_seconds,
     )
     try:
-        summary = rebuild_profiles(
-            connection,
-            settings=settings,
-            user_id=args.user_id,
-            all_users=args.all_users,
-            dry_run=args.dry_run,
-        )
+        try:
+            summary = rebuild_profiles(
+                connection,
+                settings=settings,
+                user_id=args.user_id,
+                source_space=cast(NewsSpace, args.source_space),
+                all_users=args.all_users,
+                dry_run=args.dry_run,
+            )
+        except RebuildTargetNotFoundError as exc:
+            print(
+                json.dumps(
+                    {
+                        "report_schema_version": 2,
+                        "source_aware": True,
+                        "error": {
+                            "code": "profile_target_not_found",
+                            "message": str(exc),
+                        },
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 2
     finally:
         connection.close()
-    print(json.dumps(asdict(summary), ensure_ascii=False, sort_keys=True))
-    return 1 if summary.failed_user_ids else 0
+    print(json.dumps(rebuild_summary_payload(summary), ensure_ascii=False, sort_keys=True))
+    return 1 if summary.failed_targets else 0
 
 
 if __name__ == "__main__":

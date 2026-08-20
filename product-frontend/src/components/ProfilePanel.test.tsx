@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getProfile, resetProfile } from "../api/client";
 import type { ProfileResponse } from "../api/types";
@@ -10,6 +11,7 @@ vi.mock("../api/client", () => ({
 }));
 
 const profile: ProfileResponse = {
+  source_space: "mind",
   user_id: 7004,
   profile_version: "v2",
   status: "learning",
@@ -79,7 +81,14 @@ describe("ProfilePanel", () => {
   });
 
   it("展示置信度、短长期主题与本地化证据解释", async () => {
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} />);
+    render(
+      <ProfilePanel
+        sourceSpace="mind"
+        userId={7004}
+        refreshTick={0}
+        onReset={vi.fn()}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByText("持续学习")).toBeInTheDocument());
     expect(screen.getByText("63% 置信度")).toBeInTheDocument();
@@ -89,11 +98,11 @@ describe("ProfilePanel", () => {
     expect(screen.getAllByText(/推荐点击 2 次/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/深度阅读 1 次/).length).toBeGreaterThan(0);
     expect(screen.getByText(/点踩 2 次/)).toBeInTheDocument();
-    expect(getProfile).toHaveBeenCalledWith();
+    expect(getProfile).toHaveBeenCalledWith("mind", 7004);
   });
 
   it("默认仅展示前五项并允许展开", async () => {
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} />);
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
     await screen.findByText("短期主题 1");
 
     expect(screen.queryByText("短期主题 6")).not.toBeInTheDocument();
@@ -111,22 +120,77 @@ describe("ProfilePanel", () => {
       long_term: { interests: [], reduced_topics: [] },
     });
 
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} />);
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
 
     expect(await screen.findByText("刚开始了解你")).toBeInTheDocument();
     expect(screen.getByText(/阅读、搜索、停留或点踩后/)).toBeInTheDocument();
   });
 
   it("页面模式提供独立页样式钩子", async () => {
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} variant="page" />);
+    render(
+      <ProfilePanel
+        sourceSpace="mind"
+        userId={7004}
+        refreshTick={0}
+        onReset={vi.fn()}
+        variant="page"
+      />,
+    );
 
     const heading = await screen.findByRole("heading", { name: "我的兴趣画像" });
     expect(heading.closest(".zr-profile-panel")).toHaveClass("zr-profile-panel--page");
   });
 
+  it("实时空间没有主题时仍展示独立的最近活动", async () => {
+    vi.mocked(getProfile).mockResolvedValue({
+      ...profile,
+      source_space: "live",
+      status: "learning",
+      short_term: { interests: [], reduced_topics: [] },
+      long_term: { interests: [], reduced_topics: [] },
+      recent_clicked_news: [
+        {
+          news_id: "L0123456789abcdef0123456789abcdef",
+          title: "Live briefing",
+          click_ts: 1_786_838_400,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePanel
+          sourceSpace="live"
+          userId={7004}
+          refreshTick={0}
+          onReset={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("最近活动")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Live briefing" })).toHaveAttribute(
+      "href",
+      "/articles/live/L0123456789abcdef0123456789abcdef",
+    );
+    expect(screen.queryByText("短期兴趣")).not.toBeInTheDocument();
+  });
+
   it("重置需要二次确认，成功后更新画像并刷新信息流", async () => {
     const onReset = vi.fn();
-    render(<ProfilePanel refreshTick={0} onReset={onReset} />);
+    vi.mocked(getProfile).mockResolvedValue({ ...profile, source_space: "live" });
+    vi.mocked(resetProfile).mockResolvedValue({
+      ...profile,
+      source_space: "live",
+      status: "cold",
+      confidence: 0,
+      evidence_count: 0,
+      short_term: { interests: [], reduced_topics: [] },
+      long_term: { interests: [], reduced_topics: [] },
+    });
+    render(
+      <ProfilePanel sourceSpace="live" userId={7004} refreshTick={0} onReset={onReset} />,
+    );
     await screen.findByText("持续学习");
 
     fireEvent.click(screen.getByRole("button", { name: "重置画像" }));
@@ -136,13 +200,14 @@ describe("ProfilePanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
 
     await waitFor(() => expect(resetProfile).toHaveBeenCalledTimes(1));
+    expect(resetProfile).toHaveBeenCalledWith("live", 7004);
     await waitFor(() => expect(screen.getByText("刚开始了解你")).toBeInTheDocument());
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
   it("重置失败后显示本地化错误并允许重试", async () => {
     vi.mocked(resetProfile).mockRejectedValueOnce(new Error("Request failed"));
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} />);
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
     await screen.findByText("持续学习");
 
     fireEvent.click(screen.getByRole("button", { name: "重置画像" }));
@@ -160,7 +225,7 @@ describe("ProfilePanel", () => {
           resolveReset = resolve;
         }),
     );
-    render(<ProfilePanel refreshTick={0} onReset={vi.fn()} />);
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
     await screen.findByText("持续学习");
 
     fireEvent.click(screen.getByRole("button", { name: "重置画像" }));

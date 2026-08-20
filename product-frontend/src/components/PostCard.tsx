@@ -1,5 +1,5 @@
 import { Check, Newspaper, Share2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { trackEvent } from "../api/client";
 import type { FeedItem, SearchItem } from "../api/types";
@@ -30,11 +30,15 @@ export default function PostCard({
   onProfileChanged,
 }: Props) {
   const [shared, setShared] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
   const mainCategory = item.categories?.[0];
   const categoryName = localizeCategoryName(mainCategory?.display_name);
 
+  useEffect(() => setImageFailed(false), [item.article_id]);
+
+  const articlePath = `/articles/${item.source_space}/${item.article_id}`;
   const handleShare = async () => {
-    const url = `${window.location.origin}/articles/${item.news_id}`;
+    const url = `${window.location.origin}${articlePath}`;
     if (navigator.share) {
       await navigator.share({ title: item.title, url });
     } else {
@@ -44,9 +48,10 @@ export default function PostCard({
     window.setTimeout(() => setShared(false), 1600);
     await trackEvent({
       user_id: userId,
+      source_space: item.source_space,
       event_type: "share",
       surface,
-      news_id: item.news_id,
+      article_id: item.article_id,
       request_id: requestId ?? null,
     });
   };
@@ -66,11 +71,31 @@ export default function PostCard({
                 : "赞助内容"}
             </span>
           )}
-            <span className="zr-card__source">来源：{item.source_domain}</span>
+          <span className="zr-card__source">
+            来源：{item.publisher ?? item.source_domain}
+            {item.language ? ` · ${item.language === "zh" ? "中文" : "English"}` : ""}
+          </span>
+          {item.source_space === "live" && (item.published_at || item.discovered_at) && (
+            <time dateTime={item.published_at ?? item.discovered_at ?? undefined}>
+              {new Date(item.published_at ?? item.discovered_at ?? "").toLocaleString(
+                "zh-CN",
+              )}
+            </time>
+          )}
         </div>
 
+        {item.source_space === "live" && item.image_url && !imageFailed && (
+          <img
+            className="zr-card__image"
+            src={item.image_url}
+            alt={item.title}
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+          />
+        )}
+
         <h2 className="zr-card__title">
-          <Link to={`/articles/${item.news_id}`} onClick={onTrackClick}>
+          <Link to={articlePath} onClick={onTrackClick}>
             {item.title}
           </Link>
         </h2>
@@ -96,7 +121,8 @@ export default function PostCard({
 
         <div className="zr-card__footer">
           <VoteActions
-            newsId={item.news_id}
+            sourceSpace={item.source_space}
+            articleId={item.article_id}
             userId={userId}
             requestId={requestId}
             surface={surface}
@@ -104,7 +130,7 @@ export default function PostCard({
           />
           <div className="zr-card__actions">
             <Link
-              to={`/articles/${item.news_id}`}
+              to={articlePath}
               className="zr-action"
               onClick={onTrackClick}
             >

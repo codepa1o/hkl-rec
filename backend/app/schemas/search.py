@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import Field, field_validator, model_validator
 
+from backend.app.news_spaces.types import DEFAULT_NEWS_SPACE, NewsSpace
+
 from .common import ApiModel, TopicCard
+from .news_space import CanonicalArticleModel
 
 
 class SearchRequest(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     event_id: str | None = None
     user_id: int
     query_key: str | None = None
@@ -47,8 +54,7 @@ class SearchItemScores(ApiModel):
     final_score: float
 
 
-class SearchItem(ApiModel):
-    news_id: str = Field(pattern=r"^N[0-9]+$")
+class SearchItem(CanonicalArticleModel):
     title: str
     abstract: str
     url: str
@@ -57,6 +63,11 @@ class SearchItem(ApiModel):
     subcategory: str
     categories: list[TopicCard]
     scores: SearchItemScores
+    image_url: str | None = None
+    publisher: str | None = None
+    language: Literal["zh", "en"] | None = None
+    published_at: datetime | None = None
+    discovered_at: datetime | None = None
 
 
 class SearchMatchedTopic(ApiModel):
@@ -86,8 +97,15 @@ class SearchDebugPayload(ApiModel):
 
 
 class SearchResponse(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     user_id: int
     request_id: str
     query_key: str
     items: list[SearchItem]
     debug: SearchDebugPayload | None = None
+
+    @model_validator(mode="after")
+    def require_matching_item_source_space(self) -> SearchResponse:
+        if any(item.source_space != self.source_space for item in self.items):
+            raise ValueError("items must match response source_space")
+        return self

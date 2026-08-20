@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from backend.app.events.worker_state import (
     oldest_pending_outbox_age_seconds,
     worker_readiness_rows,
 )
+from backend.app.observability import set_live_news_active_counts
 from backend.app.repositories.connection import connect, parse_database_url
 from backend.app.schemas.common import DependencyHealth, HealthResponse
 from backend.app.search_retrieval import (
@@ -36,6 +38,7 @@ def build_liveness(settings: Settings) -> HealthResponse:
             "kafka": DependencyHealth(status="disabled"),
             "outbox": DependencyHealth(status="disabled"),
             "search_index": DependencyHealth(status="disabled"),
+            "live_news_collector": DependencyHealth(status="disabled"),
         },
         outbox=None,
     )
@@ -50,6 +53,10 @@ def check_readiness(settings: Settings) -> HealthResponse:
     oldest_outbox_age = 0
     ready = True
     search_metadata: dict[str, Any] | None = None
+    dependencies["live_news_collector"] = DependencyHealth(
+        status="disabled" if not settings.live_news_collector_enabled else "error",
+        detail=None if not settings.live_news_collector_enabled else "requires PostgreSQL",
+    )
 
     if settings.search_retrieval_mode == "hybrid_v1":
         try:
@@ -126,9 +133,29 @@ def check_readiness(settings: Settings) -> HealthResponse:
                             detail="search artifact fingerprint/count disagrees with PostgreSQL catalog",
                         )
                         ready = False
+                    cursor.execute(
+                        """
+                        SELECT language, source_domain, COUNT(*) AS count
+                        FROM live_news
+                        WHERE status = 'active'
+                        GROUP BY language, source_domain
+                        """
+                    )
+                    set_live_news_active_counts(cursor.fetchall())
                 outbox_counts = outbox_status_counts(connection)
                 worker_rows = worker_readiness_rows(connection)
                 oldest_outbox_age = oldest_pending_outbox_age_seconds(connection)
+                if settings.live_news_collector_enabled:
+                    try:
+                        dependencies["live_news_collector"] = _live_collector_health(
+                            connection,
+                            settings,
+                        )
+                    except Exception as exc:
+                        dependencies["live_news_collector"] = DependencyHealth(
+                            status="error",
+                            detail=f"{type(exc).__name__}: {exc}",
+                        )
             finally:
                 connection.close()
             dependencies["postgresql"] = DependencyHealth(status="ok")
@@ -237,3 +264,35 @@ def check_readiness(settings: Settings) -> HealthResponse:
         dependencies=dependencies,
         outbox=outbox_counts,
     )
+
+
+def _live_collector_health(
+    connection: Any,
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+) -> DependencyHealth:
+    observed_now = (now or datetime.now(UTC)).astimezone(UTC)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT last_success_at, last_error
+            FROM live_news_source_checkpoint
+            WHERE source_name = 'gdelt_gal'
+            """
+        )
+        row = cursor.fetchone()
+    if row is None or row.get("last_success_at") is None:
+        return DependencyHealth(status="error", detail="no successful Live batch")
+    last_success = row["last_success_at"]
+    if last_success.tzinfo is None:
+        last_success = last_success.replace(tzinfo=UTC)
+    age_seconds = max(0, int((observed_now - last_success.astimezone(UTC)).total_seconds()))
+    stale_after = max(300, settings.live_news_poll_interval_seconds * 5)
+    last_error = row.get("last_error")
+    if age_seconds > stale_after or last_error:
+        detail = f"last_success_age={age_seconds}s"
+        if last_error:
+            detail += "; latest attempt failed"
+        return DependencyHealth(status="error", detail=detail)
+    return DependencyHealth(status="ok", detail=f"last_success_age={age_seconds}s")

@@ -2,8 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeedPage from "./FeedPage";
 import { getFeed, trackEvent } from "../api/client";
+import type { NewsSpace } from "../api/types";
 
 const routeState = vi.hoisted(() => ({ key: "route-test", search: "" }));
+const navigateMock = vi.hoisted(() => vi.fn());
+const sourceState: { sourceSpace: NewsSpace } = { sourceSpace: "mind" };
 
 const personaState = {
   selectedPersona: {
@@ -20,9 +23,17 @@ vi.mock("../context/PersonaContext", () => ({
   usePersona: () => personaState,
 }));
 
+vi.mock("../context/SourceSpaceContext", () => ({
+  useSourceSpace: () => sourceState,
+}));
+
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-router-dom")>();
-  return { ...actual, useLocation: () => routeState };
+  return {
+    ...actual,
+    useLocation: () => routeState,
+    useNavigate: () => navigateMock,
+  };
 });
 
 vi.mock("../api/client", () => ({
@@ -33,13 +44,15 @@ vi.mock("../api/client", () => ({
 }));
 
 vi.mock("../components/PostCard", () => ({
-  default: ({ item }: { item: { news_id: string } }) => (
-    <div data-testid={`article-${item.news_id}`}>{item.news_id}</div>
+  default: ({ item }: { item: { article_id: string } }) => (
+    <div data-testid={`article-${item.article_id}`}>{item.article_id}</div>
   ),
 }));
 
 const feedItems = [
   {
+    source_space: "mind" as const,
+    article_id: "N301",
     news_id: "N301",
     title: "First",
     abstract: "First article",
@@ -62,6 +75,8 @@ const feedItems = [
     content_type: "organic" as const,
   },
   {
+    source_space: "mind" as const,
+    article_id: "N302",
     news_id: "N302",
     title: "Second",
     abstract: "Second article",
@@ -87,6 +102,7 @@ const feedItems = [
 
 const thirdFeedItem = {
   ...feedItems[0],
+  article_id: "N303",
   news_id: "N303",
   title: "Third",
   abstract: "Third article",
@@ -116,10 +132,12 @@ describe("FeedPage impressions", () => {
   beforeEach(() => {
     personaState.selectedPersona.user_id = 7248;
     personaState.refreshTick = 0;
+    sourceState.sourceSpace = "mind";
     routeState.search = "";
     intersectionCallback = null;
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     vi.mocked(getFeed).mockResolvedValue({
+      source_space: "mind",
       user_id: 7248,
       request_id: "feed-request-1",
       items: feedItems,
@@ -129,6 +147,7 @@ describe("FeedPage impressions", () => {
     vi.mocked(trackEvent).mockResolvedValue({
       ok: true,
       event_type: "feed_impression",
+      source_space: "mind",
       profile_updated: false,
       behavior_score: null,
     });
@@ -145,20 +164,24 @@ describe("FeedPage impressions", () => {
       "feed-load-test",
       undefined,
       undefined,
+      "mind",
+      "all",
     );
     expect(trackEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        event_id: "imp-7248:feed-request-1:N301",
+        event_id: "imp-mind:7248:feed-request-1:N301",
         user_id: 7248,
-        news_id: "N301",
+        source_space: "mind",
+        article_id: "N301",
         request_id: "feed-request-1",
       }),
     );
     expect(trackEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        event_id: "imp-7248:feed-request-1:N302",
+        event_id: "imp-mind:7248:feed-request-1:N302",
         user_id: 7248,
-        news_id: "N302",
+        source_space: "mind",
+        article_id: "N302",
         request_id: "feed-request-1",
       }),
     );
@@ -177,6 +200,8 @@ describe("FeedPage impressions", () => {
         "feed-load-test",
         undefined,
         "sports",
+        "mind",
+        "all",
       ),
     );
     expect(screen.getByRole("heading", { name: "体育新闻" })).toBeInTheDocument();
@@ -201,6 +226,7 @@ describe("FeedPage impressions", () => {
     personaState.selectedPersona.user_id = 1026;
     personaState.refreshTick += 1;
     vi.mocked(getFeed).mockResolvedValue({
+      source_space: "mind",
       user_id: 1026,
       request_id: "feed-request-2",
       items: feedItems,
@@ -212,9 +238,9 @@ describe("FeedPage impressions", () => {
     await waitFor(() => expect(trackEvent).toHaveBeenCalledTimes(4));
     expect(trackEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        event_id: "imp-1026:feed-request-2:N301",
+        event_id: "imp-mind:1026:feed-request-2:N301",
         user_id: 1026,
-        news_id: "N301",
+        article_id: "N301",
       }),
     );
   });
@@ -241,6 +267,7 @@ describe("FeedPage impressions", () => {
     await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(2));
     expect(trackEvent).not.toHaveBeenCalled();
     resolveSecond?.({
+      source_space: "mind",
       user_id: 1026,
       request_id: "feed-request-2",
       items: feedItems,
@@ -249,13 +276,14 @@ describe("FeedPage impressions", () => {
     });
     await waitFor(() =>
       expect(trackEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: 1026, news_id: "N301" }),
+        expect.objectContaining({ user_id: 1026, article_id: "N301" }),
       ),
     );
   });
 
   it("includes sponsored delivery identity in impression tracking", async () => {
     vi.mocked(getFeed).mockResolvedValue({
+      source_space: "mind",
       user_id: 7248,
       request_id: "feed-sponsored",
       items: [
@@ -279,7 +307,7 @@ describe("FeedPage impressions", () => {
     await waitFor(() =>
       expect(trackEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          news_id: "N301",
+          article_id: "N301",
           sponsored_delivery_id: "ad-delivery-1",
         }),
       ),
@@ -289,6 +317,7 @@ describe("FeedPage impressions", () => {
   it("loads the next cursor page and appends only unseen news", async () => {
     vi.mocked(getFeed)
       .mockResolvedValueOnce({
+        source_space: "mind",
         user_id: 7248,
         request_id: "feed-request-1",
         items: feedItems,
@@ -296,6 +325,7 @@ describe("FeedPage impressions", () => {
         has_more: true,
       })
       .mockResolvedValueOnce({
+        source_space: "mind",
         user_id: 7248,
         request_id: "feed-request-2",
         items: [feedItems[1], thirdFeedItem],
@@ -321,13 +351,15 @@ describe("FeedPage impressions", () => {
       "feed-page-test",
       "cursor-page-2",
       undefined,
+      "mind",
+      "all",
     );
     expect(screen.getByTestId("article-N303")).toBeInTheDocument();
     expect(screen.getAllByTestId("article-N302")).toHaveLength(1);
     await waitFor(() =>
       expect(trackEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          event_id: "imp-7248:feed-request-2:N303",
+          event_id: "imp-mind:7248:feed-request-2:N303",
           request_id: "feed-request-2",
         }),
       ),
@@ -338,6 +370,7 @@ describe("FeedPage impressions", () => {
   it("keeps loaded news and retries a failed next page", async () => {
     vi.mocked(getFeed)
       .mockResolvedValueOnce({
+        source_space: "mind",
         user_id: 7248,
         request_id: "feed-request-1",
         items: feedItems,
@@ -346,6 +379,7 @@ describe("FeedPage impressions", () => {
       })
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce({
+        source_space: "mind",
         user_id: 7248,
         request_id: "feed-request-2",
         items: [thirdFeedItem],
@@ -399,24 +433,75 @@ describe("FeedPage impressions", () => {
     await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(2));
 
     resolveFinance?.({
+      source_space: "mind",
       user_id: 7248,
       request_id: "finance-feed",
-      items: [{ ...feedItems[0], news_id: "FIN-1", category: "finance" }],
+      items: [{ ...feedItems[0], article_id: "N401", news_id: "N401", category: "finance" }],
       next_cursor: null,
       has_more: false,
     });
-    expect(await screen.findByTestId("article-FIN-1")).toBeInTheDocument();
+    expect(await screen.findByTestId("article-N401")).toBeInTheDocument();
 
     resolveSports?.({
+      source_space: "mind",
       user_id: 7248,
       request_id: "sports-feed",
-      items: [{ ...feedItems[0], news_id: "SPORT-1", category: "sports" }],
+      items: [{ ...feedItems[0], article_id: "N402", news_id: "N402", category: "sports" }],
       next_cursor: null,
       has_more: false,
     });
     await act(async () => Promise.resolve());
 
-    expect(screen.queryByTestId("article-SPORT-1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("article-N402")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "财经新闻" })).toBeInTheDocument();
+  });
+
+  it("切换到实时新闻后忽略迟到的 MIND 信息流响应", async () => {
+    let resolveMind:
+      | ((value: Awaited<ReturnType<typeof getFeed>>) => void)
+      | undefined;
+    vi.mocked(getFeed)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveMind = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        source_space: "live",
+        user_id: 7248,
+        request_id: "live-feed",
+        items: [
+          {
+            ...feedItems[0],
+            source_space: "live",
+            article_id: "L0123456789abcdef0123456789abcdef",
+            news_id: null,
+          },
+        ],
+        next_cursor: null,
+        has_more: false,
+      });
+
+    const rendered = render(<FeedPage />);
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(1));
+    sourceState.sourceSpace = "live";
+    rendered.rerender(<FeedPage />);
+
+    expect(
+      await screen.findByTestId("article-L0123456789abcdef0123456789abcdef"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "实时新闻" })).toBeInTheDocument();
+    expect(screen.getByText("按新鲜度与来源多样性持续更新")).toBeInTheDocument();
+    resolveMind?.({
+      source_space: "mind",
+      user_id: 7248,
+      request_id: "mind-feed",
+      items: feedItems,
+      next_cursor: null,
+      has_more: false,
+    });
+    await act(async () => Promise.resolve());
+    expect(screen.queryByTestId("article-N301")).not.toBeInTheDocument();
   });
 });

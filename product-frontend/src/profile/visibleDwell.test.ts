@@ -29,11 +29,14 @@ describe("VisibleDwellAccumulator", () => {
   });
 
   it("同一路由加载生成稳定且可判重的事件 ID", () => {
-    expect(dwellEventId(7004, "N301", "route-load-1")).toBe(
-      "dwell-7004:N301:route-load-1",
+    expect(dwellEventId("mind", 7004, "N301", "route-load-1")).toBe(
+      "dwell-mind:7004:N301:route-load-1",
     );
-    expect(dwellEventId(7004, "N301", "route-load-1")).toBe(
-      dwellEventId(7004, "N301", "route-load-1"),
+    expect(dwellEventId("mind", 7004, "N301", "route-load-1")).toBe(
+      dwellEventId("mind", 7004, "N301", "route-load-1"),
+    );
+    expect(dwellEventId("live", 7004, "N301", "route-load-1")).not.toBe(
+      dwellEventId("mind", 7004, "N301", "route-load-1"),
     );
   });
 });

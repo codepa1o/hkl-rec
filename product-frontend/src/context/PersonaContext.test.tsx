@@ -10,6 +10,9 @@ const authState = vi.hoisted(() => ({
 vi.mock("./AuthContext", () => ({
   useAuth: () => authState,
 }));
+vi.mock("./SourceSpaceContext", () => ({
+  useSourceSpace: () => ({ sourceSpace: "mind" }),
+}));
 
 function Probe() {
   const { selectedPersona, personas } = usePersona();

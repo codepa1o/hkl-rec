@@ -32,6 +32,10 @@ class IdempotencyConflictError(ValueError):
     """同一事件 ID 被用于语义不同的载荷时抛出。"""
 
 
+class InvalidSponsoredAttributionError(IdempotencyConflictError):
+    """Sponsored attribution is invalid and must not be retried."""
+
+
 class UnknownCategoryError(ValueError):
     """请求的新闻一级分类不存在时抛出。"""
 

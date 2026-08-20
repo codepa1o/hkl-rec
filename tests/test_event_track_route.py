@@ -72,13 +72,17 @@ def test_event_track_impression_event_id_is_idempotent(postgres_client, postgres
     try:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT COUNT(*) AS event_count FROM user_event WHERE external_event_id = %s",
+                "SELECT COUNT(*) AS event_count, MIN(source_space) AS source_space, "
+                "MIN(article_id) AS article_id "
+                "FROM user_event WHERE external_event_id = %s",
                 (event_id,),
             )
             row = cursor.fetchone()
     finally:
         connection.close()
     assert int(row["event_count"]) == 1
+    assert row["source_space"] == "mind"
+    assert row["article_id"] == news_id
 
 
 def test_event_track_upvote_mutates_behavior_score(postgres_client, postgres_demo_user):
@@ -143,6 +147,24 @@ def test_event_track_replay_timestamp_requires_debug(unwired_client):
             "surface": "feed",
             "news_id": "N1",
             "replay_event_ts": 100,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_live_event_rejects_mind_sponsored_identity_before_repository(
+    unwired_client,
+) -> None:
+    response = unwired_client.post(
+        "/event/track",
+        json={
+            "user_id": 7248,
+            "source_space": "live",
+            "event_type": "recommendation_click",
+            "surface": "feed",
+            "article_id": "L550e8400e29b41d4a716446655440000",
+            "sponsored_delivery_id": "delivery-mind-only",
         },
     )
 

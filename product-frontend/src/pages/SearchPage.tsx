@@ -3,12 +3,14 @@ import { useLocation, useSearchParams } from "react-router-dom";
 import { postSearch, stableClientId, trackEvent } from "../api/client";
 import type { SearchItem } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
+import { useSourceSpace } from "../context/SourceSpaceContext";
 import PostCard from "../components/PostCard";
 import SearchBox from "../components/SearchBox";
 import { localizeInterfaceError } from "../localization";
 
 export default function SearchPage() {
   const { selectedPersona, bumpProfile } = usePersona();
+  const { sourceSpace } = useSourceSpace();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const rawQuery = searchParams.get("q") ?? "";
@@ -22,9 +24,9 @@ export default function SearchPage() {
     () =>
       stableClientId(
         "search",
-        `${location.key}:${selectedPersona?.user_id ?? "none"}:${rawQuery}:${isExact}`,
+        `${location.key}:${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${rawQuery}:${isExact}`,
       ),
-    [location.key, selectedPersona?.user_id, rawQuery, isExact],
+    [location.key, sourceSpace, selectedPersona?.user_id, rawQuery, isExact],
   );
 
   useEffect(() => {
@@ -34,10 +36,11 @@ export default function SearchPage() {
     setError(null);
     setItems([]);
     setResolvedQueryKey("");
+    setRequestId("");
     const input = isExact ? { queryKey: rawQuery } : { queryText: rawQuery };
-    postSearch(selectedPersona.user_id, input, 10, searchEventId)
+    postSearch(selectedPersona.user_id, input, 10, searchEventId, sourceSpace)
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || res.source_space !== sourceSpace) return;
         setItems(res.items);
         setResolvedQueryKey(res.query_key);
         setRequestId(res.request_id);
@@ -58,22 +61,31 @@ export default function SearchPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPersona, rawQuery, isExact, bumpProfile, searchEventId]);
+  }, [selectedPersona, rawQuery, isExact, bumpProfile, searchEventId, sourceSpace]);
 
   const handleClick = useCallback(
-    (newsId: string) => {
+    (articleId: string) => {
       if (!selectedPersona) return;
       trackEvent({
-        event_id: `search-click-${requestId}:${newsId}`,
+        event_id: `search-click-${sourceSpace}:${requestId}:${articleId}`,
         user_id: selectedPersona.user_id,
+        source_space: sourceSpace,
         event_type: "search_result_click",
         surface: "search",
-        news_id: newsId,
+        article_id: articleId,
         query_key: resolvedQueryKey || rawQuery,
         request_id: requestId || searchEventId,
       }).then(() => bumpProfile());
     },
-    [selectedPersona, resolvedQueryKey, rawQuery, requestId, searchEventId, bumpProfile],
+    [
+      selectedPersona,
+      sourceSpace,
+      resolvedQueryKey,
+      rawQuery,
+      requestId,
+      searchEventId,
+      bumpProfile,
+    ],
   );
 
   if (!selectedPersona) {
@@ -117,11 +129,11 @@ export default function SearchPage() {
 
       {items.map((item) => (
         <PostCard
-          key={item.news_id}
+          key={item.article_id}
           item={item}
           userId={selectedPersona.user_id}
           surface="search"
-          onTrackClick={() => handleClick(item.news_id)}
+          onTrackClick={() => handleClick(item.article_id)}
           onProfileChanged={bumpProfile}
         />
       ))}

@@ -7,12 +7,16 @@ from typing import Any, cast
 from backend.app.config import Settings, compute_alpha
 from backend.app.data_contracts.mind import source_domain
 from backend.app.errors import (
+    RepositoryNotReadyError,
     SearchIndexNotReadyError,
     UnknownCategoryError,
     UnresolvedQueryError,
 )
 from backend.app.events.outbox import enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage, UserEventType
+from backend.app.live_news.allowlist import load_allowlist
+from backend.app.news_spaces.live import LiveNewsSpaceRepository
+from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.observability import (
     PROFILE_V2_LATE_EVENTS,
     PROFILE_V2_PROJECTION_DURATION,
@@ -61,10 +65,13 @@ from backend.app.repositories.event_dao import (
     record_click_event,
     record_log_only_event,
     record_search_query,
+    validate_feed_request_reference,
+    validate_search_request_reference,
 )
 from backend.app.repositories.mmr import MMRCandidate, mmr_config, rerank_mmr
 from backend.app.repositories.profile_dao import (
-    attach_recent_click_titles,
+    enrich_recent_click_titles,
+    ensure_profile_row,
     fetch_profile_row,
     load_default_seed_topic_weights,
     load_recent_query_topic_scores,
@@ -190,6 +197,11 @@ class PostgresRuntimeRepository(RuntimeRepository):
             min_size=settings.postgres_pool_min_size,
             max_connections=settings.postgres_pool_max_connections,
         )
+        self._live_news_space = LiveNewsSpaceRepository(
+            self._connection_pool,
+            settings,
+            load_allowlist(Path(settings.live_news_source_config)),
+        )
 
     # ── 公共 API ────────────────────────────────────────────────
 
@@ -207,7 +219,23 @@ class PostgresRuntimeRepository(RuntimeRepository):
         cursor: str | None = None,
         as_of_ts: int | None = None,
         category: str | None = None,
+        source_space: NewsSpace = "mind",
+        language: LiveLanguage = "all",
     ) -> FeedResponse:
+        if source_space == "live":
+            if not self._settings.live_news_enabled:
+                raise RepositoryNotReadyError("GET /feed?source_space=live")
+            self._ensure_live_profile(user_id)
+            return self._live_news_space.get_feed(
+                user_id=user_id,
+                page_size=page_size,
+                debug=debug,
+                request_id=request_id,
+                cursor=cursor,
+                language=language,
+            )
+        if language != "all":
+            raise ValueError("language filtering is only supported for source_space 'live'")
         request_id = request_id or new_request_id(self._settings.request_id_prefix, "feed")
         sponsored_enabled = (
             self._settings.sponsored_enabled and include_sponsored and experiment_arm == "default"
@@ -222,6 +250,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             feed_claim = claim_feed_request(
                 connection,
                 request_id=request_id,
+                source_space=source_space,
                 user_id=user_id,
                 page_size=page_size,
                 debug=debug,
@@ -235,9 +264,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
             seen_news_ids = load_feed_session_news_ids(
                 connection,
                 session_id=feed_claim.session_id,
+                source_space=source_space,
                 exclude_request_id=request_id,
             )
-            profile_row = fetch_profile_row(connection, user_id)
+            profile_row = fetch_profile_row(connection, user_id, source_space)
             profile = profile_from_row(profile_row)
             topic_weight_map = {item.topic_id: item.weight for item in profile.topic_weights}
             profile_now_ts = as_of_ts if as_of_ts is not None else int(time.time())
@@ -245,6 +275,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 self._load_profile_v2_scores_with_fallback(
                     connection,
                     user_id=user_id,
+                    source_space=source_space,
                     now_ts=profile_now_ts,
                 )
                 if experiment_arm == "profile_v2"
@@ -274,6 +305,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 load_recent_query_topic_scores(
                     connection,
                     profile.recent_queries,
+                    source_space=source_space,
                     now_ts=as_of_ts if as_of_ts is not None else int(time.time()),
                     config=signal_config,
                 )
@@ -284,6 +316,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 load_recent_query_topic_scores(
                     connection,
                     profile.recent_queries,
+                    source_space=source_space,
                     now_ts=as_of_ts if as_of_ts is not None else int(time.time()),
                     config=signal_config,
                     confirmed_only=signal_config.mode == "gated",
@@ -297,6 +330,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             default_topic_weight_map = load_default_seed_topic_weights(
                 connection,
                 seed_key=default_seed_key,
+                source_space=source_space,
             )
             alpha = compute_alpha(profile.behavior_score, self._settings)
             cold_start_mix = ColdStartMix(
@@ -325,6 +359,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 complete_feed_request(
                     connection,
                     request_id=request_id,
+                    source_space=source_space,
                     news_ids=[],
                     next_cursor=None,
                 )
@@ -478,6 +513,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 )
 
                 item = FeedItem(
+                    article_id=news_id,
                     news_id=news_id,
                     title=row.get("title") or news_id,
                     abstract=row.get("abstract") or "",
@@ -513,7 +549,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     )
                 )
 
-            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].news_id))
+            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].article_id))
             sponsored_deliveries: list[SponsoredDelivery] = []
             if sponsored_enabled:
                 if not new_feed_request:
@@ -545,7 +581,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     used_news: set[str] = set()
                     used_campaigns: set[int] = set()
                     candidate_index = 0
-                    organic_news_ids = {pair[0].news_id for pair in scored_items}
+                    organic_news_ids = {pair[0].article_id for pair in scored_items}
                     for slot in slots:
                         while candidate_index < len(sponsored_candidates):
                             sponsored_candidate = sponsored_candidates[candidate_index]
@@ -586,9 +622,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection,
                 sponsored_deliveries,
             )
-            sponsored_news_ids = {item.news_id for item in sponsored_items}
+            sponsored_news_ids = {item.article_id for item in sponsored_items}
             organic_pairs = [
-                pair for pair in scored_items if pair[0].news_id not in sponsored_news_ids
+                pair for pair in scored_items if pair[0].article_id not in sponsored_news_ids
             ]
             organic_limit = max(0, page_size - len(sponsored_items))
             active_mmr_config = mmr_config(experiment_arm)
@@ -598,7 +634,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 als = get_als_recall(expected_normalized_fingerprint=catalog_fingerprint)
                 mmr_candidates: list[MMRCandidate[tuple[FeedItem, RecallCandidateDebug]]] = [
                     MMRCandidate(
-                        news_id=pair[0].news_id,
+                        news_id=pair[0].article_id,
                         relevance=pair[0].scores.final_score,
                         topic_ids=frozenset(topic.topic_id for topic in pair[0].categories),
                         value=pair,
@@ -628,7 +664,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 page_size=page_size,
             )
             fallback_used = any(item.is_fallback for item in organic_items)
-            returned_news_ids = [item.news_id for item in selected_items]
+            returned_news_ids = [item.article_id for item in selected_items]
             has_more = len(seen_news_ids | set(returned_news_ids)) < catalog_news_count
             proposed_next_cursor = (
                 feed_claim.next_cursor
@@ -639,6 +675,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             next_cursor = complete_feed_request(
                 connection,
                 request_id=request_id,
+                source_space=source_space,
                 news_ids=returned_news_ids,
                 next_cursor=proposed_next_cursor,
             )
@@ -674,6 +711,16 @@ class PostgresRuntimeRepository(RuntimeRepository):
             connection.close()
 
     def search(self, payload: SearchRequest) -> SearchResponse:
+        if payload.source_space == "live":
+            if not self._settings.live_news_enabled:
+                raise RepositoryNotReadyError("POST /search?source_space=live")
+            response = self._live_news_space.search(payload)
+            self._record_live_search_query(
+                payload,
+                query_key=response.query_key,
+                event_id=response.request_id,
+            )
+            return response
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
@@ -736,6 +783,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             event = self._event_message(
                 event_type="search_query",
                 user_id=payload.user_id,
+                source_space=payload.source_space,
                 event_id=payload.event_id,
                 query_key=query_key,
                 query_text=payload.query_text,
@@ -746,12 +794,17 @@ class PostgresRuntimeRepository(RuntimeRepository):
             connection.begin()
             claimed = True
             if self._settings.event_mode != "kafka_async":
-                claimed = claim_event_id(connection, event)
+                claimed = claim_event_id(
+                    connection,
+                    event,
+                    source_space=payload.source_space,
+                )
                 if claimed:
                     project_profile = not profile_event_is_before_reset(
                         connection,
                         user_id=payload.user_id,
                         event_ts=event_ts,
+                        source_space=payload.source_space,
                     )
                     if not project_profile and self._settings.profile_v2_enabled:
                         PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
@@ -761,11 +814,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         query_key=query_key,
                         event_ts=event_ts,
                         external_event_id=event.event_id,
+                        source_space=payload.source_space,
                     )
                     if project_profile:
                         profile_row = fetch_profile_row(
                             connection,
                             payload.user_id,
+                            payload.source_space,
                             for_update=True,
                         )
                         append_recent_query(
@@ -774,6 +829,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                             query_key=query_key,
                             event_ts=event_ts,
                             behavior_delta=self._settings.search_query_behavior_delta,
+                            source_space=payload.source_space,
                         )
 
             matched_topics = load_search_matched_topics(connection, query_key)
@@ -805,6 +861,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 hybrid_score = round(float(candidate.get("hybrid_score") or 0.0), 9)
                 final_score = hybrid_score if hybrid_score > 0 else topic_match_score
                 item = SearchItem(
+                    article_id=news_id,
                     news_id=news_id,
                     title=row.get("title") or news_id,
                     abstract=row.get("abstract") or "",
@@ -828,7 +885,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     )
                 )
 
-            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].news_id))
+            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].article_id))
             selected = scored_items[: payload.page_size]
             search_artifact = None
             if hybrid_index is not None:
@@ -867,16 +924,29 @@ class PostgresRuntimeRepository(RuntimeRepository):
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
+        if payload.request_id is not None:
+            validation_connection = self._connection_pool.connect()
+            try:
+                validate_feed_request_reference(
+                    validation_connection,
+                    request_id=payload.request_id,
+                    source_space=payload.source_space,
+                    user_id=payload.user_id,
+                    article_id=payload.article_id,
+                )
+            finally:
+                validation_connection.close()
         sponsored_attribution = self._load_sponsored_event_attribution(
-            delivery_id=payload.sponsored_delivery_id,
+            delivery_id=(payload.sponsored_delivery_id if payload.source_space == "mind" else None),
             user_id=payload.user_id,
-            news_id=payload.news_id,
+            news_id=payload.article_id,
         )
         event = self._event_message(
             event_type="recommendation_click",
             user_id=payload.user_id,
+            source_space=payload.source_space,
             event_id=payload.event_id,
-            news_id=payload.news_id,
+            article_id=payload.article_id,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
             campaign_id=(
@@ -894,34 +964,45 @@ class PostgresRuntimeRepository(RuntimeRepository):
         )
         if self._settings.event_mode == "kafka_async":
             self._persist_async_event(event)
-            return EventAckResponse(ok=True, event_type="recommendation_click", debug=None)
+            return EventAckResponse(
+                ok=True,
+                event_type="recommendation_click",
+                source_space=payload.source_space,
+                debug=None,
+            )
 
         connection = self._connection_pool.connect()
         try:
             connection.begin()
-            if not claim_event_id(connection, event):
+            if not claim_event_id(connection, event, source_space=payload.source_space):
                 connection.commit()
                 return EventAckResponse(
                     ok=True,
                     event_type="recommendation_click",
+                    source_space=payload.source_space,
                     debug=None,
                 )
             project_profile = not profile_event_is_before_reset(
                 connection,
                 user_id=payload.user_id,
                 event_ts=event_ts,
+                source_space=payload.source_space,
             )
             if not project_profile and self._settings.profile_v2_enabled:
                 PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
-            if payload.sponsored_delivery_id:
+            if payload.source_space == "mind" and payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     for_update=True,
                 )
-            news_topic_ids = load_news_topic_ids(connection, payload.news_id)
+            news_topic_ids = (
+                load_news_topic_ids(connection, payload.article_id)
+                if payload.source_space == "mind"
+                else []
+            )
             topic_deltas = {
                 topic_id: self._settings.recommendation_click_topic_delta
                 for topic_id in news_topic_ids
@@ -930,7 +1011,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection=connection,
                 user_id=payload.user_id,
                 event_type="recommendation_click",
-                news_id=payload.news_id,
+                news_id=payload.article_id,
                 query_key=None,
                 request_id=payload.request_id,
                 surface="feed",
@@ -940,6 +1021,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 sponsored_delivery_id=event.sponsored_delivery_id,
                 campaign_id=event.campaign_id,
                 creative_id=event.creative_id,
+                source_space=payload.source_space,
+                article_id=payload.article_id,
             )
             if sponsored_attribution is not None:
                 record_sponsored_click(
@@ -949,15 +1032,21 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 )
             update: dict[str, Any] | None = None
             if project_profile:
-                profile_row = fetch_profile_row(connection, payload.user_id, for_update=True)
+                profile_row = fetch_profile_row(
+                    connection,
+                    payload.user_id,
+                    payload.source_space,
+                    for_update=True,
+                )
                 update = apply_click_profile_update(
                     connection=connection,
                     profile_row=profile_row,
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     event_ts=event_ts,
                     topic_deltas=topic_deltas,
                     behavior_delta=self._settings.recommendation_click_behavior_delta,
                     decay_factor=self._settings.profile_topic_decay,
+                    source_space=payload.source_space,
                 )
                 self._project_profile_v2(
                     connection,
@@ -970,6 +1059,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             response = EventAckResponse(
                 ok=True,
                 event_type="recommendation_click",
+                source_space=payload.source_space,
                 debug=(
                     RecommendationClickDebug(
                         updated_topics=topic_delta_models(topic_deltas),
@@ -994,16 +1084,29 @@ class PostgresRuntimeRepository(RuntimeRepository):
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
+        if payload.request_id is not None:
+            validation_connection = self._connection_pool.connect()
+            try:
+                validate_search_request_reference(
+                    validation_connection,
+                    request_id=payload.request_id,
+                    source_space=payload.source_space,
+                    user_id=payload.user_id,
+                    query_key=query_key,
+                )
+            finally:
+                validation_connection.close()
         sponsored_attribution = self._load_sponsored_event_attribution(
-            delivery_id=payload.sponsored_delivery_id,
+            delivery_id=(payload.sponsored_delivery_id if payload.source_space == "mind" else None),
             user_id=payload.user_id,
-            news_id=payload.news_id,
+            news_id=payload.article_id,
         )
         event = self._event_message(
             event_type="search_result_click",
             user_id=payload.user_id,
+            source_space=payload.source_space,
             event_id=payload.event_id,
-            news_id=payload.news_id,
+            article_id=payload.article_id,
             query_key=query_key,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1022,35 +1125,48 @@ class PostgresRuntimeRepository(RuntimeRepository):
         )
         if self._settings.event_mode == "kafka_async":
             self._persist_async_event(event)
-            return EventAckResponse(ok=True, event_type="search_result_click", debug=None)
+            return EventAckResponse(
+                ok=True,
+                event_type="search_result_click",
+                source_space=payload.source_space,
+                debug=None,
+            )
 
         connection = self._connection_pool.connect()
         try:
             connection.begin()
-            if not claim_event_id(connection, event):
+            if not claim_event_id(connection, event, source_space=payload.source_space):
                 connection.commit()
                 return EventAckResponse(
                     ok=True,
                     event_type="search_result_click",
+                    source_space=payload.source_space,
                     debug=None,
                 )
             project_profile = not profile_event_is_before_reset(
                 connection,
                 user_id=payload.user_id,
                 event_ts=event_ts,
+                source_space=payload.source_space,
             )
             if not project_profile and self._settings.profile_v2_enabled:
                 PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
-            if payload.sponsored_delivery_id:
+            if payload.source_space == "mind" and payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     for_update=True,
                 )
-            query_topics: list[SearchQueryTopic] = load_query_topics(connection, query_key)
-            news_topic_ids = load_news_topic_ids(connection, payload.news_id)
+            query_topics: list[SearchQueryTopic] = (
+                load_query_topics(connection, query_key) if payload.source_space == "mind" else []
+            )
+            news_topic_ids = (
+                load_news_topic_ids(connection, payload.article_id)
+                if payload.source_space == "mind"
+                else []
+            )
             query_topic_ids = {topic.topic_id for topic in query_topics}
             news_topic_set = set(news_topic_ids)
             overlap_topic_ids = query_topic_ids & news_topic_set
@@ -1065,7 +1181,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection=connection,
                 user_id=payload.user_id,
                 event_type="search_result_click",
-                news_id=payload.news_id,
+                news_id=payload.article_id,
                 query_key=query_key,
                 request_id=payload.request_id,
                 surface="search",
@@ -1075,9 +1191,16 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 sponsored_delivery_id=event.sponsored_delivery_id,
                 campaign_id=event.campaign_id,
                 creative_id=event.creative_id,
+                source_space=payload.source_space,
+                article_id=payload.article_id,
             )
             profile_row = (
-                fetch_profile_row(connection, payload.user_id, for_update=True)
+                fetch_profile_row(
+                    connection,
+                    payload.user_id,
+                    payload.source_space,
+                    for_update=True,
+                )
                 if project_profile
                 else None
             )
@@ -1087,6 +1210,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     profile_row,
                     query_key=query_key,
                     event_ts=event_ts,
+                    source_space=payload.source_space,
                 )
             if sponsored_attribution is not None:
                 record_sponsored_click(
@@ -1099,11 +1223,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 update = apply_click_profile_update(
                     connection=connection,
                     profile_row=profile_row,
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     event_ts=event_ts,
                     topic_deltas=topic_deltas,
                     behavior_delta=self._settings.search_result_click_behavior_delta,
                     decay_factor=self._settings.profile_topic_decay,
+                    source_space=payload.source_space,
                 )
                 self._project_profile_v2(
                     connection,
@@ -1117,6 +1242,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             response = EventAckResponse(
                 ok=True,
                 event_type="search_result_click",
+                source_space=payload.source_space,
                 debug=(
                     SearchResultClickDebug(
                         query_topics=query_topics,
@@ -1140,26 +1266,40 @@ class PostgresRuntimeRepository(RuntimeRepository):
         finally:
             connection.close()
 
-    def get_debug_profile(self, user_id: int) -> DebugProfileResponse:
+    def get_debug_profile(
+        self, user_id: int, source_space: NewsSpace = "mind"
+    ) -> DebugProfileResponse:
         connection = self._connection_pool.connect()
+        profile_created = source_space == "live"
         try:
-            profile = profile_from_row(fetch_profile_row(connection, user_id))
-            recent_news_rows = load_news_rows(
-                connection,
-                [click.news_id for click in profile.recent_clicked_news],
-            )
-            return profile.model_copy(
+            if profile_created:
+                connection.begin()
+                ensure_profile_row(connection, user_id, source_space)
+            profile = profile_from_row(fetch_profile_row(connection, user_id, source_space))
+            response = profile.model_copy(
                 update={
-                    "recent_clicked_news": attach_recent_click_titles(
+                    "recent_clicked_news": enrich_recent_click_titles(
+                        connection,
                         profile.recent_clicked_news,
-                        recent_news_rows,
+                        source_space,
                     )
                 }
             )
+            if profile_created:
+                connection.commit()
+            return response
+        except Exception:
+            if profile_created:
+                connection.rollback()
+            raise
         finally:
             connection.close()
 
-    def list_categories(self) -> CategoryListResponse:
+    def list_categories(self, source_space: NewsSpace = "mind") -> CategoryListResponse:
+        if source_space == "live":
+            if not self._settings.live_news_enabled:
+                raise RepositoryNotReadyError("GET /categories?source_space=live")
+            return self._live_news_space.list_categories()
         connection = self._connection_pool.connect()
         try:
             rows = list_news_categories(connection)
@@ -1175,27 +1315,56 @@ class PostgresRuntimeRepository(RuntimeRepository):
             ]
         )
 
-    def get_profile(self, user_id: int) -> ProfileResponse:
+    def get_profile(self, user_id: int, source_space: NewsSpace = "mind") -> ProfileResponse:
         connection = self._connection_pool.connect()
+        profile_created = source_space == "live"
         try:
-            return load_profile_v2(
-                connection,
-                user_id=user_id,
-                now_ts=int(time.time()),
-                config=profile_signal_config(self._settings),
-            )
-        finally:
-            connection.close()
-
-    def reset_profile(self, user_id: int) -> ProfileResponse:
-        connection = self._connection_pool.connect()
-        try:
-            connection.begin()
-            reset_ts = int(time.time())
-            reset_profile_projections(connection, user_id=user_id, reset_ts=reset_ts)
+            if profile_created:
+                connection.begin()
+                ensure_profile_row(connection, user_id, source_space)
             profile = load_profile_v2(
                 connection,
                 user_id=user_id,
+                source_space=source_space,
+                now_ts=int(time.time()),
+                config=profile_signal_config(self._settings),
+            )
+            profile = profile.model_copy(
+                update={
+                    "recent_clicked_news": enrich_recent_click_titles(
+                        connection,
+                        profile.recent_clicked_news,
+                        source_space,
+                    )
+                }
+            )
+            if profile_created:
+                connection.commit()
+            return profile
+        except Exception:
+            if profile_created:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def reset_profile(self, user_id: int, source_space: NewsSpace = "mind") -> ProfileResponse:
+        connection = self._connection_pool.connect()
+        try:
+            connection.begin()
+            if source_space == "live":
+                ensure_profile_row(connection, user_id, source_space)
+            reset_ts = int(time.time())
+            reset_profile_projections(
+                connection,
+                user_id=user_id,
+                source_space=source_space,
+                reset_ts=reset_ts,
+            )
+            profile = load_profile_v2(
+                connection,
+                user_id=user_id,
+                source_space=source_space,
                 now_ts=reset_ts,
                 config=profile_signal_config(self._settings),
             )
@@ -1209,7 +1378,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         finally:
             connection.close()
 
-    def list_personas(self, limit: int) -> PersonaListResponse:
+    def list_personas(self, limit: int, source_space: NewsSpace = "mind") -> PersonaListResponse:
         connection = self._connection_pool.connect()
         try:
             with connection.cursor() as cursor:
@@ -1221,12 +1390,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
                       up.behavior_score,
                       up.topic_weights_json
                     FROM app_user au
-                    JOIN user_profile up ON up.user_id = au.user_id
+                    LEFT JOIN user_profile up
+                      ON up.user_id = au.user_id
+                     AND up.source_space = %s
                     WHERE au.is_demo_user IS TRUE
                     ORDER BY up.behavior_score DESC, au.user_id ASC
                     LIMIT %s
                     """,
-                    (limit,),
+                    (source_space, limit),
                 )
                 rows = cursor.fetchall()
         finally:
@@ -1246,7 +1417,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
         return PersonaListResponse(items=items)
 
-    def list_search_suggestions(self, limit: int) -> SuggestionListResponse:
+    def list_search_suggestions(
+        self, limit: int, source_space: NewsSpace = "mind"
+    ) -> SuggestionListResponse:
+        if source_space == "live":
+            if not self._settings.live_news_enabled:
+                raise RepositoryNotReadyError("GET /search/suggestions?source_space=live")
+            return self._live_news_space.list_search_suggestions()
         connection = self._connection_pool.connect()
         try:
             with connection.cursor() as cursor:
@@ -1257,11 +1434,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
                       ANY_VALUE(display_query) AS display_query,
                       COUNT(*) AS topic_count
                     FROM query_topic_map
+                    WHERE source_space = %s
                     GROUP BY query_key
                     ORDER BY topic_count DESC, query_key ASC
                     LIMIT %s
                     """,
-                    (limit,),
+                    (source_space, limit),
                 )
                 rows = cursor.fetchall()
         finally:
@@ -1277,7 +1455,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
         ]
         return SuggestionListResponse(items=items)
 
-    def get_article_card(self, news_id: str) -> ArticleCardResponse:
+    def get_article_card(self, source_space: NewsSpace, article_id: str) -> ArticleCardResponse:
+        if source_space == "live":
+            if not self._settings.live_news_enabled:
+                raise RepositoryNotReadyError(f"GET /articles/live/{article_id}")
+            return self._live_news_space.get_article(article_id)
+        news_id = article_id
         connection = self._connection_pool.connect()
         try:
             news_rows = load_news_rows(connection, [news_id])
@@ -1290,6 +1473,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
 
         categories: list[TopicCard] = topics_by_news.get(news_id, [])
         return ArticleCardResponse(
+            article_id=news_id,
             news_id=news_id,
             title=row.get("title") or news_id,
             abstract=row.get("abstract") or "",
@@ -1305,13 +1489,14 @@ class PostgresRuntimeRepository(RuntimeRepository):
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
         # 将已有完整画像更新逻辑的事件类型交给对应处理器。
         if payload.event_type == "recommendation_click":
-            if payload.news_id is None:
-                raise ValueError("recommendation_click requires news_id")
+            if payload.article_id is None:
+                raise ValueError("recommendation_click requires article_id")
             ack = self.record_recommendation_click(
                 RecommendationClickRequest(
                     event_id=payload.event_id,
                     user_id=payload.user_id,
-                    news_id=payload.news_id,
+                    source_space=payload.source_space,
+                    article_id=payload.article_id,
                     request_id=payload.request_id,
                     sponsored_delivery_id=payload.sponsored_delivery_id,
                     debug=payload.debug,
@@ -1327,18 +1512,20 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=ack.ok,
                 event_type=payload.event_type,
+                source_space=payload.source_space,
                 profile_updated=profile_updated,
                 behavior_score=behavior_score,
             )
 
         if payload.event_type == "search_result_click":
-            if payload.news_id is None or not payload.query_key:
-                raise ValueError("search_result_click requires news_id and query_key")
+            if payload.article_id is None or not payload.query_key:
+                raise ValueError("search_result_click requires article_id and query_key")
             ack = self.record_search_result_click(
                 SearchResultClickRequest(
                     event_id=payload.event_id,
                     user_id=payload.user_id,
-                    news_id=payload.news_id,
+                    source_space=payload.source_space,
+                    article_id=payload.article_id,
                     query_key=payload.query_key,
                     request_id=payload.request_id,
                     sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1353,28 +1540,32 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=ack.ok,
                 event_type=payload.event_type,
+                source_space=payload.source_space,
                 profile_updated=profile_updated,
                 behavior_score=behavior_score,
             )
 
         if payload.event_type == "upvote":
-            if payload.news_id is None:
-                raise ValueError("upvote requires news_id")
+            if payload.article_id is None:
+                raise ValueError("upvote requires article_id")
             # 应用与推荐点击相同的正向画像更新，
             # 但将 user_event 记录标记为 event_type='upvote'，便于分析时区分。
             event_ts = (
                 payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
             )
             sponsored_attribution = self._load_sponsored_event_attribution(
-                delivery_id=payload.sponsored_delivery_id,
+                delivery_id=(
+                    payload.sponsored_delivery_id if payload.source_space == "mind" else None
+                ),
                 user_id=payload.user_id,
-                news_id=payload.news_id,
+                news_id=payload.article_id,
             )
             event = self._event_message(
                 event_type="upvote",
                 user_id=payload.user_id,
+                source_space=payload.source_space,
                 event_id=payload.event_id,
-                news_id=payload.news_id,
+                article_id=payload.article_id,
                 query_key=payload.query_key,
                 request_id=payload.request_id,
                 sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1397,6 +1588,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 return EventTrackResponse(
                     ok=True,
                     event_type=payload.event_type,
+                    source_space=payload.source_space,
                     profile_updated=False,
                     behavior_score=None,
                 )
@@ -1404,11 +1596,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
             connection = self._connection_pool.connect()
             try:
                 connection.begin()
-                if not claim_event_id(connection, event):
+                if not claim_event_id(connection, event, source_space=payload.source_space):
                     connection.commit()
                     return EventTrackResponse(
                         ok=True,
                         event_type=payload.event_type,
+                        source_space=payload.source_space,
                         profile_updated=True,
                         behavior_score=None,
                     )
@@ -1416,18 +1609,23 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     connection,
                     user_id=payload.user_id,
                     event_ts=event_ts,
+                    source_space=payload.source_space,
                 )
                 if not project_profile and self._settings.profile_v2_enabled:
                     PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
-                if payload.sponsored_delivery_id:
+                if payload.source_space == "mind" and payload.sponsored_delivery_id:
                     sponsored_attribution = load_sponsored_attribution(
                         connection,
                         delivery_id=payload.sponsored_delivery_id,
                         user_id=payload.user_id,
-                        news_id=payload.news_id,
+                        news_id=payload.article_id,
                         for_update=True,
                     )
-                news_topic_ids = load_news_topic_ids(connection, payload.news_id)
+                news_topic_ids = (
+                    load_news_topic_ids(connection, payload.article_id)
+                    if payload.source_space == "mind"
+                    else []
+                )
                 topic_deltas = {
                     topic_id: self._settings.recommendation_click_topic_delta
                     for topic_id in news_topic_ids
@@ -1436,7 +1634,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     connection=connection,
                     user_id=payload.user_id,
                     event_type="upvote",
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     query_key=payload.query_key,
                     request_id=payload.request_id,
                     surface=payload.surface or "home_feed",
@@ -1446,6 +1644,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     sponsored_delivery_id=event.sponsored_delivery_id,
                     campaign_id=event.campaign_id,
                     creative_id=event.creative_id,
+                    source_space=payload.source_space,
+                    article_id=payload.article_id,
                 )
                 if sponsored_attribution is not None:
                     record_sponsored_click(
@@ -1458,16 +1658,18 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     profile_row = fetch_profile_row(
                         connection,
                         payload.user_id,
+                        payload.source_space,
                         for_update=True,
                     )
                     update = apply_click_profile_update(
                         connection=connection,
                         profile_row=profile_row,
-                        news_id=payload.news_id,
+                        news_id=payload.article_id,
                         event_ts=event_ts,
                         topic_deltas=topic_deltas,
                         behavior_delta=self._settings.recommendation_click_behavior_delta,
                         decay_factor=self._settings.profile_topic_decay,
+                        source_space=payload.source_space,
                     )
                     self._project_profile_v2(
                         connection,
@@ -1488,6 +1690,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=True,
                 event_type=payload.event_type,
+                source_space=payload.source_space,
                 profile_updated=update is not None,
                 behavior_score=(float(update["behavior_score"]) if update is not None else None),
             )
@@ -1496,18 +1699,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
         event_ts = (
             payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
         )
-        if payload.news_id is None:
-            raise ValueError(f"{payload.event_type} requires news_id")
+        if payload.article_id is None:
+            raise ValueError(f"{payload.event_type} requires article_id")
         sponsored_attribution = self._load_sponsored_event_attribution(
-            delivery_id=payload.sponsored_delivery_id,
+            delivery_id=(payload.sponsored_delivery_id if payload.source_space == "mind" else None),
             user_id=payload.user_id,
-            news_id=payload.news_id,
+            news_id=payload.article_id,
         )
         event = self._event_message(
             event_type=cast(UserEventType, payload.event_type),
             user_id=payload.user_id,
+            source_space=payload.source_space,
             event_id=payload.event_id,
-            news_id=payload.news_id,
+            article_id=payload.article_id,
             query_key=payload.query_key,
             request_id=payload.request_id,
             sponsored_delivery_id=payload.sponsored_delivery_id,
@@ -1530,6 +1734,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             return EventTrackResponse(
                 ok=True,
                 event_type=payload.event_type,
+                source_space=payload.source_space,
                 profile_updated=False,
                 behavior_score=None,
             )
@@ -1537,11 +1742,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
         connection = self._connection_pool.connect()
         try:
             connection.begin()
-            if not claim_event_id(connection, event):
+            if not claim_event_id(connection, event, source_space=payload.source_space):
                 connection.commit()
                 return EventTrackResponse(
                     ok=True,
                     event_type=payload.event_type,
+                    source_space=payload.source_space,
                     profile_updated=False,
                     behavior_score=None,
                 )
@@ -1549,15 +1755,16 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 connection,
                 user_id=payload.user_id,
                 event_ts=event_ts,
+                source_space=payload.source_space,
             )
             if not project_profile and self._settings.profile_v2_enabled:
                 PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
-            if payload.sponsored_delivery_id:
+            if payload.source_space == "mind" and payload.sponsored_delivery_id:
                 sponsored_attribution = load_sponsored_attribution(
                     connection,
                     delivery_id=payload.sponsored_delivery_id,
                     user_id=payload.user_id,
-                    news_id=payload.news_id,
+                    news_id=payload.article_id,
                     for_update=True,
                 )
             inserted = record_log_only_event(
@@ -1565,7 +1772,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 user_id=payload.user_id,
                 event_type=payload.event_type,
                 surface=payload.surface or "home_feed",
-                news_id=payload.news_id,
+                news_id=payload.article_id,
                 query_key=payload.query_key,
                 request_id=payload.request_id,
                 event_ts=event_ts,
@@ -1575,6 +1782,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 campaign_id=event.campaign_id,
                 creative_id=event.creative_id,
                 dwell_ms=event.dwell_ms,
+                source_space=payload.source_space,
+                article_id=payload.article_id,
             )
             if (
                 inserted
@@ -1588,7 +1797,11 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 )
             profile_v2_updated = False
             if inserted and project_profile and payload.event_type in {"dwell", "downvote"}:
-                news_topic_ids = load_news_topic_ids(connection, payload.news_id)
+                news_topic_ids = (
+                    load_news_topic_ids(connection, payload.article_id)
+                    if payload.source_space == "mind"
+                    else []
+                )
                 profile_v2_updated = self._project_profile_v2(
                     connection,
                     event,
@@ -1608,6 +1821,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         return EventTrackResponse(
             ok=True,
             event_type=payload.event_type,
+            source_space=payload.source_space,
             profile_updated=profile_v2_updated,
             behavior_score=None,
         )
@@ -1627,6 +1841,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             outcome = apply_profile_v2_event_with_outcome(
                 connection,
                 user_id=event.user_id,
+                source_space=event.source_space,
                 event_type=event.event_type,
                 event_ts=event.event_ts,
                 topic_strengths=topic_strengths,
@@ -1709,6 +1924,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             topics = topics_by_news.get(delivery.news_id, [])
             items.append(
                 FeedItem(
+                    article_id=delivery.news_id,
                     news_id=delivery.news_id,
                     title=row.get("title") or delivery.news_id,
                     abstract=row.get("abstract") or "",
@@ -1757,9 +1973,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
         *,
         event_type: UserEventType,
         user_id: int,
+        source_space: NewsSpace = "mind",
         event_ts: int,
         event_id: str | None = None,
-        news_id: str | None = None,
+        article_id: str | None = None,
         query_key: str | None = None,
         query_text: str | None = None,
         request_id: str | None = None,
@@ -1772,7 +1989,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
         message_values: dict[str, Any] = {
             "event_type": event_type,
             "user_id": user_id,
-            "news_id": news_id,
+            "source_space": source_space,
+            "article_id": article_id,
+            "news_id": article_id if source_space == "mind" else None,
             "query_key": query_key,
             "query_text": query_text,
             "request_id": request_id,
@@ -1787,6 +2006,86 @@ class PostgresRuntimeRepository(RuntimeRepository):
             message_values["event_id"] = event_id
         return UserEventMessage(**message_values)
 
+    def _record_live_search_query(
+        self,
+        payload: SearchRequest,
+        *,
+        query_key: str,
+        event_id: str,
+    ) -> None:
+        event_ts = (
+            payload.replay_event_ts if payload.replay_event_ts is not None else int(time.time())
+        )
+        event = self._event_message(
+            event_type="search_query",
+            user_id=payload.user_id,
+            source_space="live",
+            event_id=event_id,
+            query_key=query_key,
+            query_text=payload.query_text,
+            request_id=event_id,
+            surface="search",
+            event_ts=event_ts,
+        )
+        connection = self._connection_pool.connect()
+        try:
+            connection.begin()
+            ensure_profile_row(connection, payload.user_id, "live")
+            if self._settings.event_mode == "kafka_async":
+                self._enqueue_raw_event(connection, event)
+                connection.commit()
+                return
+            claimed = claim_event_id(connection, event, source_space="live")
+            if claimed:
+                project_profile = not profile_event_is_before_reset(
+                    connection,
+                    user_id=payload.user_id,
+                    event_ts=event_ts,
+                    source_space="live",
+                )
+                record_search_query(
+                    connection=connection,
+                    user_id=payload.user_id,
+                    query_key=query_key,
+                    event_ts=event_ts,
+                    external_event_id=event.event_id,
+                    source_space="live",
+                )
+                if project_profile:
+                    profile_row = fetch_profile_row(
+                        connection,
+                        payload.user_id,
+                        "live",
+                        for_update=True,
+                    )
+                    append_recent_query(
+                        connection=connection,
+                        profile_row=profile_row,
+                        query_key=query_key,
+                        event_ts=event_ts,
+                        behavior_delta=self._settings.search_query_behavior_delta,
+                        source_space="live",
+                    )
+            self._enqueue_raw_event(connection, event)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _ensure_live_profile(self, user_id: int) -> None:
+        connection = self._connection_pool.connect()
+        try:
+            connection.begin()
+            ensure_profile_row(connection, user_id, "live")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def _enqueue_raw_event(self, connection: Any, event: UserEventMessage) -> None:
         if not self._settings.kafka_enabled:
             return
@@ -1794,7 +2093,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
             connection,
             event_id=event.event_id,
             topic=self._settings.kafka_raw_events_topic,
-            message_key=event.partition_key,
+            message_key=event.publish_partition_key(
+                self._settings.kafka_source_partition_keys_enabled
+            ),
             payload_json=event.model_dump_json(exclude_none=True),
             payload_fingerprint=event.idempotency_fingerprint,
         )
@@ -1816,6 +2117,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         connection: Any,
         *,
         user_id: int,
+        source_space: NewsSpace = "mind",
         now_ts: int,
     ) -> dict[int, float]:
         if not self._settings.profile_v2_enabled:
@@ -1826,6 +2128,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             scores = load_profile_v2_topic_scores(
                 connection,
                 user_id=user_id,
+                source_space=source_space,
                 now_ts=now_ts,
                 config=profile_signal_config(self._settings),
             )

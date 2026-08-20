@@ -52,6 +52,13 @@ def _env_bool(name: str, default: str) -> bool:
     return _env(name, default).lower() in ("1", "true", "yes")
 
 
+def _env_positive_int(name: str, default: str) -> int:
+    value = int(_env(name, default))
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than zero")
+    return value
+
+
 def environment_value(name: str, default: str = "") -> str:
     return _env(name, default)
 
@@ -102,6 +109,20 @@ class Settings:
     auth_rate_limit_attempts: int = 10
     auth_rate_limit_window_seconds: int = 60
     mind_normalized_dir: str = "build/mind_normalized"
+    live_news_enabled: bool = False
+    live_news_collector_enabled: bool = False
+    live_news_source_config: str = "config/live_news_sources.json"
+    live_news_poll_interval_seconds: int = 60
+    live_news_replay_minutes: int = 60
+    live_news_max_age_hours: int = 72
+    live_news_collector_metrics_port: int = 9103
+    live_content_worker_enabled: bool = False
+    guardian_api_key: str = ""
+    live_content_connect_timeout_seconds: int = 5
+    live_content_read_timeout_seconds: int = 15
+    live_content_max_response_bytes: int = 2 * 1024 * 1024
+    live_content_worker_batch_size: int = 20
+    live_content_worker_concurrency: int = 4
     postgres_connect_timeout_seconds: int = 5
     postgres_pool_min_size: int = 1
     postgres_pool_max_connections: int = 10
@@ -110,7 +131,7 @@ class Settings:
     recommendation_click_behavior_delta: float = 3.0
     search_result_click_behavior_delta: float = 5.0
     profile_topic_decay: float = 0.92
-    profile_v2_enabled: bool = False
+    profile_v2_enabled: bool = True
     profile_v2_short_half_life_seconds: int = 21_600
     profile_v2_long_half_life_seconds: int = 2_592_000
     profile_v2_long_term_factor: float = 0.25
@@ -134,6 +155,8 @@ class Settings:
     kafka_raw_events_topic: str = "newsrec.events.raw"
     kafka_training_topic: str = "newsrec.training.interactions"
     kafka_dlq_topic: str = "newsrec.events.dlq"
+    # Enable only after docs/operations/kafka-source-partition-key-rollout.md.
+    kafka_source_partition_keys_enabled: bool = False
     kafka_producer_linger_ms: int = 5
     kafka_producer_flush_timeout_seconds: float = 10.0
     kafka_consumer_max_retries: int = 5
@@ -192,6 +215,34 @@ def get_settings() -> Settings:
         auth_rate_limit_attempts=int(_env("NEWSREC_AUTH_RATE_LIMIT_ATTEMPTS", "10")),
         auth_rate_limit_window_seconds=int(_env("NEWSREC_AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")),
         mind_normalized_dir=mind_normalized_dir,
+        live_news_enabled=_env_bool("NEWSREC_LIVE_NEWS_ENABLED", "0"),
+        live_news_collector_enabled=_env_bool("NEWSREC_LIVE_NEWS_COLLECTOR_ENABLED", "0"),
+        live_news_source_config=_env(
+            "NEWSREC_LIVE_NEWS_SOURCE_CONFIG", "config/live_news_sources.json"
+        ),
+        live_news_poll_interval_seconds=int(_env("NEWSREC_LIVE_NEWS_POLL_INTERVAL_SECONDS", "60")),
+        live_news_replay_minutes=int(_env("NEWSREC_LIVE_NEWS_REPLAY_MINUTES", "60")),
+        live_news_max_age_hours=int(_env("NEWSREC_LIVE_NEWS_MAX_AGE_HOURS", "72")),
+        live_news_collector_metrics_port=int(
+            _env("NEWSREC_LIVE_NEWS_COLLECTOR_METRICS_PORT", "9103")
+        ),
+        live_content_worker_enabled=_env_bool("NEWSREC_LIVE_CONTENT_WORKER_ENABLED", "0"),
+        guardian_api_key=_env("NEWSREC_GUARDIAN_API_KEY", "").strip(),
+        live_content_connect_timeout_seconds=_env_positive_int(
+            "NEWSREC_LIVE_CONTENT_CONNECT_TIMEOUT_SECONDS", "5"
+        ),
+        live_content_read_timeout_seconds=_env_positive_int(
+            "NEWSREC_LIVE_CONTENT_READ_TIMEOUT_SECONDS", "15"
+        ),
+        live_content_max_response_bytes=_env_positive_int(
+            "NEWSREC_LIVE_CONTENT_MAX_RESPONSE_BYTES", str(2 * 1024 * 1024)
+        ),
+        live_content_worker_batch_size=_env_positive_int(
+            "NEWSREC_LIVE_CONTENT_WORKER_BATCH_SIZE", "20"
+        ),
+        live_content_worker_concurrency=_env_positive_int(
+            "NEWSREC_LIVE_CONTENT_WORKER_CONCURRENCY", "4"
+        ),
         postgres_connect_timeout_seconds=int(_env("NEWSREC_POSTGRES_CONNECT_TIMEOUT_SECONDS", "5")),
         postgres_pool_min_size=int(_env("NEWSREC_POSTGRES_POOL_MIN_SIZE", "1")),
         postgres_pool_max_connections=int(_env("NEWSREC_POSTGRES_POOL_MAX_CONNECTIONS", "10")),
@@ -204,7 +255,7 @@ def get_settings() -> Settings:
             _env("NEWSREC_SEARCH_RESULT_CLICK_BEHAVIOR_DELTA", "5.0")
         ),
         profile_topic_decay=float(_env("NEWSREC_PROFILE_TOPIC_DECAY", "0.92")),
-        profile_v2_enabled=_env_bool("NEWSREC_PROFILE_V2_ENABLED", "0"),
+        profile_v2_enabled=_env_bool("NEWSREC_PROFILE_V2_ENABLED", "1"),
         profile_v2_short_half_life_seconds=int(
             _env("NEWSREC_PROFILE_V2_SHORT_HALF_LIFE_SECONDS", "21600")
         ),
@@ -256,6 +307,9 @@ def get_settings() -> Settings:
             "newsrec.training.interactions",
         ),
         kafka_dlq_topic=_env("NEWSREC_KAFKA_DLQ_TOPIC", "newsrec.events.dlq"),
+        kafka_source_partition_keys_enabled=_env_bool(
+            "NEWSREC_KAFKA_SOURCE_PARTITION_KEYS_ENABLED", "0"
+        ),
         kafka_producer_linger_ms=int(_env("NEWSREC_KAFKA_PRODUCER_LINGER_MS", "5")),
         kafka_producer_flush_timeout_seconds=float(
             _env("NEWSREC_KAFKA_PRODUCER_FLUSH_TIMEOUT_SECONDS", "10")

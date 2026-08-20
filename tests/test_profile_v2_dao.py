@@ -19,6 +19,7 @@ from backend.app.repositories.profile_v2_dao import (
 class FakeCursor(AbstractContextManager["FakeCursor"]):
     def __init__(self, connection: FakeConnection) -> None:
         self.connection = connection
+        self.rowcount = 0
         self._one: dict[str, Any] | None = None
         self._many: list[dict[str, Any]] = []
 
@@ -33,6 +34,7 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
         self.connection.statements.append((normalized, params))
         self._one = None
         self._many = []
+        self.rowcount = 0
 
         if "FROM user_profile" in normalized and normalized.startswith("SELECT"):
             self._one = deepcopy(self.connection.profile)
@@ -45,11 +47,14 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
             and "topic_id = %s" in normalized
             and normalized.startswith("SELECT")
         ):
-            self._one = deepcopy(self.connection.topic_rows.get((int(params[0]), int(params[1]))))
+            self._one = deepcopy(
+                self.connection.topic_rows.get((int(params[0]), str(params[2]), int(params[1])))
+            )
             return
         if normalized.startswith("INSERT INTO user_topic_profile"):
             (
                 user_id,
+                source_space,
                 topic_id,
                 short_positive,
                 short_negative,
@@ -60,9 +65,18 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
                 signal_counts,
                 last_signal_type,
                 last_event_ts,
+                validation_topic_id,
+                validation_source_space,
             ) = params
-            self.connection.topic_rows[(int(user_id), int(topic_id))] = {
+            if (
+                int(validation_topic_id) != int(topic_id)
+                or str(validation_source_space) != str(source_space)
+                or self.connection.topic_sources.get(int(topic_id)) != str(source_space)
+            ):
+                return
+            self.connection.topic_rows[(int(user_id), str(source_space), int(topic_id))] = {
                 "user_id": int(user_id),
+                "source_space": str(source_space),
                 "topic_id": int(topic_id),
                 "short_positive_score": float(short_positive),
                 "short_negative_score": float(short_negative),
@@ -74,18 +88,30 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
                 "last_signal_type": last_signal_type,
                 "last_event_ts": int(last_event_ts),
             }
+            self.rowcount = 1
             return
         if normalized.startswith("UPDATE user_profile SET profile_v2_evidence_count"):
-            event_ts, user_id = params
+            event_ts, user_id, source_space = params
             assert int(user_id) == int(self.connection.profile["user_id"])
+            assert source_space == self.connection.profile["source_space"]
             self.connection.profile["profile_v2_evidence_count"] += 1
             self.connection.profile["profile_v2_last_event_ts"] = int(event_ts)
             self.connection.profile["profile_v2_updated_at"] = datetime.now(UTC)
+            self.rowcount = 1
             return
         if "FROM user_topic_profile AS profile" in normalized and normalized.startswith("SELECT"):
-            user_id = int(params[0])
-            for (row_user_id, topic_id), row in self.connection.topic_rows.items():
-                if row_user_id != user_id:
+            user_id = int(params[1])
+            source_space = str(params[2])
+            for (
+                row_user_id,
+                row_source_space,
+                topic_id,
+            ), row in self.connection.topic_rows.items():
+                if (
+                    row_user_id != user_id
+                    or row_source_space != source_space
+                    or self.connection.topic_sources.get(topic_id) != source_space
+                ):
                     continue
                 self._many.append(
                     {
@@ -97,7 +123,11 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
         if "FROM system_profile_seed" in normalized and normalized.startswith("SELECT"):
             seed_key = str(params[0])
             seed = self.connection.seeds.get(seed_key)
-            self._one = deepcopy(seed) if seed is not None else None
+            self._one = (
+                deepcopy(seed)
+                if seed is not None and seed["source_space"] == str(params[1])
+                else None
+            )
             return
         if normalized.startswith("UPDATE user_profile SET topic_weights_json"):
             (
@@ -108,8 +138,10 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
                 reset_ts,
                 reset_event_id,
                 user_id,
+                source_space,
             ) = params
             assert int(user_id) == int(self.connection.profile["user_id"])
+            assert source_space == self.connection.profile["source_space"]
             self.connection.profile.update(
                 {
                     "topic_weights_json": json.loads(topic_weights),
@@ -129,8 +161,11 @@ class FakeCursor(AbstractContextManager["FakeCursor"]):
             return
         if normalized.startswith("DELETE FROM user_topic_profile"):
             user_id = int(params[0])
+            source_space = str(params[1])
             self.connection.topic_rows = {
-                key: row for key, row in self.connection.topic_rows.items() if key[0] != user_id
+                key: row
+                for key, row in self.connection.topic_rows.items()
+                if key[:2] != (user_id, source_space)
             }
             return
         raise AssertionError(f"unexpected SQL: {normalized}")
@@ -146,6 +181,7 @@ class FakeConnection:
     def __init__(self) -> None:
         self.profile: dict[str, Any] = {
             "user_id": 7,
+            "source_space": "mind",
             "cold_start_seed_key": "cold_start_default",
             "topic_weights_json": [{"topic_id": 10, "weight": 0.6}],
             "recent_clicked_news_json": [{"news_id": "N12", "click_ts": 90}],
@@ -157,10 +193,12 @@ class FakeConnection:
             "profile_reset_before_event_id": None,
             "profile_v2_updated_at": None,
         }
-        self.topic_rows: dict[tuple[int, int], dict[str, Any]] = {}
-        self.topic_names = {10: "Sports", 20: "Finance", 30: "Travel"}
+        self.topic_rows: dict[tuple[int, str, int], dict[str, Any]] = {}
+        self.topic_names = {10: "Sports", 20: "Finance", 30: "Travel", 40: "Live"}
+        self.topic_sources = {10: "mind", 20: "mind", 30: "mind", 40: "live"}
         self.seeds: dict[str, dict[str, Any]] = {
             "cold_start_default": {
+                "source_space": "mind",
                 "topic_weights_json": [{"topic_id": 30, "weight": 0.5}],
                 "recent_clicked_news_json": [],
                 "recent_queries_json": [],
@@ -195,9 +233,9 @@ def test_multi_topic_event_increments_user_evidence_once() -> None:
 
     assert updated is True
     assert connection.profile["profile_v2_evidence_count"] == 1
-    assert connection.topic_rows[(7, 10)]["positive_evidence_count"] == 1
-    assert connection.topic_rows[(7, 20)]["positive_evidence_count"] == 1
-    assert connection.topic_rows[(7, 10)]["long_positive_score"] == 0.5
+    assert connection.topic_rows[(7, "mind", 10)]["positive_evidence_count"] == 1
+    assert connection.topic_rows[(7, "mind", 20)]["positive_evidence_count"] == 1
+    assert connection.topic_rows[(7, "mind", 10)]["long_positive_score"] == 0.5
 
 
 def test_pre_reset_and_out_of_order_events_do_not_mutate_projection() -> None:
@@ -218,7 +256,7 @@ def test_pre_reset_and_out_of_order_events_do_not_mutate_projection() -> None:
     assert connection.topic_rows == {}
 
     connection.profile["profile_reset_before_ts"] = None
-    connection.topic_rows[(7, 10)] = {
+    connection.topic_rows[(7, "mind", 10)] = {
         "user_id": 7,
         "topic_id": 10,
         "short_positive_score": 1.0,
@@ -286,7 +324,7 @@ def test_read_applies_decay_filters_small_scores_and_never_writes() -> None:
     connection.profile["profile_v2_evidence_count"] = 12
     connection.profile["profile_v2_updated_at"] = datetime(2026, 8, 16, tzinfo=UTC)
     connection.topic_rows = {
-        (7, 10): {
+        (7, "mind", 10): {
             "user_id": 7,
             "topic_id": 10,
             "short_positive_score": 4.0,
@@ -299,7 +337,7 @@ def test_read_applies_decay_filters_small_scores_and_never_writes() -> None:
             "last_signal_type": "upvote",
             "last_event_ts": 100,
         },
-        (7, 20): {
+        (7, "mind", 20): {
             "user_id": 7,
             "topic_id": 20,
             "short_positive_score": 0.0,
@@ -312,7 +350,7 @@ def test_read_applies_decay_filters_small_scores_and_never_writes() -> None:
             "last_signal_type": "downvote",
             "last_event_ts": 100,
         },
-        (7, 30): {
+        (7, "mind", 30): {
             "user_id": 7,
             "topic_id": 30,
             "short_positive_score": 0.009,
@@ -350,8 +388,9 @@ def test_read_applies_decay_filters_small_scores_and_never_writes() -> None:
 
 def test_reset_restores_v1_seed_and_clears_only_v2_projection() -> None:
     connection = FakeConnection()
-    connection.topic_rows[(7, 10)] = {"topic_id": 10}
-    connection.topic_rows[(99, 20)] = {"topic_id": 20}
+    connection.topic_rows[(7, "mind", 10)] = {"topic_id": 10}
+    connection.topic_rows[(7, "live", 10)] = {"topic_id": 10}
+    connection.topic_rows[(99, "mind", 20)] = {"topic_id": 20}
 
     reset_profile_projections(connection, user_id=7, reset_ts=2_000)
 
@@ -362,8 +401,9 @@ def test_reset_restores_v1_seed_and_clears_only_v2_projection() -> None:
     assert connection.profile["profile_v2_evidence_count"] == 0
     assert connection.profile["profile_reset_before_ts"] == 2_000
     assert connection.profile["profile_reset_before_event_id"] == 12
-    assert (7, 10) not in connection.topic_rows
-    assert (99, 20) in connection.topic_rows
+    assert (7, "mind", 10) not in connection.topic_rows
+    assert (7, "live", 10) in connection.topic_rows
+    assert (99, "mind", 20) in connection.topic_rows
     assert not any(
         statement.startswith(("DELETE FROM user_event", "UPDATE user_event"))
         for statement, _params in connection.statements
@@ -376,3 +416,62 @@ def test_reset_fails_when_the_configured_seed_is_missing() -> None:
 
     with pytest.raises(RuntimeError, match="cold_start_default"):
         reset_profile_projections(connection, user_id=7, reset_ts=2_000)
+
+
+def test_live_projection_queries_are_scoped_and_response_echoes_space() -> None:
+    connection = FakeConnection()
+    connection.profile["source_space"] = "live"
+    connection.profile["cold_start_seed_key"] = "live_cold_start_default"
+    connection.profile["recent_clicked_news_json"] = [
+        {"news_id": "L550e8400e29b41d4a716446655440000", "click_ts": 90},
+        {"news_id": "N12", "click_ts": 80},
+    ]
+
+    assert apply_profile_v2_event(
+        connection,
+        user_id=7,
+        source_space="live",
+        event_type="upvote",
+        event_ts=1_000,
+        topic_strengths={40: 2.0},
+        config=CONFIG,
+    )
+    response = load_profile_v2(
+        connection,
+        user_id=7,
+        source_space="live",
+        now_ts=1_000,
+        config=CONFIG,
+    )
+
+    assert response.source_space == "live"
+    assert [item.news_id for item in response.recent_clicked_news] == [
+        "L550e8400e29b41d4a716446655440000"
+    ]
+    assert connection.topic_rows[(7, "live", 40)]["positive_evidence_count"] == 1
+    touching_statements = [
+        (sql, params)
+        for sql, params in connection.statements
+        if any(table in sql for table in ("user_profile", "user_topic_profile", "JOIN topic"))
+    ]
+    assert touching_statements
+    assert all("source_space" in sql and "live" in params for sql, params in touching_statements)
+
+
+def test_cross_space_topic_projection_is_rejected_without_incrementing_evidence() -> None:
+    connection = FakeConnection()
+    connection.profile["source_space"] = "live"
+
+    with pytest.raises(ValueError, match="source_space"):
+        apply_profile_v2_event(
+            connection,
+            user_id=7,
+            source_space="live",
+            event_type="upvote",
+            event_ts=1_000,
+            topic_strengths={10: 2.0},
+            config=CONFIG,
+        )
+
+    assert connection.profile["profile_v2_evidence_count"] == 0
+    assert connection.topic_rows == {}
