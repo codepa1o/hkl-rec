@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.app.errors import IdempotencyConflictError
+from backend.app.errors import IdempotencyConflictError, InvalidSponsoredAttributionError
+from backend.app.news_spaces.types import NewsSpace
 from backend.app.repositories._utils import json_text, placeholders
 from backend.app.repositories.sponsored import (
     expected_spend_micros,
@@ -60,6 +61,7 @@ def claim_feed_request(
     connection: Any,
     *,
     request_id: str,
+    source_space: NewsSpace = "mind",
     user_id: int,
     page_size: int,
     debug: bool,
@@ -77,6 +79,7 @@ def claim_feed_request(
             cursor.execute(
                 """
                 SELECT
+                  source_space,
                   session_id,
                   page_number,
                   user_id,
@@ -87,15 +90,16 @@ def claim_feed_request(
                   as_of_ts,
                   category
                 FROM feed_request
-                WHERE cursor_token = %s
+                WHERE cursor_token = %s AND source_space = %s
                 FOR UPDATE
                 """,
-                (cursor_token,),
+                (cursor_token, source_space),
             )
             parent = cursor.fetchone()
             if parent is None:
                 raise IdempotencyConflictError("feed cursor is invalid or expired")
             parent_shape = (
+                str(parent["source_space"]),
                 int(parent["user_id"]),
                 int(parent["page_size"]),
                 bool(parent["debug"]),
@@ -105,6 +109,7 @@ def claim_feed_request(
                 str(parent["category"]) if parent.get("category") is not None else None,
             )
             parent_requested_shape = (
+                source_space,
                 user_id,
                 page_size,
                 debug,
@@ -122,6 +127,7 @@ def claim_feed_request(
             """
             INSERT INTO feed_request (
               request_id,
+              source_space,
               user_id,
               page_size,
               debug,
@@ -133,11 +139,12 @@ def claim_feed_request(
               page_number,
               returned_news_ids_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '[]'::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '[]'::jsonb)
             ON CONFLICT (request_id) DO NOTHING
             """,
             (
                 request_id,
+                source_space,
                 user_id,
                 page_size,
                 debug,
@@ -160,6 +167,7 @@ def claim_feed_request(
         cursor.execute(
             """
             SELECT
+              source_space,
               user_id,
               page_size,
               debug,
@@ -180,6 +188,7 @@ def claim_feed_request(
     if row is None:
         raise RuntimeError(f"feed request claim disappeared: {request_id}")
     existing_shape = (
+        str(row["source_space"]),
         int(row["user_id"]),
         int(row["page_size"]),
         bool(row["debug"]),
@@ -191,6 +200,7 @@ def claim_feed_request(
         int(row["page_number"]),
     )
     existing_requested_shape = (
+        source_space,
         user_id,
         page_size,
         debug,
@@ -217,9 +227,10 @@ def load_feed_session_news_ids(
     connection: Any,
     *,
     session_id: str,
+    source_space: NewsSpace = "mind",
     exclude_request_id: str | None = None,
 ) -> set[str]:
-    params: list[object] = [session_id]
+    params: list[object] = [session_id, source_space]
     exclude_clause = ""
     if exclude_request_id is not None:
         exclude_clause = "AND request_id <> %s"
@@ -233,6 +244,7 @@ def load_feed_session_news_ids(
               returned_news_ids_json
             ) AS returned(news_id)
             WHERE session_id = %s
+              AND source_space = %s
               {exclude_clause}
             """,
             tuple(params),
@@ -244,6 +256,7 @@ def complete_feed_request(
     connection: Any,
     *,
     request_id: str,
+    source_space: NewsSpace = "mind",
     news_ids: list[str],
     next_cursor: str | None,
 ) -> str | None:
@@ -258,10 +271,10 @@ def complete_feed_request(
                 ELSE returned_news_ids_json
               END,
               cursor_token = COALESCE(cursor_token, %s)
-            WHERE request_id = %s
+            WHERE request_id = %s AND source_space = %s
             RETURNING cursor_token
             """,
-            (json_text(news_ids), next_cursor, request_id),
+            (json_text(news_ids), next_cursor, request_id, source_space),
         )
         row = cursor.fetchone()
     if row is None:
@@ -651,9 +664,11 @@ def load_sponsored_attribution(
         )
         row = cursor.fetchone()
     if row is None:
-        raise ValueError(f"unknown sponsored_delivery_id: {delivery_id}")
+        raise InvalidSponsoredAttributionError(f"unknown sponsored_delivery_id: {delivery_id}")
     if int(row["user_id"]) != user_id or str(row["news_id"]) != news_id:
-        raise ValueError("sponsored delivery does not match user_id and news_id")
+        raise InvalidSponsoredAttributionError(
+            "sponsored delivery does not match user_id and news_id"
+        )
     return dict(row)
 
 

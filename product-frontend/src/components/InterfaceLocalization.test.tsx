@@ -17,9 +17,18 @@ vi.mock("../context/AuthContext", () => ({
   }),
 }));
 
+vi.mock("../context/SourceSpaceContext", () => ({
+  useSourceSpace: () => ({
+    sourceSpace: "mind",
+    liveEnabled: true,
+    loading: false,
+    selectSourceSpace: vi.fn(),
+  }),
+}));
+
 vi.mock("../api/client", () => ({
-  listCategories: vi.fn().mockResolvedValue({ items: [] }),
-  listSearchSuggestions: vi.fn().mockResolvedValue({ items: [] }),
+  listCategories: vi.fn().mockResolvedValue({ source_space: "mind", items: [] }),
+  listSearchSuggestions: vi.fn().mockResolvedValue({ source_space: "mind", items: [] }),
 }));
 
 describe("中文界面", () => {

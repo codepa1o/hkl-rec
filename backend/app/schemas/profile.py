@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import Field
 
+from backend.app.news_spaces.types import DEFAULT_NEWS_SPACE, NewsSpace
+
 from .common import ApiModel
 
 
@@ -31,6 +33,7 @@ class VectorSummary(ApiModel):
 
 
 class DebugProfileResponse(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     user_id: int
     cold_start_seed_key: str
     behavior_score: float
@@ -59,6 +62,7 @@ class ProfileTermLayer(ApiModel):
 
 
 class ProfileResponse(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     user_id: int
     profile_version: Literal["v2"] = "v2"
     status: Literal["cold", "learning", "established"]

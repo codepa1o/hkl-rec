@@ -61,9 +61,11 @@ def test_profile_read_loads_v2_for_requested_user(monkeypatch: pytest.MonkeyPatc
         connection_arg: FakeConnection,
         *,
         user_id: int,
+        source_space: str,
         now_ts: int,
         config: Any,
     ) -> ProfileResponse:
+        assert source_space == "mind"
         calls.append((connection_arg, user_id, now_ts))
         return _cold_profile(user_id)
 
@@ -90,14 +92,20 @@ def test_profile_reset_commits_seed_restore_and_returns_fresh_v2(
     monkeypatch.setattr(
         postgres,
         "reset_profile_projections",
-        lambda connection_arg, *, user_id, reset_ts: resets.append(
-            (connection_arg, user_id, reset_ts)
+        lambda connection_arg, *, user_id, source_space, reset_ts: (
+            resets.append((connection_arg, user_id, reset_ts))
+            if source_space == "mind"
+            else pytest.fail("unexpected source space")
         ),
     )
     monkeypatch.setattr(
         postgres,
         "load_profile_v2",
-        lambda connection_arg, *, user_id, now_ts, config: _cold_profile(user_id),
+        lambda connection_arg, *, user_id, source_space, now_ts, config: (
+            _cold_profile(user_id)
+            if source_space == "mind"
+            else pytest.fail("unexpected source space")
+        ),
     )
 
     profile = repository.reset_profile(7004)

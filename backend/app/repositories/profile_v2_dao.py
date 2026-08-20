@@ -6,6 +6,7 @@ from typing import Any, Literal, cast
 
 from backend.app.config import Settings
 from backend.app.errors import ProfileNotInitializedError, ProfileSeedUnavailableError
+from backend.app.news_spaces.types import NewsSpace, validate_article_id_shape
 from backend.app.profiles.signals import (
     ProfileSignalConfig,
     TopicProfileState,
@@ -46,6 +47,7 @@ def fetch_profile_v2_user_state(
     connection: Any,
     *,
     user_id: int,
+    source_space: NewsSpace = "mind",
     for_update: bool = False,
 ) -> dict[str, Any]:
     lock_clause = " FOR UPDATE" if for_update else ""
@@ -54,6 +56,7 @@ def fetch_profile_v2_user_state(
             f"""
             SELECT
               user_id,
+              source_space,
               cold_start_seed_key,
               topic_weights_json,
               recent_clicked_news_json,
@@ -66,10 +69,10 @@ def fetch_profile_v2_user_state(
               profile_reset_before_event_id,
               profile_v2_updated_at
             FROM user_profile
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             {lock_clause}
             """,
-            (user_id,),
+            (user_id, source_space),
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     if row is None:
@@ -103,6 +106,7 @@ def fetch_topic_profile_state(
     *,
     user_id: int,
     topic_id: int,
+    source_space: NewsSpace = "mind",
     for_update: bool = False,
 ) -> TopicProfileState:
     lock_clause = " FOR UPDATE" if for_update else ""
@@ -120,10 +124,10 @@ def fetch_topic_profile_state(
               last_signal_type,
               last_event_ts
             FROM user_topic_profile
-            WHERE user_id = %s AND topic_id = %s
+            WHERE user_id = %s AND topic_id = %s AND source_space = %s
             {lock_clause}
             """,
-            (user_id, topic_id),
+            (user_id, topic_id, source_space),
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     return topic_state_from_row(row)
@@ -135,6 +139,7 @@ def upsert_topic_profile_state(
     user_id: int,
     topic_id: int,
     state: TopicProfileState,
+    source_space: NewsSpace = "mind",
 ) -> None:
     if state.last_event_ts is None:
         raise ValueError("projected topic state requires last_event_ts")
@@ -143,6 +148,7 @@ def upsert_topic_profile_state(
             """
             INSERT INTO user_topic_profile (
               user_id,
+              source_space,
               topic_id,
               short_positive_score,
               short_negative_score,
@@ -155,8 +161,12 @@ def upsert_topic_profile_state(
               last_event_ts,
               updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, topic_id) DO UPDATE SET
+            SELECT
+              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s,
+              CURRENT_TIMESTAMP
+            FROM topic
+            WHERE topic_id = %s AND source_space = %s
+            ON CONFLICT (user_id, source_space, topic_id) DO UPDATE SET
               short_positive_score = EXCLUDED.short_positive_score,
               short_negative_score = EXCLUDED.short_negative_score,
               long_positive_score = EXCLUDED.long_positive_score,
@@ -170,6 +180,7 @@ def upsert_topic_profile_state(
             """,
             (
                 user_id,
+                source_space,
                 topic_id,
                 state.short_positive_score,
                 state.short_negative_score,
@@ -180,8 +191,14 @@ def upsert_topic_profile_state(
                 json_text(dict(state.signal_counts)),
                 state.last_signal_type,
                 state.last_event_ts,
+                topic_id,
+                source_space,
             ),
         )
+        if int(cursor.rowcount) != 1:
+            raise ValueError(
+                f"topic_id={topic_id} does not belong to source_space={source_space!r}"
+            )
 
 
 def increment_profile_v2_evidence(
@@ -189,6 +206,7 @@ def increment_profile_v2_evidence(
     *,
     user_id: int,
     event_ts: int,
+    source_space: NewsSpace = "mind",
 ) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
@@ -201,9 +219,9 @@ def increment_profile_v2_evidence(
                 %s
               ),
               profile_v2_updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             """,
-            (event_ts, user_id),
+            (event_ts, user_id, source_space),
         )
 
 
@@ -211,6 +229,7 @@ def apply_profile_v2_event(
     connection: Any,
     *,
     user_id: int,
+    source_space: NewsSpace = "mind",
     event_type: str,
     event_ts: int,
     topic_strengths: Mapping[int, float],
@@ -219,6 +238,7 @@ def apply_profile_v2_event(
     return apply_profile_v2_event_with_outcome(
         connection,
         user_id=user_id,
+        source_space=source_space,
         event_type=event_type,
         event_ts=event_ts,
         topic_strengths=topic_strengths,
@@ -231,8 +251,14 @@ def profile_event_is_before_reset(
     *,
     user_id: int,
     event_ts: int,
+    source_space: NewsSpace = "mind",
 ) -> bool:
-    user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
+    user_state = fetch_profile_v2_user_state(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+        for_update=True,
+    )
     reset_before = user_state.get("profile_reset_before_ts")
     # Both reset and projection lock this row. A same-second event that gets
     # the lock after reset is causally post-reset and must remain eligible.
@@ -243,6 +269,7 @@ def apply_profile_v2_event_with_outcome(
     connection: Any,
     *,
     user_id: int,
+    source_space: NewsSpace = "mind",
     event_type: str,
     event_ts: int,
     topic_strengths: Mapping[int, float],
@@ -261,7 +288,12 @@ def apply_profile_v2_event_with_outcome(
             late_topic_count=0,
         )
 
-    user_state = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
+    user_state = fetch_profile_v2_user_state(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+        for_update=True,
+    )
     reset_before = user_state.get("profile_reset_before_ts")
     if reset_before is not None and event_ts < int(reset_before):
         return ProfileProjectionOutcome(
@@ -278,6 +310,7 @@ def apply_profile_v2_event_with_outcome(
             connection,
             user_id=user_id,
             topic_id=topic_id,
+            source_space=source_space,
             for_update=True,
         )
         projected = project_topic_signal(
@@ -297,6 +330,7 @@ def apply_profile_v2_event_with_outcome(
             user_id=user_id,
             topic_id=topic_id,
             state=projected,
+            source_space=source_space,
         )
         updated_topics += 1
 
@@ -307,7 +341,12 @@ def apply_profile_v2_event_with_outcome(
             updated_topic_count=0,
             late_topic_count=late_topics,
         )
-    increment_profile_v2_evidence(connection, user_id=user_id, event_ts=event_ts)
+    increment_profile_v2_evidence(
+        connection,
+        user_id=user_id,
+        event_ts=event_ts,
+        source_space=source_space,
+    )
     return ProfileProjectionOutcome(
         updated=True,
         reason=None,
@@ -316,7 +355,12 @@ def apply_profile_v2_event_with_outcome(
     )
 
 
-def load_topic_profile_rows(connection: Any, *, user_id: int) -> list[dict[str, Any]]:
+def load_topic_profile_rows(
+    connection: Any,
+    *,
+    user_id: int,
+    source_space: NewsSpace = "mind",
+) -> list[dict[str, Any]]:
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -333,11 +377,14 @@ def load_topic_profile_rows(connection: Any, *, user_id: int) -> list[dict[str, 
               profile.last_signal_type,
               profile.last_event_ts
             FROM user_topic_profile AS profile
-            JOIN topic ON topic.topic_id = profile.topic_id
+            JOIN topic
+              ON topic.topic_id = profile.topic_id
+             AND topic.source_space = %s
             WHERE profile.user_id = %s
+              AND profile.source_space = %s
             ORDER BY profile.topic_id
             """,
-            (user_id,),
+            (source_space, user_id, source_space),
         )
         return list(cursor.fetchall())
 
@@ -346,11 +393,16 @@ def load_profile_v2_topic_scores(
     connection: Any,
     *,
     user_id: int,
+    source_space: NewsSpace = "mind",
     now_ts: int,
     config: ProfileSignalConfig,
 ) -> dict[int, float]:
     scores: dict[int, float] = {}
-    for row in load_topic_profile_rows(connection, user_id=user_id):
+    for row in load_topic_profile_rows(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+    ):
         state = decayed_topic_state(
             topic_state_from_row(row),
             now_ts=now_ts,
@@ -363,20 +415,26 @@ def load_profile_v2_topic_scores(
     return scores
 
 
-def _recent_news(value: Any) -> list[ProfileRecentClick]:
+def _recent_news(value: Any, source_space: NewsSpace) -> list[ProfileRecentClick]:
     rows = parse_json(value, [])
     result: list[ProfileRecentClick] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
-        raw_id = row.get("news_id", row.get("answer_id"))
+        raw_id = row.get("article_id", row.get("news_id", row.get("answer_id")))
         if raw_id is None:
             continue
         text_id = str(raw_id)
-        if text_id.isdigit():
-            text_id = f"N{text_id}"
-        if not (text_id.startswith("N") and text_id[1:].isdigit()):
-            continue
+        if source_space == "mind":
+            if text_id.isdigit():
+                text_id = f"N{text_id}"
+            if not (text_id.startswith("N") and text_id[1:].isdigit()):
+                continue
+        else:
+            try:
+                validate_article_id_shape(source_space, text_id)
+            except ValueError:
+                continue
         result.append(
             ProfileRecentClick(
                 news_id=text_id,
@@ -435,11 +493,20 @@ def load_profile_v2(
     connection: Any,
     *,
     user_id: int,
+    source_space: NewsSpace = "mind",
     now_ts: int,
     config: ProfileSignalConfig,
 ) -> ProfileResponse:
-    user_state = fetch_profile_v2_user_state(connection, user_id=user_id)
-    rows = load_topic_profile_rows(connection, user_id=user_id)
+    user_state = fetch_profile_v2_user_state(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+    )
+    rows = load_topic_profile_rows(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+    )
     rows_and_states = [
         (
             row,
@@ -455,19 +522,28 @@ def load_profile_v2(
     evidence_count = int(user_state.get("profile_v2_evidence_count") or 0)
     confidence = confidence_from_evidence(evidence_count)
     return ProfileResponse(
+        source_space=source_space,
         user_id=int(user_state["user_id"]),
         status=profile_status(confidence),
         confidence=round(confidence, 6),
         evidence_count=evidence_count,
         short_term=_profile_layer(rows_and_states, layer="short"),
         long_term=_profile_layer(rows_and_states, layer="long"),
-        recent_clicked_news=_recent_news(user_state.get("recent_clicked_news_json")),
+        recent_clicked_news=_recent_news(
+            user_state.get("recent_clicked_news_json"),
+            source_space,
+        ),
         recent_queries=parse_recent_queries(user_state.get("recent_queries_json")),
         last_updated_at=user_state.get("profile_v2_updated_at"),
     )
 
 
-def load_profile_seed(connection: Any, *, seed_key: str) -> dict[str, Any]:
+def load_profile_seed(
+    connection: Any,
+    *,
+    seed_key: str,
+    source_space: NewsSpace = "mind",
+) -> dict[str, Any]:
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -477,9 +553,9 @@ def load_profile_seed(connection: Any, *, seed_key: str) -> dict[str, Any]:
               recent_queries_json,
               behavior_score
             FROM system_profile_seed
-            WHERE seed_key = %s
+            WHERE seed_key = %s AND source_space = %s
             """,
-            (seed_key,),
+            (seed_key, source_space),
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     if row is None:
@@ -492,14 +568,25 @@ def reset_profile_projections(
     *,
     user_id: int,
     reset_ts: int,
+    source_space: NewsSpace = "mind",
 ) -> None:
-    profile = fetch_profile_v2_user_state(connection, user_id=user_id, for_update=True)
+    profile = fetch_profile_v2_user_state(
+        connection,
+        user_id=user_id,
+        source_space=source_space,
+        for_update=True,
+    )
     seed_key = str(profile.get("cold_start_seed_key") or "cold_start_default")
-    seed = load_profile_seed(connection, seed_key=seed_key)
+    seed = load_profile_seed(
+        connection,
+        seed_key=seed_key,
+        source_space=source_space,
+    )
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT MAX(event_id) AS event_id FROM user_event WHERE user_id = %s",
-            (user_id,),
+            "SELECT MAX(event_id) AS event_id FROM user_event "
+            "WHERE user_id = %s AND source_space = %s",
+            (user_id, source_space),
         )
         boundary_row = cast(dict[str, Any] | None, cursor.fetchone())
         reset_before_event_id = (
@@ -522,7 +609,7 @@ def reset_profile_projections(
               profile_reset_before_event_id = %s,
               profile_v2_updated_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             """,
             (
                 json_text(seed.get("topic_weights_json") or []),
@@ -532,9 +619,10 @@ def reset_profile_projections(
                 reset_ts,
                 reset_before_event_id,
                 user_id,
+                source_space,
             ),
         )
         cursor.execute(
-            "DELETE FROM user_topic_profile WHERE user_id = %s",
-            (user_id,),
+            "DELETE FROM user_topic_profile WHERE user_id = %s AND source_space = %s",
+            (user_id, source_space),
         )

@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Query
 
 from backend.app.auth.service import AuthenticatedUser, AuthService
 from backend.app.dependencies import get_feed_service
+from backend.app.news_spaces.types import LiveLanguage, NewsSpace
+from backend.app.observability import NEWS_FEED_REQUESTS
 from backend.app.routers.auth import (
     authorize_user_access,
     get_auth_service_factory,
@@ -54,12 +56,14 @@ def get_feed(
         pattern=r"^[a-z0-9-]+$",
         description="可选的 MIND 一级新闻分类精确值。",
     ),
+    source_space: NewsSpace = Query("mind"),
+    language: LiveLanguage = Query("all"),
     service: FeedService = Depends(get_feed_service),
     current_user: AuthenticatedUser | None = Depends(require_current_user_when_auth_enabled),
     auth_service_factory: Callable[[], AuthService] = Depends(get_auth_service_factory),
 ) -> FeedResponse:
     authorize_user_access(user_id, current_user, auth_service_factory)
-    return service.get_feed(
+    response = service.get_feed(
         user_id=user_id,
         page_size=page_size,
         debug=debug,
@@ -69,4 +73,8 @@ def get_feed(
         cursor=cursor,
         as_of_ts=as_of_ts,
         category=category,
+        source_space=source_space,
+        language=language,
     )
+    NEWS_FEED_REQUESTS.labels(source_space=source_space).inc()
+    return response

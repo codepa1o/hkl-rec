@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +31,8 @@ vi.mock("../api/client", () => ({
 }));
 
 const article = {
+  source_space: "mind" as const,
+  article_id: "N301",
   news_id: "N301",
   title: "A detailed article",
   abstract: "Article abstract",
@@ -77,10 +79,14 @@ const article = {
   ],
 };
 
-function renderPage() {
+function renderPage(path = "/articles/mind/N301") {
   return render(
-    <MemoryRouter initialEntries={["/articles/N301"]}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
+        <Route
+          path="/articles/:sourceSpace/:articleId"
+          element={<ArticleDetailPage />}
+        />
         <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
       </Routes>
     </MemoryRouter>,
@@ -95,6 +101,7 @@ describe("ArticleDetailPage entities", () => {
     vi.mocked(trackEvent).mockResolvedValue({
       ok: true,
       event_type: "detail_view",
+      source_space: "mind",
       profile_updated: false,
       behavior_score: null,
     });
@@ -146,6 +153,7 @@ describe("ArticleDetailPage visible dwell", () => {
     vi.mocked(trackEvent).mockResolvedValue({
       ok: true,
       event_type: "detail_view",
+      source_space: "mind",
       profile_updated: false,
       behavior_score: null,
     });
@@ -163,11 +171,12 @@ describe("ArticleDetailPage visible dwell", () => {
     window.dispatchEvent(new Event("pagehide"));
 
     expect(sendTrackedEventKeepalive).toHaveBeenCalledWith({
-      event_id: "dwell-7004:N301:route-load-1",
+      event_id: "dwell-mind:7004:N301:route-load-1",
       user_id: 7004,
+      source_space: "mind",
       event_type: "dwell",
       surface: "article_detail",
-      news_id: "N301",
+      article_id: "N301",
       dwell_ms: 12_400,
     });
     rendered.unmount();
@@ -197,5 +206,61 @@ describe("ArticleDetailPage visible dwell", () => {
 
     expect(() => window.dispatchEvent(new Event("pagehide"))).not.toThrow();
     await waitFor(() => expect(screen.getByText("A considered headline")).toBeInTheDocument());
+  });
+});
+
+describe("ArticleDetailPage live metadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(newClientId).mockReturnValue("route-load-live");
+    vi.mocked(trackEvent).mockResolvedValue({
+      ok: true,
+      event_type: "detail_view",
+      source_space: "live",
+      profile_updated: false,
+      behavior_score: null,
+    });
+    vi.mocked(getArticleCard).mockResolvedValue({
+      ...article,
+      source_space: "live",
+      article_id: "L0123456789abcdef0123456789abcdef",
+      news_id: null,
+      title: "Live article",
+      publisher: "Reuters",
+      language: "en",
+      image_url: "https://example.com/live.jpg",
+      published_at: "2026-08-18T08:00:00Z",
+      title_entities: [],
+      abstract_entities: [],
+    });
+  });
+
+  it("展示实时元数据并仅记录原文跳转，不刷新画像", async () => {
+    renderPage("/articles/live/L0123456789abcdef0123456789abcdef");
+
+    const original = await screen.findByRole("link", { name: "阅读原文" });
+    expect(original).toHaveAttribute("target", "_blank");
+    expect(original).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(screen.getByText(/Reuters/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Live article" })).toBeInTheDocument();
+
+    const bumpsBeforeOutbound = bumpProfile.mock.calls.length;
+    fireEvent.click(original);
+    await waitFor(() =>
+      expect(trackEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source_space: "live",
+          article_id: "L0123456789abcdef0123456789abcdef",
+          event_type: "outbound_click",
+        }),
+      ),
+    );
+    expect(bumpProfile).toHaveBeenCalledTimes(bumpsBeforeOutbound);
+  });
+
+  it("拒绝来源与文章编号不匹配的路由", () => {
+    renderPage("/articles/live/N301");
+    expect(screen.getByText("文章编号无效。")).toBeInTheDocument();
+    expect(getArticleCard).not.toHaveBeenCalled();
   });
 });

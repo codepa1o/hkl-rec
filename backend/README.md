@@ -31,7 +31,7 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 先执行 Alembic 迁移，再开启画像投影。五个配置项及默认值如下：
 
 ```text
-NEWSREC_PROFILE_V2_ENABLED=0
+NEWSREC_PROFILE_V2_ENABLED=1
 NEWSREC_PROFILE_V2_SHORT_HALF_LIFE_SECONDS=21600
 NEWSREC_PROFILE_V2_LONG_HALF_LIFE_SECONDS=2592000
 NEWSREC_PROFILE_V2_LONG_TERM_FACTOR=0.25
@@ -53,3 +53,28 @@ python scripts/rebuild_profile_v2.py --all
 `PROFILE_SEED_UNAVAILABLE`；用户画像未初始化时返回 `PROFILE_NOT_INITIALIZED`。
 紧急回退只需设置 `NEWSREC_PROFILE_V2_ENABLED=0`：它会停止新投影，并使显式
 `profile_v2` Feed 分组使用原排序；不要通过回退迁移删除画像表或历史事件。
+
+## Live 新闻采集与巡检
+
+Live 新闻使用独立的 `live_news`、`live_news_import`、
+`live_news_source_checkpoint` 与 `live_news_content_job` 表。采集器保存 GDELT GAL 元数据和
+发布者原文链接；正文 Worker 依据 `config/live_news_sources.json` 的逐来源策略异步调用官方
+API、全文 RSS 或白名单 HTML 抽取。域名匹配采用精确主机边界，正文失败不会中断元数据服务。
+
+```bash
+python -m alembic upgrade head
+python scripts/run_live_news_collector.py --once
+python scripts/run_live_news_collector.py --poll-interval-seconds 60
+python scripts/run_live_news_content_worker.py --once
+python scripts/run_live_news_content_worker.py --poll-interval-seconds 5
+python scripts/check_live_news_links.py --limit 100 --timeout-seconds 10
+```
+
+`NEWSREC_LIVE_NEWS_ENABLED` 控制 API/前端展示，
+`NEWSREC_LIVE_NEWS_COLLECTOR_ENABLED` 独立控制采集，
+`NEWSREC_LIVE_CONTENT_WORKER_ENABLED` 独立控制正文补全；仅关闭 Worker 时，已有正文与
+元数据继续服务，等待任务保留在 PostgreSQL。Guardian 正文使用 `NEWSREC_GUARDIAN_API_KEY`，
+公共 `test` key 只用于本地验证。仅关闭采集器时，最后一次成功导入的目录
+仍可服务。`/readyz` 会从持久化 checkpoint 报告采集器新鲜度，但 Live 过期不会让健康的
+MIND API 失去 readiness。Prometheus 暴露采集时间、延迟、接受/拒绝计数、来源空间 Feed、
+事件、画像更新与跨空间拒绝指标。连续三次失败的原文链接会变为 `inactive`，不会被删除。

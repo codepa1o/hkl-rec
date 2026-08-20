@@ -9,7 +9,8 @@ from typing import Any, Literal, cast
 from pydantic import ValidationError
 
 from backend.app.config import Settings, get_settings
-from backend.app.events.outbox import enqueue_outbox_message
+from backend.app.errors import IdempotencyConflictError
+from backend.app.events.outbox import enqueue_outbox_message, outbox_message_exists
 from backend.app.events.publisher import build_event_publisher
 from backend.app.events.schema import (
     DlqEventMessage,
@@ -52,7 +53,14 @@ from backend.app.repositories.sponsored_dao import (
 
 logger = logging.getLogger(__name__)
 
-LOG_ONLY_EVENTS = {"feed_impression", "detail_view", "dwell", "downvote", "share"}
+LOG_ONLY_EVENTS = {
+    "feed_impression",
+    "detail_view",
+    "dwell",
+    "downvote",
+    "share",
+    "outbound_click",
+}
 
 
 class ProfileEventApplier:
@@ -75,12 +83,13 @@ class ProfileEventApplier:
         connection = self._connection_pool.connect()
         try:
             connection.begin()
-            claimed = claim_event_id(connection, event)
+            claimed = claim_event_id(connection, event, source_space=event.source_space)
             if claimed:
                 project_profile = not profile_event_is_before_reset(
                     connection,
                     user_id=event.user_id,
                     event_ts=event.event_ts,
+                    source_space=event.source_space,
                 )
                 if not project_profile and self._settings.profile_v2_enabled:
                     PROFILE_V2_LATE_EVENTS.labels(reason="pre_reset").inc()
@@ -118,12 +127,23 @@ class ProfileEventApplier:
                     raise ValueError(f"unsupported event_type: {event.event_type}")
 
             training = self._training_message(event)
-            if training is not None:
+            training_exists = (
+                training is not None
+                and not claimed
+                and outbox_message_exists(
+                    connection,
+                    event_id=training.example_id,
+                    topic=self._settings.kafka_training_topic,
+                )
+            )
+            if training is not None and not training_exists:
                 enqueue_outbox_message(
                     connection,
                     event_id=training.example_id,
                     topic=self._settings.kafka_training_topic,
-                    message_key=training.partition_key,
+                    message_key=training.publish_partition_key(
+                        self._settings.kafka_source_partition_keys_enabled
+                    ),
                     payload_json=training.model_dump_json(exclude_none=True),
                 )
             connection.commit()
@@ -168,16 +188,23 @@ class ProfileEventApplier:
             query_key=event.query_key,
             event_ts=event.event_ts,
             external_event_id=event.event_id,
+            source_space=event.source_space,
         )
         if not project_profile:
             return
-        profile_row = fetch_profile_row(connection, event.user_id, for_update=True)
+        profile_row = fetch_profile_row(
+            connection,
+            event.user_id,
+            event.source_space,
+            for_update=True,
+        )
         append_recent_query(
             connection=connection,
             profile_row=profile_row,
             query_key=event.query_key,
             event_ts=event.event_ts,
             behavior_delta=self._settings.search_query_behavior_delta,
+            source_space=event.source_space,
         )
 
     def _apply_recommendation_click(
@@ -187,8 +214,8 @@ class ProfileEventApplier:
         *,
         project_profile: bool = True,
     ) -> None:
-        if event.news_id is None:
-            raise ValueError("recommendation_click event requires news_id")
+        if event.article_id is None:
+            raise ValueError("recommendation_click event requires article_id")
         self._apply_news_click(
             connection=connection,
             event=event,
@@ -206,8 +233,8 @@ class ProfileEventApplier:
         *,
         project_profile: bool = True,
     ) -> None:
-        if event.news_id is None:
-            raise ValueError("upvote event requires news_id")
+        if event.article_id is None:
+            raise ValueError("upvote event requires article_id")
         self._apply_news_click(
             connection=connection,
             event=event,
@@ -225,10 +252,15 @@ class ProfileEventApplier:
         *,
         project_profile: bool = True,
     ) -> None:
-        if event.news_id is None or not event.query_key:
-            raise ValueError("search_result_click event requires news_id and query_key")
+        if event.article_id is None or not event.query_key:
+            raise ValueError("search_result_click event requires article_id and query_key")
         profile_row = (
-            fetch_profile_row(connection, event.user_id, for_update=True)
+            fetch_profile_row(
+                connection,
+                event.user_id,
+                event.source_space,
+                for_update=True,
+            )
             if project_profile
             else None
         )
@@ -237,14 +269,20 @@ class ProfileEventApplier:
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                news_id=event.news_id,
+                news_id=event.article_id,
                 for_update=True,
             )
-            if event.sponsored_delivery_id
+            if event.source_space == "mind" and event.sponsored_delivery_id
             else None
         )
-        query_topics = load_query_topics(connection, event.query_key)
-        news_topic_ids = load_news_topic_ids(connection, event.news_id)
+        query_topics = (
+            load_query_topics(connection, event.query_key) if event.source_space == "mind" else []
+        )
+        news_topic_ids = (
+            load_news_topic_ids(connection, event.article_id)
+            if event.source_space == "mind"
+            else []
+        )
         query_topic_ids = {topic.topic_id for topic in query_topics}
         news_topic_set = set(news_topic_ids)
         overlap_topic_ids = query_topic_ids & news_topic_set
@@ -259,7 +297,7 @@ class ProfileEventApplier:
             connection=connection,
             user_id=event.user_id,
             event_type="search_result_click",
-            news_id=event.news_id,
+            news_id=event.article_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=event.surface or "search",
@@ -270,6 +308,8 @@ class ProfileEventApplier:
             campaign_id=event.campaign_id,
             creative_id=event.creative_id,
             dwell_ms=event.dwell_ms,
+            source_space=event.source_space,
+            article_id=event.article_id,
         )
         if profile_row is not None:
             confirm_recent_query(
@@ -277,6 +317,7 @@ class ProfileEventApplier:
                 profile_row,
                 query_key=event.query_key,
                 event_ts=event.event_ts,
+                source_space=event.source_space,
             )
         if sponsored_attribution is not None:
             record_sponsored_click(
@@ -288,11 +329,12 @@ class ProfileEventApplier:
             apply_click_profile_update(
                 connection=connection,
                 profile_row=profile_row,
-                news_id=event.news_id,
+                news_id=event.article_id,
                 event_ts=event.event_ts,
                 topic_deltas=topic_deltas,
                 behavior_delta=self._settings.search_result_click_behavior_delta,
                 decay_factor=self._settings.profile_topic_decay,
+                source_space=event.source_space,
             )
             self._project_profile_v2(
                 connection,
@@ -316,10 +358,15 @@ class ProfileEventApplier:
         topic_delta: float,
         project_profile: bool,
     ) -> None:
-        if event.news_id is None:
-            raise ValueError(f"{event_type} event requires news_id")
+        if event.article_id is None:
+            raise ValueError(f"{event_type} event requires article_id")
         profile_row = (
-            fetch_profile_row(connection, event.user_id, for_update=True)
+            fetch_profile_row(
+                connection,
+                event.user_id,
+                event.source_space,
+                for_update=True,
+            )
             if project_profile
             else None
         )
@@ -328,19 +375,23 @@ class ProfileEventApplier:
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                news_id=event.news_id,
+                news_id=event.article_id,
                 for_update=True,
             )
-            if event.sponsored_delivery_id
+            if event.source_space == "mind" and event.sponsored_delivery_id
             else None
         )
-        news_topic_ids = load_news_topic_ids(connection, event.news_id)
+        news_topic_ids = (
+            load_news_topic_ids(connection, event.article_id)
+            if event.source_space == "mind"
+            else []
+        )
         topic_deltas = {topic_id: topic_delta for topic_id in news_topic_ids}
         record_click_event(
             connection=connection,
             user_id=event.user_id,
             event_type=event_type,
-            news_id=event.news_id,
+            news_id=event.article_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=surface,
@@ -351,6 +402,8 @@ class ProfileEventApplier:
             campaign_id=event.campaign_id,
             creative_id=event.creative_id,
             dwell_ms=event.dwell_ms,
+            source_space=event.source_space,
+            article_id=event.article_id,
         )
         if sponsored_attribution is not None:
             record_sponsored_click(
@@ -362,11 +415,12 @@ class ProfileEventApplier:
             apply_click_profile_update(
                 connection=connection,
                 profile_row=profile_row,
-                news_id=event.news_id,
+                news_id=event.article_id,
                 event_ts=event.event_ts,
                 topic_deltas=topic_deltas,
                 behavior_delta=behavior_delta,
                 decay_factor=self._settings.profile_topic_decay,
+                source_space=event.source_space,
             )
             self._project_profile_v2(
                 connection,
@@ -390,10 +444,12 @@ class ProfileEventApplier:
                 connection,
                 delivery_id=event.sponsored_delivery_id,
                 user_id=event.user_id,
-                news_id=event.news_id,
+                news_id=event.article_id,
                 for_update=True,
             )
-            if event.sponsored_delivery_id and event.news_id is not None
+            if event.source_space == "mind"
+            and event.sponsored_delivery_id
+            and event.article_id is not None
             else None
         )
         inserted = record_log_only_event(
@@ -401,7 +457,7 @@ class ProfileEventApplier:
             user_id=event.user_id,
             event_type=event.event_type,
             surface=event.surface or "home_feed",
-            news_id=event.news_id,
+            news_id=event.article_id,
             query_key=event.query_key,
             request_id=event.request_id,
             event_ts=event.event_ts,
@@ -411,6 +467,8 @@ class ProfileEventApplier:
             campaign_id=event.campaign_id,
             creative_id=event.creative_id,
             dwell_ms=event.dwell_ms,
+            source_space=event.source_space,
+            article_id=event.article_id,
         )
         if inserted and event.event_type == "feed_impression" and sponsored_attribution is not None:
             confirm_sponsored_impression(
@@ -421,10 +479,14 @@ class ProfileEventApplier:
         if (
             inserted
             and project_profile
-            and event.news_id is not None
+            and event.article_id is not None
             and event.event_type in {"dwell", "downvote"}
         ):
-            news_topic_ids = load_news_topic_ids(connection, event.news_id)
+            news_topic_ids = (
+                load_news_topic_ids(connection, event.article_id)
+                if event.source_space == "mind"
+                else []
+            )
             self._project_profile_v2(
                 connection,
                 event,
@@ -448,6 +510,7 @@ class ProfileEventApplier:
             outcome = apply_profile_v2_event_with_outcome(
                 connection,
                 user_id=event.user_id,
+                source_space=event.source_space,
                 event_type=event.event_type,
                 event_ts=event.event_ts,
                 topic_strengths=topic_strengths,
@@ -471,12 +534,13 @@ class ProfileEventApplier:
             "downvote": 0.0,
             "feed_impression": None,
         }
-        if event.event_type not in label_by_type or event.news_id is None:
+        if event.event_type not in label_by_type or event.article_id is None:
             return None
         return TrainingInteractionMessage(
             example_id=event.event_id,
             user_id=event.user_id,
-            news_id=event.news_id,
+            source_space=event.source_space,
+            article_id=event.article_id,
             query_key=event.query_key,
             request_id=event.request_id,
             surface=event.surface,
@@ -573,19 +637,45 @@ def run_profile_consumer(
 
             raw_payload = ""
             raw_payload_encoding: Literal["utf-8", "base64"] = "utf-8"
+            try:
+                raw_value = message.value()
+                if raw_value is None:
+                    raise ValueError("Kafka tombstone payload is not a valid user event")
+                try:
+                    raw_payload = raw_value.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raw_payload = base64.b64encode(raw_value).decode("ascii")
+                    raw_payload_encoding = "base64"
+                    raise ValueError("Kafka payload is not valid UTF-8") from exc
+                event = UserEventMessage.model_validate_json(raw_payload)
+            except (ValidationError, ValueError, TypeError) as exc:
+                publisher.publish_dlq_event(
+                    DlqEventMessage(
+                        original_topic=message.topic(),
+                        original_partition=message.partition(),
+                        original_offset=message.offset(),
+                        original_payload=raw_payload,
+                        original_payload_encoding=raw_payload_encoding,
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                )
+                publisher.flush()
+                CONSUMER_EVENTS.labels(
+                    outcome="dlq",
+                    event_type="invalid",
+                ).inc()
+                consumer.commit(message=message, asynchronous=False)
+                applier.update_heartbeat(
+                    made_progress=True,
+                    lag_messages=current_lag,
+                )
+                processed_messages += 1
+                continue
+
             retry_count = 0
             while True:
                 try:
-                    raw_value = message.value()
-                    if raw_value is None:
-                        raise ValueError("Kafka tombstone payload is not a valid user event")
-                    try:
-                        raw_payload = raw_value.decode("utf-8")
-                    except UnicodeDecodeError as exc:
-                        raw_payload = base64.b64encode(raw_value).decode("ascii")
-                        raw_payload_encoding = "base64"
-                        raise ValueError("Kafka payload is not valid UTF-8") from exc
-                    event = UserEventMessage.model_validate_json(raw_payload)
                     applied = applier.apply_event(event)
                     CONSUMER_EVENTS.labels(
                         outcome="applied" if applied else "duplicate",
@@ -597,7 +687,7 @@ def run_profile_consumer(
                         lag_messages=current_lag,
                     )
                     break
-                except (ValidationError, ValueError) as exc:
+                except IdempotencyConflictError as exc:
                     publisher.publish_dlq_event(
                         DlqEventMessage(
                             original_topic=message.topic(),
@@ -612,7 +702,7 @@ def run_profile_consumer(
                     publisher.flush()
                     CONSUMER_EVENTS.labels(
                         outcome="dlq",
-                        event_type="invalid",
+                        event_type=event.event_type,
                     ).inc()
                     consumer.commit(message=message, asynchronous=False)
                     applier.update_heartbeat(

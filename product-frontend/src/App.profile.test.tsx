@@ -12,7 +12,16 @@ vi.mock("./context/ThemeContext", () => ({
 }));
 vi.mock("./context/PersonaContext", () => ({
   PersonaProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  usePersona: () => ({ refreshTick: 0, bumpProfile: vi.fn() }),
+  usePersona: () => ({
+    selectedPersona: {
+      user_id: 7004,
+      display_name: "Reader",
+      behavior_score: 0,
+      top_topics: [],
+    },
+    refreshTick: 0,
+    bumpProfile: vi.fn(),
+  }),
 }));
 vi.mock("./components/ProtectedRoute", () => ({
   default: ({ children }: { children: ReactNode }) => <>{children}</>,

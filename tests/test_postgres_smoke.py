@@ -297,7 +297,6 @@ def test_concurrent_duplicate_click_is_one_idempotent_update(
                     "event_type": "recommendation_click",
                     "surface": "feed",
                     "news_id": news_id,
-                    "request_id": "duplicate-click-request",
                 },
             )
         return response.status_code

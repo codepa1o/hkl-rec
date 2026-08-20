@@ -93,7 +93,6 @@ def test_kafka_async_ack_requires_durable_raw_outbox(postgres_client, postgres_d
             event_type="recommendation_click",
             surface="feed",
             news_id=news_id,
-            request_id="async-outbox-request",
         )
     )
     assert response.ok is True
@@ -183,6 +182,8 @@ def test_duplicate_consumer_event_backfills_one_training_outbox(
         event_id=f"consumer-outbox-{time.time_ns()}",
         event_type="feed_impression",
         user_id=postgres_demo_user,
+        source_space="mind",
+        article_id=news_id,
         news_id=news_id,
         request_id="consumer-outbox-request",
         surface="feed",
@@ -211,6 +212,54 @@ def test_duplicate_consumer_event_backfills_one_training_outbox(
         connection.close()
 
 
+def test_outbox_retry_preserves_stored_key_across_partition_rollout(
+    postgres_connection,
+) -> None:
+    connection = postgres_connection
+    connection.rollback()
+    event_id = f"key-rollout-{time.time_ns()}"
+    topic = f"newsrec.test.raw.key-rollout-{time.time_ns()}"
+    payload = '{"event_id":"evt-key-rollout","user_id":7}'
+    stable_fingerprint = "a" * 64
+    try:
+        assert enqueue_outbox_message(
+            connection,
+            event_id=event_id,
+            topic=topic,
+            message_key="7",
+            payload_json=payload,
+            payload_fingerprint=stable_fingerprint,
+        )
+        assert not enqueue_outbox_message(
+            connection,
+            event_id=event_id,
+            topic=topic,
+            message_key="mind:7",
+            payload_json=payload,
+            payload_fingerprint=stable_fingerprint,
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) AS row_count, MIN(message_key) AS message_key "
+                "FROM event_outbox WHERE event_id = %s AND topic = %s",
+                (event_id, topic),
+            )
+            stored = cursor.fetchone()
+        assert stored == {"row_count": 1, "message_key": "7"}
+
+        with pytest.raises(IdempotencyConflictError):
+            enqueue_outbox_message(
+                connection,
+                event_id=event_id,
+                topic=topic,
+                message_key="mind:7",
+                payload_json='{"event_id":"evt-key-rollout","user_id":8}',
+                payload_fingerprint="b" * 64,
+            )
+    finally:
+        connection.rollback()
+
+
 def test_consumer_persists_dwell_duration(postgres_client, postgres_demo_user):
     settings = _settings("kafka_async")
     news_id = _first_news_id(postgres_client, postgres_demo_user)
@@ -218,6 +267,8 @@ def test_consumer_persists_dwell_duration(postgres_client, postgres_demo_user):
         event_id=f"consumer-dwell-{time.time_ns()}",
         event_type="dwell",
         user_id=postgres_demo_user,
+        source_space="mind",
+        article_id=news_id,
         news_id=news_id,
         request_id="consumer-dwell-request",
         surface="feed",

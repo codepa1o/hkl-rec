@@ -61,7 +61,7 @@ def enqueue_outbox_message(
             return True
         cursor.execute(
             """
-            SELECT message_key, payload_fingerprint
+            SELECT payload_fingerprint
             FROM event_outbox
             WHERE event_id = %s AND topic = %s
             """,
@@ -70,14 +70,20 @@ def enqueue_outbox_message(
         existing = cursor.fetchone()
     if existing is None:
         raise RuntimeError(f"outbox row disappeared: {event_id} / {topic}")
-    if (
-        str(existing["message_key"]) != message_key
-        or str(existing["payload_fingerprint"]) != fingerprint
-    ):
+    if str(existing["payload_fingerprint"]) != fingerprint:
         raise IdempotencyConflictError(
             f"outbox event_id reused with conflicting payload: {event_id}"
         )
     return False
+
+
+def outbox_message_exists(connection: Any, *, event_id: str, topic: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 AS present FROM event_outbox WHERE event_id = %s AND topic = %s",
+            (event_id, topic),
+        )
+        return cursor.fetchone() is not None
 
 
 def recover_stale_claims(connection: Any, stale_after_seconds: int) -> int:

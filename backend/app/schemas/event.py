@@ -1,38 +1,67 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field, model_validator
 
+from backend.app.news_spaces.types import (
+    DEFAULT_NEWS_SPACE,
+    NewsSpace,
+    validate_article_id_shape,
+)
+
 from .common import ApiModel
+from .news_space import normalize_article_identity
 
 
 class RecommendationClickRequest(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
+    article_id: str
+    news_id: str | None = Field(default=None, description="Deprecated MIND compatibility alias")
     event_id: str | None = None
     user_id: int
-    news_id: str = Field(pattern=r"^N[0-9]+$")
     request_id: str | None = None
     sponsored_delivery_id: str | None = None
     debug: bool = False
     replay_event_ts: int | None = Field(None, ge=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_article_identity(cls, value: Any) -> Any:
+        return normalize_article_identity(value)
+
     @model_validator(mode="after")
     def validate_replay_event_ts(self) -> RecommendationClickRequest:
+        self.article_id = validate_article_id_shape(self.source_space, self.article_id)
+        if self.source_space == "live" and self.sponsored_delivery_id is not None:
+            raise ValueError("Sponsored identity is only supported for source_space 'mind'")
         if self.replay_event_ts is not None and not self.debug:
             raise ValueError("replay_event_ts requires debug=true")
         return self
 
 
 class SearchResultClickRequest(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
+    article_id: str
+    news_id: str | None = Field(default=None, description="Deprecated MIND compatibility alias")
     event_id: str | None = None
     user_id: int
-    news_id: str = Field(pattern=r"^N[0-9]+$")
     query_key: str
     request_id: str | None = None
     sponsored_delivery_id: str | None = None
     debug: bool = False
     replay_event_ts: int | None = Field(None, ge=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_article_identity(cls, value: Any) -> Any:
+        return normalize_article_identity(value)
+
     @model_validator(mode="after")
     def validate_replay_event_ts(self) -> SearchResultClickRequest:
+        self.article_id = validate_article_id_shape(self.source_space, self.article_id)
+        if self.source_space == "live" and self.sponsored_delivery_id is not None:
+            raise ValueError("Sponsored identity is only supported for source_space 'mind'")
         if self.replay_event_ts is not None and not self.debug:
             raise ValueError("replay_event_ts requires debug=true")
         return self
@@ -78,4 +107,5 @@ class SearchResultClickDebug(ApiModel):
 class EventAckResponse(ApiModel):
     ok: bool
     event_type: str
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     debug: RecommendationClickDebug | SearchResultClickDebug | None = None

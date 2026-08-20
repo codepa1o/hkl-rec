@@ -9,6 +9,9 @@ import type {
   PersonaListResponse,
   ProfileResponse,
   LoginInput,
+  LiveLanguage,
+  NewsSpace,
+  NewsSpaceListResponse,
   RegisterInput,
   SearchResponse,
   SuggestionListResponse,
@@ -96,16 +99,29 @@ export function logout(): Promise<void> {
   return request<void>("/auth/logout", { method: "POST" });
 }
 
-export function listPersonas(limit = 10): Promise<PersonaListResponse> {
-  return request<PersonaListResponse>("/personas", { params: { limit } });
+export function listNewsSpaces(): Promise<NewsSpaceListResponse> {
+  return request<NewsSpaceListResponse>("/news-spaces");
 }
 
-export function listCategories(): Promise<CategoryListResponse> {
-  return request<CategoryListResponse>("/categories");
+export function listPersonas(limit = 10, sourceSpace: NewsSpace = "mind"): Promise<PersonaListResponse> {
+  return request<PersonaListResponse>("/personas", {
+    params: { limit, source_space: sourceSpace },
+  });
 }
 
-export function listSearchSuggestions(limit = 12): Promise<SuggestionListResponse> {
-  return request<SuggestionListResponse>("/search/suggestions", { params: { limit } });
+export function listCategories(sourceSpace: NewsSpace = "mind"): Promise<CategoryListResponse> {
+  return request<CategoryListResponse>("/categories", {
+    params: { source_space: sourceSpace },
+  });
+}
+
+export function listSearchSuggestions(
+  limit = 12,
+  sourceSpace: NewsSpace = "mind",
+): Promise<SuggestionListResponse> {
+  return request<SuggestionListResponse>("/search/suggestions", {
+    params: { limit, source_space: sourceSpace },
+  });
 }
 
 export function getFeed(
@@ -115,6 +131,8 @@ export function getFeed(
   requestId?: string,
   cursor?: string,
   category?: string,
+  sourceSpace: NewsSpace = "mind",
+  language: LiveLanguage = "all",
 ): Promise<FeedResponse> {
   return request<FeedResponse>("/feed", {
     params: {
@@ -124,6 +142,8 @@ export function getFeed(
       request_id: requestId,
       cursor,
       category,
+      source_space: sourceSpace,
+      language,
     },
   });
 }
@@ -138,6 +158,7 @@ export function postSearch(
   input: SearchInput,
   pageSize = 10,
   eventId?: string,
+  sourceSpace: NewsSpace = "mind",
 ): Promise<SearchResponse> {
   return request<SearchResponse>("/search", {
     method: "POST",
@@ -147,24 +168,38 @@ export function postSearch(
       query_text: input.queryText,
       query_key: input.queryKey,
       page_size: pageSize,
+      source_space: sourceSpace,
     }),
   });
 }
 
-export function getArticleCard(newsId: string): Promise<ArticleCardResponse> {
-  return request<ArticleCardResponse>(`/articles/${newsId}`);
+export function getArticleCard(
+  articleId: string,
+  sourceSpace: NewsSpace = "mind",
+): Promise<ArticleCardResponse> {
+  return request<ArticleCardResponse>(`/articles/${sourceSpace}/${articleId}`);
 }
 
-export function getDebugProfile(userId: number): Promise<DebugProfileResponse> {
-  return request<DebugProfileResponse>("/debug/profile", { params: { user_id: userId } });
+export function getDebugProfile(
+  userId: number,
+  sourceSpace: NewsSpace = "mind",
+): Promise<DebugProfileResponse> {
+  return request<DebugProfileResponse>("/debug/profile", {
+    params: { user_id: userId, source_space: sourceSpace },
+  });
 }
 
-export function getProfile(): Promise<ProfileResponse> {
-  return request<ProfileResponse>("/profile");
+export function getProfile(sourceSpace: NewsSpace, userId: number): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile", {
+    params: { source_space: sourceSpace, user_id: userId },
+  });
 }
 
-export function resetProfile(): Promise<ProfileResponse> {
-  return request<ProfileResponse>("/profile/reset", { method: "POST" });
+export function resetProfile(sourceSpace: NewsSpace, userId: number): Promise<ProfileResponse> {
+  return request<ProfileResponse>("/profile/reset", {
+    method: "POST",
+    body: JSON.stringify({ source_space: sourceSpace, user_id: userId }),
+  });
 }
 
 export function trackEvent(payload: EventTrackRequest): Promise<EventTrackResponse> {

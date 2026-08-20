@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.app.config import Settings
 from backend.app.errors import RepositoryNotReadyError
+from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.repositories.base import RuntimeRepository
 from backend.app.schemas.article import ArticleCardResponse
 from backend.app.schemas.category import CategoryListResponse
@@ -38,6 +39,8 @@ class UnwiredRuntimeRepository(RuntimeRepository):
         cursor: str | None = None,
         as_of_ts: int | None = None,
         category: str | None = None,
+        source_space: NewsSpace = "mind",
+        language: LiveLanguage = "all",
     ) -> FeedResponse:
         raise RepositoryNotReadyError("GET /feed")
 
@@ -50,26 +53,30 @@ class UnwiredRuntimeRepository(RuntimeRepository):
     def record_search_result_click(self, payload: SearchResultClickRequest) -> EventAckResponse:
         raise RepositoryNotReadyError("POST /event/search_result_click")
 
-    def get_debug_profile(self, user_id: int) -> DebugProfileResponse:
+    def get_debug_profile(
+        self, user_id: int, source_space: NewsSpace = "mind"
+    ) -> DebugProfileResponse:
         raise RepositoryNotReadyError("GET /debug/profile")
 
-    def get_profile(self, user_id: int) -> ProfileResponse:
+    def get_profile(self, user_id: int, source_space: NewsSpace = "mind") -> ProfileResponse:
         raise RepositoryNotReadyError("GET /profile")
 
-    def reset_profile(self, user_id: int) -> ProfileResponse:
+    def reset_profile(self, user_id: int, source_space: NewsSpace = "mind") -> ProfileResponse:
         raise RepositoryNotReadyError("POST /profile/reset")
 
-    def list_personas(self, limit: int) -> PersonaListResponse:
+    def list_personas(self, limit: int, source_space: NewsSpace = "mind") -> PersonaListResponse:
         raise RepositoryNotReadyError("GET /personas")
 
-    def list_categories(self) -> CategoryListResponse:
+    def list_categories(self, source_space: NewsSpace = "mind") -> CategoryListResponse:
         raise RepositoryNotReadyError("GET /categories")
 
-    def list_search_suggestions(self, limit: int) -> SuggestionListResponse:
+    def list_search_suggestions(
+        self, limit: int, source_space: NewsSpace = "mind"
+    ) -> SuggestionListResponse:
         raise RepositoryNotReadyError("GET /search/suggestions")
 
-    def get_article_card(self, news_id: str) -> ArticleCardResponse:
-        raise RepositoryNotReadyError("GET /articles/{news_id}")
+    def get_article_card(self, source_space: NewsSpace, article_id: str) -> ArticleCardResponse:
+        raise RepositoryNotReadyError(f"GET /articles/{source_space}/{article_id}")
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
         raise RepositoryNotReadyError("POST /event/track")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from backend.app.news_spaces.types import NewsSpace
 from backend.app.repositories._utils import (
     parse_recent_clicks,
     parse_recent_queries,
@@ -27,15 +28,40 @@ def attach_recent_click_titles(
 ) -> list[ProfileRecentClick]:
     return [
         click.model_copy(
-            update={"title": str(news_rows.get(click.news_id, {}).get("title") or click.news_id)}
+            update={
+                "title": str(
+                    news_rows.get(click.news_id, {}).get("title")
+                    or click.title
+                    or "新闻标题暂不可用"
+                )
+            }
         )
         for click in recent_clicks
     ]
 
 
+def enrich_recent_click_titles(
+    connection: Any,
+    recent_clicks: list[ProfileRecentClick],
+    source_space: NewsSpace,
+) -> list[ProfileRecentClick]:
+    article_ids = [click.news_id for click in recent_clicks]
+    if not article_ids:
+        return []
+    if source_space == "mind":
+        query = "SELECT news_id AS article_id, title FROM mind_news WHERE news_id = ANY(%s)"
+    else:
+        query = "SELECT article_id, title FROM live_news WHERE article_id = ANY(%s)"
+    with connection.cursor() as cursor:
+        cursor.execute(query, (article_ids,))
+        news_rows = {str(row["article_id"]): dict(row) for row in cursor.fetchall()}
+    return attach_recent_click_titles(recent_clicks, news_rows)
+
+
 def fetch_profile_row(
     connection: Any,
     user_id: int,
+    source_space: NewsSpace = "mind",
     *,
     for_update: bool = False,
 ) -> dict[str, Any]:
@@ -45,21 +71,71 @@ def fetch_profile_row(
             f"""
             SELECT
               user_id,
+              source_space,
               cold_start_seed_key,
               topic_weights_json,
               recent_clicked_news_json,
               recent_queries_json,
-              behavior_score
+              behavior_score,
+              user_vector_json
             FROM user_profile
-            WHERE user_id = %s
+            WHERE user_id = %s AND source_space = %s
             {lock_clause}
             """,
-            (user_id,),
+            (user_id, source_space),
         )
         row = cast(dict[str, Any] | None, cursor.fetchone())
     if row is None:
-        raise LookupError(f"user_profile row not found for user_id={user_id}")
+        raise LookupError(
+            f"user_profile row not found for user_id={user_id}, source_space={source_space!r}"
+        )
     return row
+
+
+def ensure_profile_row(
+    connection: Any,
+    user_id: int,
+    source_space: NewsSpace,
+) -> dict[str, Any]:
+    seed_key = "live_cold_start_default" if source_space == "live" else "cold_start_default"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO user_profile (
+              user_id,
+              source_space,
+              cold_start_seed_key,
+              topic_weights_json,
+              recent_clicked_news_json,
+              recent_queries_json,
+              behavior_score,
+              user_vector_json,
+              notes
+            )
+            SELECT
+              %s,
+              %s,
+              seed_key,
+              CASE WHEN %s = 'live' THEN '[]'::jsonb ELSE topic_weights_json END,
+              '[]'::jsonb,
+              '[]'::jsonb,
+              0,
+              NULL,
+              %s
+            FROM system_profile_seed
+            WHERE seed_key = %s AND source_space = %s
+            ON CONFLICT (user_id, source_space) DO NOTHING
+            """,
+            (
+                user_id,
+                source_space,
+                source_space,
+                f"{source_space} cold-start profile",
+                seed_key,
+                source_space,
+            ),
+        )
+    return fetch_profile_row(connection, user_id, source_space)
 
 
 def profile_from_row(row: dict[str, Any]) -> DebugProfileResponse:
@@ -67,6 +143,7 @@ def profile_from_row(row: dict[str, Any]) -> DebugProfileResponse:
     recent_clicks = parse_recent_clicks(row.get("recent_clicked_news_json"))
     recent_queries = parse_recent_queries(row.get("recent_queries_json"))
     return DebugProfileResponse(
+        source_space=cast(NewsSpace, str(row.get("source_space") or "mind")),
         user_id=int(row["user_id"]),
         cold_start_seed_key=row.get("cold_start_seed_key") or "cold_start_default",
         behavior_score=float(row.get("behavior_score") or 0.0),
@@ -84,15 +161,16 @@ def load_default_seed_topic_weights(
     connection: Any,
     *,
     seed_key: str,
+    source_space: NewsSpace = "mind",
 ) -> dict[int, float]:
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT topic_weights_json
             FROM system_profile_seed
-            WHERE seed_key = %s
+            WHERE seed_key = %s AND source_space = %s
             """,
-            (seed_key,),
+            (seed_key, source_space),
         )
         row = cursor.fetchone()
     if row is None:
@@ -108,6 +186,7 @@ def load_recent_query_topic_scores(
     connection: Any,
     recent_queries: list[ProfileRecentQuery],
     *,
+    source_space: NewsSpace = "mind",
     now_ts: int,
     config: SearchSignalConfig,
     confirmed_only: bool = False,
@@ -120,12 +199,15 @@ def load_recent_query_topic_scores(
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
-            SELECT query_key, topic_id, score
+            SELECT query_topic_map.query_key, query_topic_map.topic_id, query_topic_map.score
             FROM query_topic_map
-            WHERE query_key IN ({ph})
-            ORDER BY query_key, match_rank ASC
+            JOIN topic ON topic.topic_id = query_topic_map.topic_id
+            WHERE query_topic_map.query_key IN ({ph})
+              AND query_topic_map.source_space = %s
+              AND topic.source_space = %s
+            ORDER BY query_topic_map.query_key, query_topic_map.match_rank ASC
             """,
-            tuple(query_keys),
+            (*query_keys, source_space, source_space),
         )
         rows = cursor.fetchall()
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { listSearchSuggestions } from "../api/client";
 import type { SuggestionItem } from "../api/types";
+import { useSourceSpace } from "../context/SourceSpaceContext";
 import { localizeCategoryName } from "../localization";
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function SearchBox({ initialQuery }: Props) {
+  const { sourceSpace } = useSourceSpace();
   const [query, setQuery] = useState(initialQuery ?? "");
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -23,6 +25,12 @@ export default function SearchBox({ initialQuery }: Props) {
   useEffect(() => {
     setQuery(initialQuery ?? "");
   }, [initialQuery]);
+
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    setSuggestions([]);
+    setOpen(false);
+  }, [sourceSpace]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -39,7 +47,8 @@ export default function SearchBox({ initialQuery }: Props) {
       setSuggestions([]);
       return;
     }
-    listSearchSuggestions(8).then((res) => {
+    listSearchSuggestions(8, sourceSpace).then((res) => {
+      if (res.source_space !== sourceSpace) return;
       const filtered = res.items.filter(
         (s) =>
           s.label.toLowerCase().includes(q.toLowerCase()) ||
@@ -47,7 +56,7 @@ export default function SearchBox({ initialQuery }: Props) {
       );
       setSuggestions(filtered.slice(0, 8));
     });
-  }, []);
+  }, [sourceSpace]);
 
   const handleChange = (value: string) => {
     setQuery(value);

@@ -66,7 +66,6 @@ def test_openapi_exposes_only_article_product_fields(unwired_client):
         "question_title",
         "answer_summary",
         "recent_clicked_answers",
-        "article_id",
         "recent_clicked_articles",
     }
     for schema in document["components"]["schemas"].values():

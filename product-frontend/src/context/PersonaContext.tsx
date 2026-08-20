@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { listPersonas } from "../api/client";
 import type { PersonaCard } from "../api/types";
 import { useAuth } from "./AuthContext";
+import { useSourceSpace } from "./SourceSpaceContext";
 
 interface PersonaContextValue {
   personas: PersonaCard[];
@@ -18,6 +19,7 @@ const PersonaContext = createContext<PersonaContextValue | null>(null);
 
 export function PersonaProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const { sourceSpace } = useSourceSpace();
   const [personas, setPersonas] = useState<PersonaCard[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,7 +29,7 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    listPersonas(10)
+    listPersonas(10, sourceSpace)
       .then((res) => {
         if (cancelled) return;
         const accountPersona: PersonaCard | null = user
@@ -56,7 +58,7 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, sourceSpace]);
 
   const selectPersona = useCallback((userId: number) => {
     setSelectedId(userId);

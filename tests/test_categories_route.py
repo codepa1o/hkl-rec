@@ -19,9 +19,10 @@ def test_categories_returns_raw_keys_and_news_counts(unwired_client) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
+        "source_space": "mind",
         "items": [
             {"key": "news", "news_count": 20039},
             {"key": "sports", "news_count": 19368},
-        ]
+        ],
     }
-    service.list_categories.assert_called_once_with()
+    service.list_categories.assert_called_once_with(source_space="mind")

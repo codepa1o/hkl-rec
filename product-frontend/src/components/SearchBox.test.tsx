@@ -4,6 +4,12 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import SearchBox from "./SearchBox";
 import { listSearchSuggestions } from "../api/client";
 
+const sourceState = { sourceSpace: "mind" as "mind" | "live" };
+
+vi.mock("../context/SourceSpaceContext", () => ({
+  useSourceSpace: () => sourceState,
+}));
+
 vi.mock("../api/client", () => ({
   listSearchSuggestions: vi.fn(),
 }));
@@ -24,7 +30,22 @@ function renderSearchBox(initialEntry = "/", initialQuery = "") {
 
 describe("搜索框操作区", () => {
   beforeEach(() => {
-    vi.mocked(listSearchSuggestions).mockResolvedValue({ items: [] });
+    sourceState.sourceSpace = "mind";
+    vi.mocked(listSearchSuggestions).mockResolvedValue({
+      source_space: "mind",
+      items: [],
+    });
+  });
+
+  it("按当前新闻空间请求搜索建议", async () => {
+    sourceState.sourceSpace = "live";
+    renderSearchBox();
+    fireEvent.change(screen.getByPlaceholderText("搜索新闻"), {
+      target: { value: "climate" },
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    expect(listSearchSuggestions).toHaveBeenCalledWith(8, "live");
   });
 
   it("空内容时隐藏清空按钮并禁用搜索按钮", () => {

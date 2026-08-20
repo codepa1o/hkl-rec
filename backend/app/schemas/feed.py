@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
+
+from backend.app.news_spaces.types import DEFAULT_NEWS_SPACE, NewsSpace
 
 from .common import ApiModel, TopicCard
+from .news_space import CanonicalArticleModel
 from .profile import ProfileTopicWeight
 
 FeedExperimentArm = Literal[
@@ -40,8 +44,7 @@ class SponsoredFeedMetadata(ApiModel):
     label: str = "Sponsored"
 
 
-class FeedItem(ApiModel):
-    news_id: str = Field(pattern=r"^N[0-9]+$")
+class FeedItem(CanonicalArticleModel):
     title: str
     abstract: str
     url: str
@@ -55,6 +58,11 @@ class FeedItem(ApiModel):
     is_fallback: bool
     content_type: Literal["organic", "sponsored"] = "organic"
     sponsored: SponsoredFeedMetadata | None = None
+    image_url: str | None = None
+    publisher: str | None = None
+    language: Literal["zh", "en"] | None = None
+    published_at: datetime | None = None
+    discovered_at: datetime | None = None
 
 
 class FeedProfileSummary(ApiModel):
@@ -102,9 +110,16 @@ class FeedDebugPayload(ApiModel):
 
 
 class FeedResponse(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
     user_id: int
     request_id: str
     items: list[FeedItem]
     next_cursor: str | None = None
     has_more: bool = False
     debug: FeedDebugPayload | None = None
+
+    @model_validator(mode="after")
+    def require_matching_item_source_space(self) -> FeedResponse:
+        if any(item.source_space != self.source_space for item in self.items):
+            raise ValueError("items must match response source_space")
+        return self

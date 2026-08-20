@@ -39,6 +39,7 @@ from backend.app.routers.event import router as event_router
 from backend.app.routers.event_track import router as event_track_router
 from backend.app.routers.feed import router as feed_router
 from backend.app.routers.health import router as health_router
+from backend.app.routers.news_spaces import router as news_spaces_router
 from backend.app.routers.personas import router as personas_router
 from backend.app.routers.profile import router as profile_router
 from backend.app.routers.search import router as search_router
@@ -246,6 +247,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health_router)
+    app.include_router(news_spaces_router)
     app.include_router(auth_router)
     app.include_router(profile_router)
     auth_dependency = [Depends(require_current_user_when_auth_enabled)]

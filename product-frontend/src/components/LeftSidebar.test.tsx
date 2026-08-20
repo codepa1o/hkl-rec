@@ -4,6 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listCategories } from "../api/client";
 import LeftSidebar from "./LeftSidebar";
 
+const sourceState = { sourceSpace: "mind" as "mind" | "live" };
+
+vi.mock("../context/SourceSpaceContext", () => ({
+  useSourceSpace: () => sourceState,
+}));
+
 vi.mock("../api/client", () => ({
   listCategories: vi.fn(),
 }));
@@ -31,12 +37,28 @@ const categoryKeys = [
 
 describe("LeftSidebar 新闻分类", () => {
   beforeEach(() => {
+    sourceState.sourceSpace = "mind";
+    vi.clearAllMocks();
     vi.mocked(listCategories).mockResolvedValue({
+      source_space: "mind",
       items: categoryKeys.map((key, index) => ({
         key,
         news_count: 20_000 - index,
       })),
     });
+  });
+
+  it("实时新闻空间隐藏 MIND 分类并不请求分类接口", () => {
+    sourceState.sourceSpace = "live";
+    render(
+      <MemoryRouter>
+        <LeftSidebar />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText("新闻分类")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "全部新闻" })).not.toBeInTheDocument();
+    expect(listCategories).not.toHaveBeenCalled();
   });
 
   it("展示全部一级分类并高亮当前分类", async () => {

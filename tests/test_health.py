@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 
 def test_livez_reports_process_health_without_dependencies(unwired_client):
     response = unwired_client.get("/livez")
@@ -25,6 +27,64 @@ def test_metrics_endpoint_exposes_prometheus_text(unwired_client):
     response = unwired_client.get("/metrics")
     assert response.status_code == 200
     assert "newsrec_http_requests_total" in response.text
+
+
+def test_metrics_expose_source_and_collector_series(unwired_client):
+    payload = unwired_client.get("/metrics").text
+    assert "live_collector_last_success_timestamp" in payload
+    assert "live_ingest_accepted_total" in payload
+    assert "cross_space_validation_failures_total" in payload
+
+
+def test_readiness_reports_disabled_live_collector():
+    from backend.app.config import Settings
+    from backend.app.health import check_readiness
+
+    readiness = check_readiness(
+        Settings(
+            database_url="",
+            search_retrieval_mode="lexical_v1",
+            live_news_collector_enabled=False,
+        )
+    )
+
+    assert readiness.dependencies["live_news_collector"].status == "disabled"
+
+
+def test_live_collector_health_uses_durable_checkpoint_and_reports_staleness() -> None:
+    from backend.app.config import Settings
+    from backend.app.health import _live_collector_health
+
+    now = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _query):
+            return None
+
+        def fetchone(self):
+            return {
+                "last_success_at": now - timedelta(minutes=10),
+                "last_error": None,
+            }
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    health = _live_collector_health(
+        Connection(),
+        Settings(live_news_poll_interval_seconds=60),
+        now=now,
+    )
+
+    assert health.status == "error"
+    assert "last_success_age=600s" in str(health.detail)
 
 
 def test_livez_does_not_open_postgres_connection():

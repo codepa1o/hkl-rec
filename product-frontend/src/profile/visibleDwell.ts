@@ -36,6 +36,12 @@ export class VisibleDwellAccumulator {
   }
 }
 
-export function dwellEventId(userId: number, newsId: string, routeLoadId: string): string {
-  return `dwell-${userId}:${newsId}:${routeLoadId}`;
+export function dwellEventId(
+  sourceSpace: NewsSpace,
+  userId: number,
+  articleId: string,
+  routeLoadId: string,
+): string {
+  return `dwell-${sourceSpace}:${userId}:${articleId}:${routeLoadId}`;
 }
+import type { NewsSpace } from "../api/types";

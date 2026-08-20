@@ -170,6 +170,41 @@ npm run build
 
 PostgreSQL、MIND 目录导入和 Kafka 集成任务在 `.github/workflows/ci.yml` 中运行。
 
+## MIND / 实时新闻双空间
+
+产品可以在固定的 MIND 数据集与持续更新的 Live 新闻之间切换。两个空间共用登录账号和
+Persona 入口，但画像、事件、搜索历史、分页游标与重置状态均按 `source_space` 隔离；关闭
+Live 展示或采集器不会删除已导入的新闻与画像。GDELT GAL 仍只负责发现标题、摘要、图片 URL、
+发布者、时间与原文链接；独立正文 Worker 仅对来源策略明确允许的文章，通过官方 API、全文
+RSS 或白名单 HTML 抽取异步补全纯文本正文。没有权限或获取失败时详情页稳定降级为摘要和
+原文链接。Live 不复用 MIND 的主题、向量、模型、热度或赞助内容。
+
+首次启动前执行迁移，并先用一次性模式验证采集链路：
+
+```bash
+python -m alembic upgrade head
+python scripts/run_live_news_collector.py --once
+python scripts/run_live_news_collector.py --poll-interval-seconds 60
+python scripts/run_live_news_content_worker.py --once
+python scripts/run_live_news_content_worker.py --poll-interval-seconds 5
+```
+
+相关开关为 `NEWSREC_LIVE_NEWS_ENABLED`、`NEWSREC_LIVE_NEWS_COLLECTOR_ENABLED` 与
+`NEWSREC_LIVE_CONTENT_WORKER_ENABLED`。Guardian 官方正文接口还需要
+`NEWSREC_GUARDIAN_API_KEY`；公共 `test` key 仅用于本地验证，持续运行应使用开发者 key。发布者白名单位于
+`config/live_news_sources.json`，只接受精确域名边界及配置的中文/英文内容；修改后应先运行
+规范化、Provider 和 Worker 测试。正文只以安全文本段落渲染，不执行发布者 HTML；远程图片
+加载失败时前端隐藏图片并保留文字卡片。原文链接可定时巡检：
+
+```bash
+python scripts/check_gdelt_connectivity.py --timeout-seconds 10
+python scripts/check_live_news_links.py --limit 100 --timeout-seconds 10
+```
+
+连续三次无法访问的原文会被标记为 `inactive`，历史行不会物理删除。Live 首版 Feed 仅按
+新鲜度、元数据质量和来源多样性排序；虽然行为被写入独立 Live 画像，但当前不宣称已实现
+个性化排序。MIND 的导入、训练、搜索工件与离线评估继续只读取 MIND 数据。
+
 ## 文档
 
 | 主题 | 文档 |

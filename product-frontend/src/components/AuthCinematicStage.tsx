@@ -1,5 +1,7 @@
+import { Moon, Sun } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useRef } from "react";
+import { useTheme } from "../context/ThemeContext";
 
 export type AuthMode = "login" | "register";
 export type AuthPhase =
@@ -40,11 +42,13 @@ export default function AuthCinematicStage({
   reducedMotion,
   children,
 }: AuthCinematicStageProps) {
+  const { resolvedTheme, toggleTheme } = useTheme();
   const previousModeRef = useRef(mode);
   const modeChangedDuringSwitch = previousModeRef.current !== mode;
   const copy = COPY[mode];
   const isSwitching = phase === "switching";
   const isSuccess = phase === "success";
+  const isDark = resolvedTheme === "dark";
   const sceneState =
     reducedMotion || !isSwitching
       ? "active"
@@ -138,6 +142,16 @@ export default function AuthCinematicStage({
       </section>
 
       <section className="zr-auth-panel">
+        <button
+          aria-label={isDark ? "切换为浅色主题" : "切换为深色主题"}
+          className="zr-auth-theme-toggle"
+          disabled={isSuccess}
+          onClick={toggleTheme}
+          title={isDark ? "切换为浅色主题" : "切换为深色主题"}
+          type="button"
+        >
+          {isDark ? <Sun aria-hidden="true" size={18} /> : <Moon aria-hidden="true" size={18} />}
+        </button>
         <motion.div
           key={mode}
           {...contentMotion}

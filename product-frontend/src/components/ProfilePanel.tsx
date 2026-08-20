@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { getProfile, resetProfile } from "../api/client";
-import type { ProfileResponse, ProfileTopicEvidence } from "../api/types";
+import type { NewsSpace, ProfileResponse, ProfileTopicEvidence } from "../api/types";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
 
 interface Props {
+  sourceSpace: NewsSpace;
+  userId: number;
   refreshTick: number;
   onReset: () => void;
   variant?: "rail" | "page";
@@ -97,6 +100,8 @@ function reducedTopics(data: ProfileResponse): ProfileTopicEvidence[] {
 }
 
 export default function ProfilePanel({
+  sourceSpace,
+  userId,
   refreshTick,
   onReset,
   variant = "rail",
@@ -107,13 +112,20 @@ export default function ProfilePanel({
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [resetting, setResetting] = useState(false);
 
-  const load = () => {
+  const load = useCallback(() => {
     let active = true;
     setLoading(true);
     setError(null);
-    getProfile()
+    setData(null);
+    getProfile(sourceSpace, userId)
       .then((profile) => {
-        if (active) setData(profile);
+        if (
+          active &&
+          profile.source_space === sourceSpace &&
+          profile.user_id === userId
+        ) {
+          setData(profile);
+        }
       })
       .catch((requestError: Error) => {
         if (active) setError(requestError.message);
@@ -124,9 +136,9 @@ export default function ProfilePanel({
     return () => {
       active = false;
     };
-  };
+  }, [sourceSpace, userId]);
 
-  useEffect(load, [refreshTick]);
+  useEffect(load, [load, refreshTick]);
 
   const reduced = useMemo(() => (data ? reducedTopics(data) : []), [data]);
   const isEmpty =
@@ -144,7 +156,8 @@ export default function ProfilePanel({
     setResetting(true);
     setError(null);
     try {
-      const profile = await resetProfile();
+      const profile = await resetProfile(sourceSpace, userId);
+      if (profile.source_space !== sourceSpace || profile.user_id !== userId) return;
       setData(profile);
       setConfirmingReset(false);
       onReset();
@@ -181,6 +194,9 @@ export default function ProfilePanel({
       <header className="zr-profile-header">
         <span className="zr-eyebrow">为你持续更新</span>
         <h2 id="profile-v2-title">我的兴趣画像</h2>
+        <p className="zr-profile-space">
+          {sourceSpace === "mind" ? "MIND 新闻空间" : "实时新闻空间"}
+        </p>
         <div className="zr-profile-confidence">
           <span>{STATUS_LABELS[data.status]}</span>
           <strong>{confidence}% 置信度</strong>
@@ -202,7 +218,11 @@ export default function ProfilePanel({
       {isEmpty ? (
         <div className="zr-profile-empty">
           <strong>你的画像还很轻</strong>
-          <p>阅读、搜索、停留或点踩后，这里会逐渐形成可解释的兴趣主题。</p>
+          <p>
+            {sourceSpace === "live"
+              ? "阅读和互动后，这里会逐渐记录独立的实时新闻偏好与最近活动。"
+              : "阅读、搜索、停留或点踩后，这里会逐渐形成可解释的兴趣主题。"}
+          </p>
         </div>
       ) : (
         <div className="zr-profile-groups">
@@ -210,6 +230,22 @@ export default function ProfilePanel({
           <TopicGroup title="长期兴趣" topics={data.long_term.interests} />
           <TopicGroup title="减少推荐" topics={reduced} tone="negative" />
         </div>
+      )}
+
+      {sourceSpace === "live" && data.recent_clicked_news.length > 0 && (
+        <section className="zr-profile-recent" aria-labelledby="profile-recent-title">
+          <h3 id="profile-recent-title">最近活动</h3>
+          <div className="zr-recent-list">
+            {data.recent_clicked_news.map((news, index) => (
+              <div key={`${news.news_id}-${index}`} className="zr-recent-row">
+                <Link to={`/articles/live/${news.news_id}`} className="zr-recent-link">
+                  {news.title ?? news.news_id}
+                </Link>
+                <time>{new Date(news.click_ts * 1000).toLocaleDateString("zh-CN")}</time>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       <footer className="zr-profile-reset">

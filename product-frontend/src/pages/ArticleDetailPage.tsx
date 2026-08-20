@@ -1,5 +1,5 @@
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   getArticleCard,
@@ -7,7 +7,12 @@ import {
   sendTrackedEventKeepalive,
   trackEvent,
 } from "../api/client";
-import type { ArticleCardResponse, ArticleEntity, ArticleEntityType } from "../api/types";
+import type {
+  ArticleCardResponse,
+  ArticleEntity,
+  ArticleEntityType,
+  NewsSpace,
+} from "../api/types";
 import { usePersona } from "../context/PersonaContext";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
 import { dwellEventId, VisibleDwellAccumulator } from "../profile/visibleDwell";
@@ -38,22 +43,49 @@ function groupArticleEntities(data: ArticleCardResponse) {
     .filter((group) => group.entities.length > 0);
 }
 
+function validArticleRoute(sourceSpace: string, articleId: string): sourceSpace is NewsSpace {
+  if (sourceSpace === "mind") return /^N\d+$/.test(articleId);
+  if (sourceSpace === "live") return /^L[0-9a-f]{32}$/.test(articleId);
+  return false;
+}
+
 export default function ArticleDetailPage() {
-  const { newsId } = useParams<{ newsId: string }>();
+  const { sourceSpace: routeSource, articleId: routeArticleId, newsId } = useParams<{
+    sourceSpace?: string;
+    articleId?: string;
+    newsId?: string;
+  }>();
+  const sourceSpace = (routeSource ?? "mind") as NewsSpace;
+  const articleId = routeArticleId ?? newsId ?? "";
+  const routeIsValid = validArticleRoute(sourceSpace, articleId);
   const { selectedPersona, bumpProfile } = usePersona();
   const [data, setData] = useState<ArticleCardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [routeLoadId] = useState(() => newClientId("article-detail"));
+  const [imageFailed, setImageFailed] = useState(false);
+  const outboundTrackedRef = useRef(false);
+  const routeLoadId = useMemo(
+    () => newClientId("article-detail"),
+    [sourceSpace, articleId],
+  );
 
   useEffect(() => {
-    if (!newsId || !/^N\d+$/.test(newsId)) return;
+    if (!routeIsValid) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getArticleCard(newsId)
+    setData(null);
+    setImageFailed(false);
+    outboundTrackedRef.current = false;
+    getArticleCard(articleId, sourceSpace)
       .then((res) => {
-        if (cancelled) return;
+        if (
+          cancelled ||
+          res.source_space !== sourceSpace ||
+          res.article_id !== articleId
+        ) {
+          return;
+        }
         setData(res);
       })
       .catch((err: Error) => {
@@ -67,24 +99,26 @@ export default function ArticleDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [newsId]);
+  }, [articleId, routeIsValid, sourceSpace]);
 
   useEffect(() => {
     if (!data || !selectedPersona) return;
     void trackEvent({
+      event_id: `detail-${sourceSpace}:${selectedPersona.user_id}:${articleId}:${routeLoadId}`,
       user_id: selectedPersona.user_id,
+      source_space: sourceSpace,
       event_type: "detail_view",
       surface: "article_detail",
-      news_id: data.news_id,
+      article_id: articleId,
     })
       .then(() => bumpProfile())
       .catch(() => undefined);
-  }, [data?.news_id, selectedPersona?.user_id, bumpProfile]);
+  }, [articleId, data, routeLoadId, selectedPersona, sourceSpace, bumpProfile]);
 
   useEffect(() => {
     const userId = selectedPersona?.user_id;
-    const loadedNewsId = data?.news_id;
-    if (!userId || !loadedNewsId) return;
+    const loadedArticleId = data?.article_id;
+    if (!userId || !loadedArticleId) return;
 
     const dwell = new VisibleDwellAccumulator(
       () => performance.now(),
@@ -95,11 +129,12 @@ export default function ArticleDetailPage() {
       if (dwellMs === null) return;
       try {
         sendTrackedEventKeepalive({
-          event_id: dwellEventId(userId, loadedNewsId, routeLoadId),
+          event_id: dwellEventId(sourceSpace, userId, loadedArticleId, routeLoadId),
           user_id: userId,
+          source_space: sourceSpace,
           event_type: "dwell",
           surface: "article_detail",
-          news_id: loadedNewsId,
+          article_id: loadedArticleId,
           dwell_ms: dwellMs,
         });
       } catch {
@@ -121,9 +156,24 @@ export default function ArticleDetailPage() {
       window.removeEventListener("pagehide", handlePageHide);
       flush();
     };
-  }, [data?.news_id, selectedPersona?.user_id, routeLoadId]);
+  }, [data?.article_id, selectedPersona?.user_id, routeLoadId, sourceSpace]);
 
-  if (!newsId || !/^N\d+$/.test(newsId)) {
+  const handleOutboundClick = () => {
+    if (!selectedPersona || outboundTrackedRef.current) return;
+    outboundTrackedRef.current = true;
+    void trackEvent({
+      event_id: `outbound-${sourceSpace}:${selectedPersona.user_id}:${articleId}:${routeLoadId}`,
+      user_id: selectedPersona.user_id,
+      source_space: sourceSpace,
+      event_type: "outbound_click",
+      surface: "article_detail",
+      article_id: articleId,
+    }).catch(() => {
+      outboundTrackedRef.current = false;
+    });
+  };
+
+  if (!routeIsValid) {
     return (
       <main className="zr-center">
         <div className="zr-status">文章编号无效。</div>
@@ -157,6 +207,10 @@ export default function ArticleDetailPage() {
 
   const mainCategory = data.categories?.[0];
   const entityGroups = groupArticleEntities(data);
+  const bodyParagraphs = (data.body_text ?? "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
 
   return (
     <main className="zr-center zr-article-page">
@@ -173,10 +227,25 @@ export default function ArticleDetailPage() {
               {localizeCategoryName(mainCategory.display_name)}
             </span>
           )}
-          <span>来源：{data.source_domain}</span>
+          <span>来源：{data.publisher ?? data.source_domain}</span>
+          {data.language && <span>{data.language === "zh" ? "中文" : "English"}</span>}
+          {data.published_at && (
+            <time dateTime={data.published_at}>
+              {new Date(data.published_at).toLocaleString("zh-CN")}
+            </time>
+          )}
         </div>
 
         <h1 className="zr-post-detail__title">{data.title}</h1>
+
+        {data.image_url && !imageFailed && (
+          <img
+            className="zr-post-detail__image"
+            src={data.image_url}
+            alt={data.title}
+            onError={() => setImageFailed(true)}
+          />
+        )}
 
         {data.categories.length > 0 && (
           <div className="zr-card__chips">
@@ -191,8 +260,28 @@ export default function ArticleDetailPage() {
         <div className="zr-post-detail__content">
           <span className="zr-eyebrow">文章摘要</span>
           <div className="zr-post-detail__summary">{data.abstract}</div>
-          <a href={data.url} target="_blank" rel="noreferrer" className="zr-action">
-            MIND source
+          {bodyParagraphs.length > 0 ? (
+            <section className="zr-post-detail__body" aria-labelledby="article-body-title">
+              <h2 id="article-body-title" className="zr-eyebrow">
+                正文
+              </h2>
+              <div className="zr-post-detail__body-copy">
+                {bodyParagraphs.map((paragraph, index) => (
+                  <p key={`${index}:${paragraph.slice(0, 32)}`}>{paragraph}</p>
+                ))}
+              </div>
+            </section>
+          ) : data.body_status === "pending" ? (
+            <p className="zr-post-detail__body-state">正文正在获取中…</p>
+          ) : null}
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="zr-action"
+            onClick={handleOutboundClick}
+          >
+            阅读原文
           </a>
         </div>
 

@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import pytest
 
+from backend.app.errors import InvalidSponsoredAttributionError
 from backend.app.repositories.sponsored import (
     blend_fixed_slots,
     expected_spend_micros,
     sponsored_score,
     sponsored_slot_is_reachable,
 )
-from backend.app.repositories.sponsored_dao import claim_feed_request, load_sponsored_candidates
+from backend.app.repositories.sponsored_dao import (
+    claim_feed_request,
+    load_sponsored_attribution,
+    load_sponsored_candidates,
+)
 
 
 class RecordingCursor:
@@ -118,3 +123,31 @@ def test_sponsored_candidates_are_filtered_by_exact_category() -> None:
     assert "JOIN mind_news AS news" in sql
     assert "news.category = %s" in sql
     assert "sports" in params
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        {"user_id": 8, "news_id": "N1"},
+        {"user_id": 7, "news_id": "N2"},
+    ],
+)
+def test_invalid_sponsored_attribution_is_typed_non_retryable(
+    row: dict[str, object] | None,
+) -> None:
+    class AttributionCursor(RecordingCursor):
+        def fetchone(self) -> dict[str, object] | None:
+            return row
+
+    class AttributionConnection:
+        def cursor(self) -> AttributionCursor:
+            return AttributionCursor()
+
+    with pytest.raises(InvalidSponsoredAttributionError):
+        load_sponsored_attribution(
+            AttributionConnection(),
+            delivery_id="delivery-unknown",
+            user_id=7,
+            news_id="N1",
+        )

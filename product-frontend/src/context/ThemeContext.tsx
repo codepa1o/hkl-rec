@@ -16,6 +16,9 @@ function systemTheme(): ResolvedTheme {
 }
 
 function initialTheme(): ResolvedTheme {
+  const bootstrapped = document.documentElement.dataset.theme;
+  if (bootstrapped === "light" || bootstrapped === "dark") return bootstrapped;
+
   const stored = localStorage.getItem(STORAGE_KEY);
   return stored === "light" || stored === "dark" ? stored : systemTheme();
 }

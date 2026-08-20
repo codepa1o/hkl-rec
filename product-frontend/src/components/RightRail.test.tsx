@@ -8,6 +8,7 @@ const state = {
   refreshTick: 2,
   bumpProfile: vi.fn(),
 };
+const sourceState = { sourceSpace: "mind" as const };
 
 vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ user: state.user }) }));
 vi.mock("../context/PersonaContext", () => ({
@@ -17,25 +18,30 @@ vi.mock("../context/PersonaContext", () => ({
     bumpProfile: state.bumpProfile,
   }),
 }));
+vi.mock("../context/SourceSpaceContext", () => ({ useSourceSpace: () => sourceState }));
 vi.mock("./ProfilePanel", () => ({
-  default: () => <div>正式画像面板</div>,
+  default: ({ sourceSpace, userId }: { sourceSpace: string; userId: number }) => (
+    <div>正式画像面板 {sourceSpace} {userId}</div>
+  ),
 }));
 vi.mock("./ProfileDebugPanel", () => ({
-  default: ({ userId }: { userId: number }) => <div>调试画像 {userId}</div>,
+  default: ({ sourceSpace, userId }: { sourceSpace: string; userId: number }) => (
+    <div>调试画像 {sourceSpace} {userId}</div>
+  ),
 }));
 
 describe("RightRail profile identity routing", () => {
   it("当前登录用户使用正式画像接口面板", () => {
     state.selectedPersona.user_id = 7004;
     render(<RightRail />);
-    expect(screen.getByText("正式画像面板")).toBeInTheDocument();
+    expect(screen.getByText("正式画像面板 mind 7004")).toBeInTheDocument();
     expect(screen.queryByText(/调试画像/)).not.toBeInTheDocument();
   });
 
   it("切换演示用户后保留调试画像面板", () => {
     state.selectedPersona.user_id = 7248;
     render(<RightRail />);
-    expect(screen.getByText("调试画像 7248")).toBeInTheDocument();
-    expect(screen.queryByText("正式画像面板")).not.toBeInTheDocument();
+    expect(screen.getByText("调试画像 mind 7248")).toBeInTheDocument();
+    expect(screen.queryByText(/正式画像面板/)).not.toBeInTheDocument();
   });
 });

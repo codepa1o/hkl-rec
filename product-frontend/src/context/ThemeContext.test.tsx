@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider, useTheme } from "./ThemeContext";
 
@@ -39,5 +41,28 @@ describe("ThemeProvider", () => {
     expect(screen.getByRole("button", { name: "当前主题：light" })).toBeInTheDocument();
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(localStorage.getItem("news-intent-theme")).toBe("light");
+  });
+
+  it("沿用首屏脚本预置的主题而不产生反色闪烁", () => {
+    document.documentElement.dataset.theme = "light";
+
+    render(
+      <ThemeProvider>
+        <ThemeProbe />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "当前主题：light" })).toBeInTheDocument();
+  });
+
+  it("在应用模块加载前预置系统或持久化主题", () => {
+    const entryHtml = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
+    const bootstrapPosition = entryHtml.indexOf("document.documentElement.dataset.theme");
+    const appPosition = entryHtml.indexOf('src="/src/main.tsx"');
+
+    expect(bootstrapPosition).toBeGreaterThan(-1);
+    expect(bootstrapPosition).toBeLessThan(appPosition);
+    expect(entryHtml).toContain("news-intent-theme");
+    expect(entryHtml).toContain("prefers-color-scheme: dark");
   });
 });

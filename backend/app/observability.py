@@ -84,6 +84,64 @@ PROFILE_V2_PROJECTION_DURATION = Histogram(
     "profile_v2_projection_seconds",
     "Profile V2 projection duration in seconds.",
 )
+LIVE_COLLECTOR_LAST_SUCCESS = Gauge(
+    "live_collector_last_success_timestamp",
+    "Unix timestamp of the last successful Live collector batch.",
+)
+LIVE_COLLECTOR_LAG = Gauge(
+    "live_collector_lag_seconds",
+    "Seconds between collector observation time and the latest imported batch.",
+)
+LIVE_INGEST_RAW = Counter(
+    "live_ingest_raw_total",
+    "Raw GDELT GAL rows processed by the Live collector.",
+)
+LIVE_INGEST_ACCEPTED = Counter(
+    "live_ingest_accepted_total",
+    "GDELT GAL rows accepted into the Live catalog.",
+)
+LIVE_INGEST_REJECTED = Counter(
+    "live_ingest_rejected_total",
+    "GDELT GAL rows rejected by stable reason.",
+    ("reason",),
+)
+LIVE_NEWS_ACTIVE = Gauge(
+    "live_news_active_total",
+    "Active Live catalog rows by bounded language and approved domain.",
+    ("language", "domain"),
+)
+NEWS_FEED_REQUESTS = Counter(
+    "news_feed_requests_total",
+    "Feed requests by news space.",
+    ("source_space",),
+)
+USER_EVENTS = Counter(
+    "user_events_total",
+    "Accepted user events by news space and event type.",
+    ("source_space", "event_type"),
+)
+PROFILE_UPDATES = Counter(
+    "profile_updates_total",
+    "Profile mutations by news space.",
+    ("source_space",),
+)
+CROSS_SPACE_VALIDATION_FAILURES = Counter(
+    "cross_space_validation_failures_total",
+    "Requests rejected because source and article identity disagree.",
+)
+
+_LIVE_REJECTION_REASONS = frozenset(
+    {
+        "domain_not_allowed",
+        "unsupported_language",
+        "stale_article",
+        "invalid_page",
+        "duplicate_url",
+        "duplicate_content",
+        "missing_title",
+        "invalid_metadata",
+    }
+)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -150,3 +208,29 @@ def start_worker_metrics_server(port: int) -> None:
 def set_outbox_status_counts(counts: dict[str, int]) -> None:
     for status in ("pending", "publishing", "published", "dead"):
         OUTBOX_ROWS.labels(status=status).set(counts.get(status, 0))
+
+
+def record_live_batch(
+    *,
+    raw_count: int,
+    accepted_count: int,
+    rejection_counts: dict[str, int],
+    batch_timestamp: float,
+    observed_timestamp: float,
+) -> None:
+    LIVE_INGEST_RAW.inc(max(0, raw_count))
+    LIVE_INGEST_ACCEPTED.inc(max(0, accepted_count))
+    for reason, count in rejection_counts.items():
+        stable_reason = reason if reason in _LIVE_REJECTION_REASONS else "invalid_metadata"
+        LIVE_INGEST_REJECTED.labels(reason=stable_reason).inc(max(0, count))
+    LIVE_COLLECTOR_LAST_SUCCESS.set(observed_timestamp)
+    LIVE_COLLECTOR_LAG.set(max(0.0, observed_timestamp - batch_timestamp))
+
+
+def set_live_news_active_counts(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        language = str(row.get("language") or "")
+        domain = str(row.get("source_domain") or "")
+        if language not in {"zh", "en"} or not domain:
+            continue
+        LIVE_NEWS_ACTIVE.labels(language=language, domain=domain).set(int(row.get("count") or 0))

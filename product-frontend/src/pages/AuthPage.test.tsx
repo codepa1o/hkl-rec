@@ -3,6 +3,7 @@ import type { ComponentProps } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../api/types";
+import { ThemeProvider } from "../context/ThemeContext";
 import AuthPage from "./AuthPage";
 
 const authState = {
@@ -27,12 +28,14 @@ function authPageTree(
   initialEntries: ComponentProps<typeof MemoryRouter>["initialEntries"] = ["/auth"],
 ) {
   return (
-    <MemoryRouter initialEntries={initialEntries}>
-      <Routes>
-        <Route path="/auth" element={<AuthPage />} />
-        <Route path="*" element={<span>目标页面</span>} />
-      </Routes>
-    </MemoryRouter>
+    <ThemeProvider>
+      <MemoryRouter initialEntries={initialEntries}>
+        <Routes>
+          <Route path="/auth" element={<AuthPage />} />
+          <Route path="*" element={<span>目标页面</span>} />
+        </Routes>
+      </MemoryRouter>
+    </ThemeProvider>
   );
 }
 
@@ -51,10 +54,12 @@ describe("AuthPage", () => {
     authState.register.mockReset();
     authState.clearError.mockReset();
     motionPreference.value = false;
+    localStorage.clear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    document.documentElement.removeAttribute("data-theme");
   });
 
   it("默认展示清晰可访问的中文登录表单", () => {

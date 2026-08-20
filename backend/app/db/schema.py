@@ -38,10 +38,13 @@ topic = Table(
     "topic",
     metadata,
     Column("topic_id", BigInteger, primary_key=True, autoincrement=False),
-    Column("topic_key", String(512), nullable=False, unique=True),
+    Column("source_space", String(16), nullable=False, server_default=text("'mind'")),
+    Column("topic_key", String(512), nullable=False),
     Column("display_name", String(128)),
     Column("news_count", Integer, nullable=False, server_default=text("0")),
     Column("source", String(32), nullable=False, server_default=text("'mind_small'")),
+    UniqueConstraint("source_space", "topic_key", name="uq_topic_space_key"),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     comment="News category dimension.",
 )
 
@@ -104,7 +107,9 @@ event_idempotency = Table(
         nullable=False,
     ),
     Column("event_type", String(64), nullable=False),
+    Column("source_space", String(16), nullable=False),
     Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     Index("idx_event_idempotency_user_created", "user_id", "created_at"),
     comment="Atomic claim table for retry-safe event processing.",
 )
@@ -113,6 +118,7 @@ feed_request = Table(
     "feed_request",
     metadata,
     Column("request_id", String(128), primary_key=True),
+    Column("source_space", String(16), nullable=False),
     Column(
         "user_id",
         BigInteger,
@@ -130,11 +136,177 @@ feed_request = Table(
     Column("cursor_token", String(128)),
     Column("returned_news_ids_json", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     Index("idx_feed_request_user_created", "user_id", "created_at"),
     Index("uq_feed_request_cursor_token", "cursor_token", unique=True),
     Index("idx_feed_request_session_page", "session_id", "page_number"),
+    Index("idx_feed_request_space_session", "source_space", "session_id", "page_number"),
     Index("idx_feed_request_category", "category"),
     comment="Idempotency claim for feed loads that may reserve sponsored delivery.",
+)
+
+live_news = Table(
+    "live_news",
+    metadata,
+    Column("article_id", String(64), primary_key=True),
+    Column("canonical_url", Text, nullable=False, unique=True),
+    Column("source_external_id", Text),
+    Column("title", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("image_url", Text),
+    Column("publisher", Text, nullable=False),
+    Column("source_domain", Text, nullable=False),
+    Column("language", String(8), nullable=False),
+    Column("published_at", DateTime(timezone=True)),
+    Column("published_at_quality", String(32), nullable=False),
+    Column("discovered_at", DateTime(timezone=True), nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+    Column("content_hash", String(64), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("raw_metadata_json", JSONB, nullable=False),
+    Column("body_text", Text),
+    Column("body_source", String(32)),
+    Column("body_status", String(24), nullable=False, server_default=text("'metadata_only'")),
+    Column("body_fetched_at", DateTime(timezone=True)),
+    Column("body_content_hash", String(64)),
+    Column("body_extraction_version", String(32)),
+    Column("content_rights", String(24), nullable=False, server_default=text("'link_only'")),
+    Column("link_failure_count", Integer, nullable=False, server_default=text("0")),
+    Column("last_link_check_at", DateTime(timezone=True)),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    CheckConstraint("language IN ('zh', 'en')", name="language"),
+    CheckConstraint(
+        "published_at_quality IN ('gdelt_unverified', 'publisher', 'unknown')",
+        name="published_at_quality",
+    ),
+    CheckConstraint("status IN ('active', 'inactive')", name="status"),
+    CheckConstraint(
+        "body_source IS NULL OR body_source IN ('guardian_api', 'rss', 'html')",
+        name="body_source",
+    ),
+    CheckConstraint(
+        "body_status IN ('metadata_only', 'pending', 'available', 'blocked', 'failed')",
+        name="body_status",
+    ),
+    CheckConstraint(
+        "content_rights IN ('full_text', 'excerpt_only', 'link_only')",
+        name="content_rights",
+    ),
+    CheckConstraint(
+        "(body_status = 'available' AND body_text IS NOT NULL "
+        "AND body_source IS NOT NULL AND body_fetched_at IS NOT NULL "
+        "AND body_content_hash IS NOT NULL AND body_extraction_version IS NOT NULL) "
+        "OR (body_status <> 'available' AND body_text IS NULL)",
+        name="body_integrity",
+    ),
+    comment="Canonical catalog of continuously discovered live news articles.",
+)
+Index(
+    "idx_live_news_active_discovered",
+    live_news.c.status,
+    live_news.c.discovered_at.desc(),
+    live_news.c.article_id,
+)
+Index(
+    "idx_live_news_language_discovered",
+    live_news.c.language,
+    live_news.c.discovered_at.desc(),
+    live_news.c.article_id,
+)
+Index(
+    "idx_live_news_domain_discovered",
+    live_news.c.source_domain,
+    live_news.c.discovered_at.desc(),
+    live_news.c.article_id,
+)
+Index("idx_live_news_content_hash", live_news.c.content_hash)
+
+live_news_content_job = Table(
+    "live_news_content_job",
+    metadata,
+    Column(
+        "article_id",
+        String(64),
+        ForeignKey("live_news.article_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("status", String(16), nullable=False, server_default=text("'pending'")),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False),
+    Column("claimed_at", DateTime(timezone=True)),
+    Column("worker_id", String(128)),
+    Column("last_error_code", String(64)),
+    Column("last_error_detail", Text),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    CheckConstraint("attempt_count >= 0", name="attempt_count"),
+    CheckConstraint(
+        "status IN ('pending', 'fetching', 'completed', 'blocked', 'failed')",
+        name="status",
+    ),
+    Index("idx_live_news_content_job_due", "status", "next_attempt_at"),
+    comment="Durable acquisition queue for Live article body content.",
+)
+
+live_news_source_checkpoint = Table(
+    "live_news_source_checkpoint",
+    metadata,
+    Column("source_name", String(64), primary_key=True),
+    Column("last_batch_time", DateTime(timezone=True)),
+    Column("last_etag", String(255)),
+    Column("last_modified", String(255)),
+    Column("last_success_at", DateTime(timezone=True)),
+    Column("last_error", Text),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    comment="Per-source cursors and health state for live news discovery.",
+)
+
+live_news_import = Table(
+    "live_news_import",
+    metadata,
+    Column("batch_id", String(128), primary_key=True),
+    Column("source_url", Text, nullable=False),
+    Column("source_sha256", String(64)),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+    Column("raw_count", Integer, nullable=False, server_default=text("0")),
+    Column("accepted_count", Integer, nullable=False, server_default=text("0")),
+    Column("rejected_count", Integer, nullable=False, server_default=text("0")),
+    Column(
+        "rejection_summary_json",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    ),
+    Column("status", String(16), nullable=False),
+    Column("error_message", Text),
+    CheckConstraint("status IN ('fetching', 'completed', 'failed')", name="status"),
+    comment="Audit record for each raw live-news import batch.",
 )
 
 mind_news = Table(
@@ -235,6 +407,7 @@ mind_news_stats = Table(
 query_topic_map = Table(
     "query_topic_map",
     metadata,
+    Column("source_space", String(16), nullable=False, server_default=text("'mind'")),
     Column("query_key", String(512), nullable=False),
     Column("display_query", String(255)),
     Column("query_tokens_json", JSONB),
@@ -254,7 +427,8 @@ query_topic_map = Table(
         nullable=False,
         server_default=text("'offline_user_topic_cooccurrence'"),
     ),
-    PrimaryKeyConstraint("query_key", "topic_id"),
+    PrimaryKeyConstraint("source_space", "query_key", "topic_id"),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     Index("idx_query_topic_topic", "topic_id"),
     Index("idx_query_topic_rank", "query_key", "match_rank"),
     comment="English query aliases and category mappings.",
@@ -264,11 +438,13 @@ system_profile_seed = Table(
     "system_profile_seed",
     metadata,
     Column("seed_key", String(64), primary_key=True),
+    Column("source_space", String(16), nullable=False, server_default=text("'mind'")),
     Column("topic_weights_json", JSONB, nullable=False),
     Column("recent_clicked_news_json", JSONB),
     Column("recent_queries_json", JSONB),
     Column("behavior_score", DOUBLE_PRECISION, nullable=False, server_default=text("0")),
     Column("notes", String(255)),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     comment="Reusable cold-start or bootstrap profile seeds.",
 )
 
@@ -279,8 +455,9 @@ user_profile = Table(
         "user_id",
         BigInteger,
         ForeignKey("app_user.user_id", name="fk_user_profile_user"),
-        primary_key=True,
+        nullable=False,
     ),
+    Column("source_space", String(16), nullable=False, server_default=text("'mind'")),
     Column(
         "cold_start_seed_key",
         String(64),
@@ -301,6 +478,8 @@ user_profile = Table(
     Column("profile_reset_before_event_id", BigInteger),
     Column("profile_v2_updated_at", DateTime(timezone=True)),
     Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    PrimaryKeyConstraint("user_id", "source_space"),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     Index("idx_user_profile_seed", "cold_start_seed_key"),
     comment="Single-table user profile storage.",
 )
@@ -314,6 +493,7 @@ user_topic_profile = Table(
         ForeignKey("app_user.user_id", name="fk_user_topic_profile_user"),
         nullable=False,
     ),
+    Column("source_space", String(16), nullable=False, server_default=text("'mind'")),
     Column(
         "topic_id",
         BigInteger,
@@ -352,7 +532,8 @@ user_topic_profile = Table(
         "positive_evidence_count >= 0 AND negative_evidence_count >= 0",
         name="evidence_counts",
     ),
-    PrimaryKeyConstraint("user_id", "topic_id"),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
+    PrimaryKeyConstraint("user_id", "source_space", "topic_id"),
     Index("idx_user_topic_profile_user", "user_id"),
     comment="Short- and long-term explainable topic projection for profile V2.",
 )
@@ -522,6 +703,7 @@ user_event = Table(
     metadata,
     Column("event_id", BigInteger, Identity(), primary_key=True),
     Column("external_event_id", String(128)),
+    Column("source_space", String(16), nullable=False),
     Column(
         "user_id",
         BigInteger,
@@ -529,7 +711,7 @@ user_event = Table(
         nullable=False,
     ),
     Column("event_type", String(32), nullable=False),
-    Column("news_id", String(32), ForeignKey("mind_news.news_id", name="fk_user_event_news")),
+    Column("article_id", String(64)),
     Column(
         "sponsored_delivery_id",
         String(128),
@@ -563,17 +745,28 @@ user_event = Table(
     UniqueConstraint("external_event_id", name="uq_user_event_external_event_id"),
     CheckConstraint(
         "event_type IN ('search_query', 'recommendation_click', 'search_result_click', "
-        "'feed_impression', 'detail_view', 'dwell', 'upvote', 'downvote', 'share')",
+        "'feed_impression', 'detail_view', 'dwell', 'upvote', 'downvote', 'share', "
+        "'outbound_click')",
         name="event_type",
     ),
     CheckConstraint(
         "source_confidence IN ('confirmed', 'heuristic', 'not_applicable')",
         name="source_confidence",
     ),
+    CheckConstraint(
+        "event_type = 'search_query' OR article_id IS NOT NULL",
+        name="article_required",
+    ),
+    CheckConstraint(
+        "article_id IS NULL OR "
+        "(source_space = 'mind' AND article_id ~ '^N[0-9]+$') OR "
+        "(source_space = 'live' AND article_id ~ '^L[0-9a-f]{32}$')",
+        name="article_space",
+    ),
+    CheckConstraint("source_space IN ('mind', 'live')", name="source_space"),
     Index("idx_user_event_user_ts", "user_id", "event_ts"),
+    Index("idx_user_event_space_user_ts", "source_space", "user_id", "event_ts"),
     Index("idx_user_event_type_ts", "event_type", "event_ts"),
-    Index("idx_user_event_news", "news_id"),
-    Index("idx_user_event_request_news", "request_id", "news_id"),
     Index("idx_user_event_campaign_ts", "campaign_id", "event_ts"),
     comment="Event log for closed-loop updates and replay.",
 )

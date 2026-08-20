@@ -276,7 +276,7 @@ def load_news_event_counts_as_of(
         cursor.execute(
             """
             SELECT
-                news_id,
+                article_id,
                 COUNT(*) FILTER (WHERE event_type = 'feed_impression') AS impression_count,
                 COUNT(*) FILTER (WHERE event_type IN (
                     'recommendation_click', 'search_result_click', 'upvote'
@@ -284,15 +284,16 @@ def load_news_event_counts_as_of(
             FROM user_event
             WHERE derived_from_raw IS TRUE
               AND event_ts < %s
-              AND news_id = ANY(%s)
-            GROUP BY news_id
+              AND source_space = 'mind'
+              AND article_id = ANY(%s)
+            GROUP BY article_id
             """,
             (as_of_ts, news_ids),
         )
         rows = cursor.fetchall()
     result: dict[str, dict[str, int | float]] = {}
     for row in rows:
-        news_id = str(row["news_id"])
+        news_id = str(row["article_id"])
         click_count = int(row.get("click_count") or 0)
         impression_count = int(row.get("impression_count") or 0)
         result[news_id] = {

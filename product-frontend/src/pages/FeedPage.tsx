@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, getFeed, newClientId, stableClientId, trackEvent } from "../api/client";
-import type { FeedItem } from "../api/types";
+import type { FeedItem, LiveLanguage } from "../api/types";
 import PostCard from "../components/PostCard";
 import { usePersona } from "../context/PersonaContext";
+import { useSourceSpace } from "../context/SourceSpaceContext";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
 
 const PAGE_SIZE = 20;
@@ -20,11 +21,15 @@ interface FeedEntry {
 
 export default function FeedPage() {
   const { selectedPersona, refreshTick, bumpProfile } = usePersona();
+  const { sourceSpace } = useSourceSpace();
   const location = useLocation();
-  const category = useMemo(
+  const navigate = useNavigate();
+  const routeCategory = useMemo(
     () => new URLSearchParams(location.search).get("category") || undefined,
     [location.search],
   );
+  const category = sourceSpace === "mind" ? routeCategory : undefined;
+  const [language, setLanguage] = useState<LiveLanguage>("all");
   const [pages, setPages] = useState<FeedPageBatch[]>([]);
   const [feedUserId, setFeedUserId] = useState<number | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -43,10 +48,15 @@ export default function FeedPage() {
     () =>
       stableClientId(
         "feed",
-        `${location.key}:${selectedPersona?.user_id ?? "none"}:${refreshTick}:${category ?? "all"}`,
+        `${location.key}:${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${refreshTick}:${category ?? "all"}:${language}`,
       ),
-    [category, location.key, selectedPersona?.user_id, refreshTick],
+    [category, language, location.key, selectedPersona?.user_id, refreshTick, sourceSpace],
   );
+
+  useEffect(() => {
+    setLanguage("all");
+    if (sourceSpace === "live" && routeCategory) navigate("/", { replace: true });
+  }, [navigate, routeCategory, sourceSpace]);
 
   useEffect(() => {
     if (!selectedPersona) return;
@@ -63,9 +73,18 @@ export default function FeedPage() {
     setHasMore(false);
     setFeedUserId(null);
     trackedRef.current = new Set();
-    getFeed(selectedPersona.user_id, PAGE_SIZE, true, loadRequestId, undefined, category)
+    getFeed(
+      selectedPersona.user_id,
+      PAGE_SIZE,
+      true,
+      loadRequestId,
+      undefined,
+      category,
+      sourceSpace,
+      language,
+    )
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || res.source_space !== sourceSpace) return;
         setPages([{ requestId: res.request_id, items: res.items }]);
         setNextCursor(res.next_cursor);
         setHasMore(res.has_more);
@@ -83,15 +102,15 @@ export default function FeedPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPersona, refreshTick, loadRequestId, category]);
+  }, [selectedPersona, refreshTick, loadRequestId, category, sourceSpace, language]);
 
   const visibleEntries = useMemo<FeedEntry[]>(() => {
     if (!selectedPersona || feedUserId !== selectedPersona.user_id) return [];
     const unique = new Map<string, FeedEntry>();
     pages.forEach((page) => {
       page.items.forEach((item) => {
-        if (!unique.has(item.news_id)) {
-          unique.set(item.news_id, { item, requestId: page.requestId });
+        if (!unique.has(item.article_id)) {
+          unique.set(item.article_id, { item, requestId: page.requestId });
         }
       });
     });
@@ -103,7 +122,7 @@ export default function FeedPage() {
     const pending = visibleEntries
       .map((entry) => ({
         entry,
-        key: `${selectedPersona.user_id}:${entry.requestId}:${entry.item.news_id}`,
+        key: `${sourceSpace}:${selectedPersona.user_id}:${entry.requestId}:${entry.item.article_id}`,
       }))
       .filter(({ key }) => !trackedRef.current.has(key));
     if (pending.length === 0) return;
@@ -115,9 +134,10 @@ export default function FeedPage() {
         trackEvent({
           event_id: `imp-${key}`,
           user_id: selectedPersona.user_id,
+          source_space: sourceSpace,
           event_type: "feed_impression",
           surface: "feed",
-          news_id: entry.item.news_id,
+          article_id: entry.item.article_id,
           request_id: entry.requestId,
           sponsored_delivery_id: entry.item.sponsored?.delivery_id ?? null,
         }),
@@ -134,7 +154,7 @@ export default function FeedPage() {
         setTrackingError(`${failedKeys.length} 篇内容的曝光记录失败，请稍后重试。`);
       }
     });
-  }, [selectedPersona, visibleEntries]);
+  }, [selectedPersona, sourceSpace, visibleEntries]);
 
   const loadMore = useCallback(async () => {
     if (
@@ -160,8 +180,10 @@ export default function FeedPage() {
         pageRequestId,
         nextCursor,
         category,
+        sourceSpace,
+        language,
       );
-      if (activeSessionRef.current !== sessionId) return;
+      if (activeSessionRef.current !== sessionId || res.source_space !== sourceSpace) return;
       setPages((current) => [
         ...current,
         { requestId: res.request_id, items: res.items },
@@ -178,7 +200,7 @@ export default function FeedPage() {
         setLoadingMore(false);
       }
     }
-  }, [selectedPersona, feedUserId, nextCursor, hasMore, category]);
+  }, [selectedPersona, feedUserId, nextCursor, hasMore, category, sourceSpace, language]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -196,13 +218,14 @@ export default function FeedPage() {
   const handleClick = useCallback(
     (entry: FeedEntry) => {
       if (!selectedPersona) return;
-      const newsId = entry.item.news_id;
+      const articleId = entry.item.article_id;
       void trackEvent({
-        event_id: `click-${selectedPersona.user_id}:${entry.requestId}:${newsId}`,
+        event_id: `click-${sourceSpace}:${selectedPersona.user_id}:${entry.requestId}:${articleId}`,
         user_id: selectedPersona.user_id,
+        source_space: sourceSpace,
         event_type: "recommendation_click",
         surface: "feed",
-        news_id: newsId,
+        article_id: articleId,
         request_id: entry.requestId,
         sponsored_delivery_id: entry.item.sponsored?.delivery_id ?? null,
       })
@@ -214,7 +237,7 @@ export default function FeedPage() {
           setTrackingError(`点击记录失败：${localizeInterfaceError(err.message)}`),
         );
     },
-    [selectedPersona, bumpProfile],
+    [selectedPersona, sourceSpace, bumpProfile],
   );
 
   if (!selectedPersona) {
@@ -236,14 +259,39 @@ export default function FeedPage() {
   return (
     <main className="zr-center">
       <header className="zr-page-header">
-        <span className="zr-eyebrow">你的每日阅读</span>
-        <h1>{categoryLabel ? `${categoryLabel}新闻` : "为你推荐"}</h1>
+        <span className="zr-eyebrow">
+          {sourceSpace === "live" ? "持续更新的双语资讯" : "你的每日阅读"}
+        </span>
+        <h1>
+          {sourceSpace === "live"
+            ? "实时新闻"
+            : categoryLabel
+              ? `${categoryLabel}新闻`
+              : "为你推荐"}
+        </h1>
         <p>
-          {categoryLabel
-            ? `在${categoryLabel}分类内，根据你的阅读兴趣持续推荐`
-            : "根据你的阅读兴趣持续更新"}
+          {sourceSpace === "live"
+            ? "按新鲜度与来源多样性持续更新"
+            : categoryLabel
+              ? `在${categoryLabel}分类内，根据你的阅读兴趣持续推荐`
+              : "根据你的阅读兴趣持续更新"}
         </p>
       </header>
+
+      {sourceSpace === "live" && (
+        <div className="zr-language-filter" aria-label="实时新闻语言">
+          {(["all", "zh", "en"] as const).map((value) => (
+            <button
+              type="button"
+              key={value}
+              aria-pressed={language === value}
+              onClick={() => setLanguage(value)}
+            >
+              {value === "all" ? "全部" : value === "zh" ? "中文" : "English"}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading && visibleEntries.length === 0 && (
         <div className="zr-status">正在加载信息流…</div>
@@ -264,7 +312,7 @@ export default function FeedPage() {
 
       {visibleEntries.map((entry) => (
         <PostCard
-          key={entry.item.news_id}
+          key={entry.item.article_id}
           item={entry.item}
           userId={selectedPersona.user_id}
           requestId={entry.requestId}
