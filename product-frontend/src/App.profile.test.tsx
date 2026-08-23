@@ -61,4 +61,14 @@ describe("独立兴趣画像路由", () => {
     expect(screen.getByTestId("profile-panel")).toHaveTextContent("page");
     expect(screen.queryByTestId("right-rail")).not.toBeInTheDocument();
   });
+
+  it("仅在登录后的页面渲染背景应用外壳", () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(container.querySelector(".zr-product-app")).toBeInTheDocument();
+  });
 });

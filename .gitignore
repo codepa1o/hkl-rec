@@ -65,6 +65,7 @@ logs/
 
 # Screenshots (temporary work in progress)
 *.png
+!product-frontend/public/assets/cloud-night-background.png
 
 # TypeScript incremental build info
 *.tsbuildinfo

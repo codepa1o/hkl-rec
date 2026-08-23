@@ -90,6 +90,19 @@ a {
 }
 
 /* App shell */
+.zr-product-app {
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(245, 246, 248, 0.76), rgba(245, 246, 248, 0.76)),
+    url("/assets/cloud-night-background.png") center / cover fixed no-repeat;
+}
+
+:root[data-theme="dark"] .zr-product-app {
+  background:
+    linear-gradient(rgba(13, 15, 19, 0.72), rgba(13, 15, 19, 0.72)),
+    url("/assets/cloud-night-background.png") center / cover fixed no-repeat;
+}
+
 .zr-topbar {
   position: sticky;
   z-index: 50;

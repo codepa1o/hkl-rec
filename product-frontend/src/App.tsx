@@ -20,26 +20,28 @@ function ProductShell() {
 
   return (
     <ProtectedRoute>
-      <SourceSpaceProvider>
-        <PersonaProvider>
-          <TopNav />
-          <div className={`zr-shell${isProfilePage ? " zr-shell--profile" : ""}`}>
-            <LeftSidebar />
-            <Routes>
-              <Route path="/" element={<FeedPage />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/profile" element={<ProfilePage />} />
-              <Route
-                path="/articles/:sourceSpace/:articleId"
-                element={<ArticleDetailPage />}
-              />
-              <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-            {!isProfilePage && <RightRail />}
-          </div>
-        </PersonaProvider>
-      </SourceSpaceProvider>
+      <div className="zr-product-app">
+        <SourceSpaceProvider>
+          <PersonaProvider>
+            <TopNav />
+            <div className={`zr-shell${isProfilePage ? " zr-shell--profile" : ""}`}>
+              <LeftSidebar />
+              <Routes>
+                <Route path="/" element={<FeedPage />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route
+                  path="/articles/:sourceSpace/:articleId"
+                  element={<ArticleDetailPage />}
+                />
+                <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+              {!isProfilePage && <RightRail />}
+            </div>
+          </PersonaProvider>
+        </SourceSpaceProvider>
+      </div>
     </ProtectedRoute>
   );
 }
