@@ -12,7 +12,7 @@ def test_live_content_migration_is_single_head() -> None:
     root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(root / "alembic.ini"))
 
-    assert script.get_heads() == ["20260818_0010"]
+    assert script.get_heads() == ["20260821_0011"]
     revision = script.get_revision("20260818_0010")
     assert revision is not None
     assert revision.down_revision == "20260817_0009"
@@ -43,6 +43,8 @@ def test_metadata_defines_live_body_columns_and_job_queue() -> None:
         "worker_id",
         "last_error_code",
         "last_error_detail",
+        "target_extraction_version",
+        "requested_by",
         "created_at",
         "updated_at",
     }

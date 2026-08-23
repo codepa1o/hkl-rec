@@ -2,10 +2,12 @@ import type {
   ArticleCardResponse,
   AuthUser,
   CategoryListResponse,
+  ContentEnsureResponse,
   DebugProfileResponse,
   EventTrackRequest,
   EventTrackResponse,
   FeedResponse,
+  FeedUpdateStatusResponse,
   PersonaListResponse,
   ProfileResponse,
   LoginInput,
@@ -178,6 +180,32 @@ export function getArticleCard(
   sourceSpace: NewsSpace = "mind",
 ): Promise<ArticleCardResponse> {
   return request<ArticleCardResponse>(`/articles/${sourceSpace}/${articleId}`);
+}
+
+export function ensureArticleContent(
+  sourceSpace: NewsSpace,
+  articleId: string,
+): Promise<ContentEnsureResponse> {
+  return request<ContentEnsureResponse>(
+    `/articles/${encodeURIComponent(sourceSpace)}/${encodeURIComponent(articleId)}/content/ensure`,
+    { method: "POST" },
+  );
+}
+
+export function getFeedUpdateStatus(
+  userId: number,
+  sourceSpace: NewsSpace,
+  language: LiveLanguage,
+  since: string,
+): Promise<FeedUpdateStatusResponse> {
+  return request<FeedUpdateStatusResponse>("/feed/updates", {
+    params: {
+      user_id: userId,
+      source_space: sourceSpace,
+      language,
+      since,
+    },
+  });
 }
 
 export function getDebugProfile(

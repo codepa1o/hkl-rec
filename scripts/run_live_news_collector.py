@@ -83,6 +83,7 @@ def main() -> int:
     source_config = args.source_config or Path(settings.live_news_source_config)
     allowlist = load_allowlist(source_config)
     connection_config = parse_database_url(settings.database_url)
+    stop_event = Event()
     store = PostgresLiveNewsStore(
         lambda: connect(
             connection_config,
@@ -96,8 +97,8 @@ def main() -> int:
         allowlist=allowlist,
         replay_minutes=settings.live_news_replay_minutes,
         max_age_hours=settings.live_news_max_age_hours,
+        should_stop=stop_event.is_set,
     )
-    stop_event = Event()
 
     def stop(_signum: int, _frame: object) -> None:
         stop_event.set()

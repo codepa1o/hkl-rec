@@ -3,6 +3,12 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getCurrentUser, login, logout, UNAUTHORIZED_EVENT } from "../api/client";
 import { AuthProvider, useAuth } from "./AuthContext";
+import {
+  FEED_SESSION_SCHEMA_VERSION,
+  buildFeedContextKey,
+  readFeedSnapshot,
+  saveFeedSnapshot,
+} from "../feed/feedSessionStore";
 
 vi.mock("../api/client", () => ({
   UNAUTHORIZED_EVENT: "newsrec:unauthorized",
@@ -28,6 +34,34 @@ function Probe() {
 
 function renderAuth(children: ReactNode = <Probe />) {
   return render(<AuthProvider>{children}</AuthProvider>);
+}
+
+function seedFeedSession() {
+  const contextKey = buildFeedContextKey({
+    sourceSpace: "mind",
+    personaUserId: 7004,
+    category: null,
+    language: "all",
+  });
+  saveFeedSnapshot({
+    schemaVersion: FEED_SESSION_SCHEMA_VERSION,
+    contextKey,
+    sourceSpace: "mind",
+    personaUserId: 7004,
+    category: null,
+    language: "all",
+    pages: [],
+    feedUserId: 7004,
+    nextCursor: null,
+    hasMore: false,
+    anchorArticleId: null,
+    anchorViewportTop: null,
+    scrollY: 0,
+    feedWatermark: null,
+    savedAt: Date.now(),
+    lastAccessedAt: Date.now(),
+  });
+  return contextKey;
 }
 
 describe("AuthProvider", () => {
@@ -92,5 +126,37 @@ describe("AuthProvider", () => {
     globalThis.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
 
     await waitFor(() => expect(screen.getByText("未登录")).toBeInTheDocument());
+  });
+});
+
+describe("AuthProvider feed session cleanup", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    vi.mocked(getCurrentUser).mockResolvedValue({
+      user_id: 7004,
+      email: "reader@example.com",
+      display_name: "Reader",
+    });
+    vi.mocked(logout).mockResolvedValue(undefined);
+  });
+
+  it("clears feed sessions after logout", async () => {
+    const contextKey = seedFeedSession();
+    renderAuth();
+    await screen.findByText("Reader");
+
+    fireEvent.click(screen.getByRole("button", { name: /退出|閫€鍑/ }));
+
+    await waitFor(() => expect(readFeedSnapshot(contextKey)).toBeNull());
+  });
+
+  it("clears feed sessions after a global unauthorized event", async () => {
+    const contextKey = seedFeedSession();
+    renderAuth();
+    await screen.findByText("Reader");
+
+    globalThis.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+
+    await waitFor(() => expect(readFeedSnapshot(contextKey)).toBeNull());
   });
 });

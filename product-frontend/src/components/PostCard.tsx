@@ -14,6 +14,11 @@ interface Props {
   showReason?: boolean;
   onTrackClick?: () => void;
   onProfileChanged?: () => void;
+  feedNavigationState?: {
+    fromFeed: true;
+    feedContextKey: string;
+  };
+  onOpenArticle?: (articleId: string) => void;
 }
 
 function isFeedItem(item: FeedItem | SearchItem): item is FeedItem {
@@ -28,6 +33,8 @@ export default function PostCard({
   showReason,
   onTrackClick,
   onProfileChanged,
+  feedNavigationState,
+  onOpenArticle,
 }: Props) {
   const [shared, setShared] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -37,6 +44,10 @@ export default function PostCard({
   useEffect(() => setImageFailed(false), [item.article_id]);
 
   const articlePath = `/articles/${item.source_space}/${item.article_id}`;
+  const handleOpenArticle = () => {
+    onOpenArticle?.(item.article_id);
+    onTrackClick?.();
+  };
   const handleShare = async () => {
     const url = `${window.location.origin}${articlePath}`;
     if (navigator.share) {
@@ -57,7 +68,7 @@ export default function PostCard({
   };
 
   return (
-    <article className="zr-card">
+    <article className="zr-card" data-article-id={item.article_id}>
       <div className="zr-card__body">
         <div className="zr-card__meta">
           <span className="zr-card__community">
@@ -95,7 +106,11 @@ export default function PostCard({
         )}
 
         <h2 className="zr-card__title">
-          <Link to={articlePath} onClick={onTrackClick}>
+          <Link
+            to={articlePath}
+            state={feedNavigationState}
+            onClick={handleOpenArticle}
+          >
             {item.title}
           </Link>
         </h2>
@@ -131,8 +146,9 @@ export default function PostCard({
           <div className="zr-card__actions">
             <Link
               to={articlePath}
+              state={feedNavigationState}
               className="zr-action"
-              onClick={onTrackClick}
+              onClick={handleOpenArticle}
             >
               <Newspaper size={15} />
               查看详情

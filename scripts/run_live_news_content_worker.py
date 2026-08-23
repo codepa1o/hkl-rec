@@ -7,7 +7,9 @@ import signal
 import socket
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +53,25 @@ def build_provider_registry(settings: Settings, fetcher: SafeFetcher) -> Provide
     return ProviderRegistry(providers)
 
 
+def run_loop(
+    worker: LiveNewsContentWorker,
+    *,
+    once: bool,
+    interval: float,
+    stop_event: Event,
+    sleep: Callable[[float], object] = time.sleep,
+    emit: Callable[[dict[str, int]], None] | None = None,
+) -> int:
+    output = emit or (lambda payload: print(json.dumps(payload, sort_keys=True), flush=True))
+    while not stop_event.is_set():
+        result = worker.run_once()
+        output(result.__dict__)
+        if once or stop_event.is_set():
+            return 0
+        sleep(interval)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     settings = get_settings()
@@ -81,18 +102,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         worker_id=f"{socket.gethostname()}:{os.getpid()}",
         batch_size=settings.live_content_worker_batch_size,
     )
+    stop_event = Event()
 
     def stop(_signum: int, _frame: object) -> None:
         worker.stop()
+        stop_event.set()
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
-    while True:
-        result = worker.run_once()
-        print(json.dumps(result.__dict__, sort_keys=True), flush=True)
-        if args.once:
-            return 0
-        time.sleep(args.poll_interval_seconds)
+    return run_loop(
+        worker,
+        once=args.once,
+        interval=args.poll_interval_seconds,
+        stop_event=stop_event,
+        sleep=stop_event.wait,
+    )
 
 
 if __name__ == "__main__":

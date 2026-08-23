@@ -1,6 +1,6 @@
 {
   "sources": [
-    {"domain": "theguardian.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "guardian_api", "display": "full_text", "feed_urls": []}},
+    {"domain": "theguardian.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "guardian_api", "display": "full_text", "feed_urls": [], "images": {"display": "remote_url", "cache": "never", "allowed_domains": ["i.guim.co.uk"], "max_images_per_article": 20, "max_bytes_per_image": 8388608}}},
     {"domain": "bbc.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
     {"domain": "reuters.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
     {"domain": "apnews.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},

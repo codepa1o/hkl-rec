@@ -15,6 +15,7 @@ import {
   UNAUTHORIZED_EVENT,
 } from "../api/client";
 import type { AuthUser, LoginInput, RegisterInput } from "../api/types";
+import { clearFeedSessionData } from "../feed/feedSessionStore";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -55,7 +56,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const clearExpiredSession = () => setUser(null);
+    const clearExpiredSession = () => {
+      clearFeedSessionData();
+      setUser(null);
+    };
     globalThis.addEventListener(UNAUTHORIZED_EVENT, clearExpiredSession);
     return () => globalThis.removeEventListener(UNAUTHORIZED_EVENT, clearExpiredSession);
   }, []);
@@ -89,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await logoutRequest();
+      clearFeedSessionData();
       setUser(null);
     } catch (requestError) {
       setError(errorMessage(requestError));

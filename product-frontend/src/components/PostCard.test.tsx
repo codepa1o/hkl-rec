@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeedItem } from "../api/types";
 import { trackEvent } from "../api/client";
@@ -119,5 +119,46 @@ describe("PostCard", () => {
       liveItem.image_url,
     );
     expect(screen.getByText(/2026/)).toBeInTheDocument();
+  });
+
+  it("carries feed origin state and captures the article before navigation", () => {
+    const onOpenArticle = vi.fn();
+    function LocationProbe() {
+      const location = useLocation();
+      return <pre data-testid="location-state">{JSON.stringify(location.state)}</pre>;
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <PostCard
+                item={sponsoredItem}
+                userId={7248}
+                feedNavigationState={{
+                  fromFeed: true,
+                  feedContextKey: '["mind",7248,"","all"]',
+                }}
+                onOpenArticle={onOpenArticle}
+              />
+            }
+          />
+          <Route path="/articles/:sourceSpace/:articleId" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("article")).toHaveAttribute("data-article-id", "N301");
+    fireEvent.click(screen.getByRole("link", { name: sponsoredItem.title }));
+
+    expect(onOpenArticle).toHaveBeenCalledWith("N301");
+    expect(screen.getByTestId("location-state")).toHaveTextContent(
+      JSON.stringify({
+        fromFeed: true,
+        feedContextKey: '["mind",7248,"","all"]',
+      }),
+    );
   });
 });

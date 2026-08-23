@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal, cast
 
 from backend.app.live_news.allowlist import SourceAllowlist
+from backend.app.live_news.content_document import ImageBlock
 from backend.app.live_news.content_normalize import body_hash
+from backend.app.live_news.content_parser import document_hash
 from backend.app.live_news.content_policy import ContentPolicy, ContentRights
 from backend.app.live_news.content_types import (
     AcquiredContent,
@@ -29,6 +32,7 @@ def ensure_content_job(
                 UPDATE live_news
                 SET content_rights = 'link_only',
                     body_status = 'metadata_only',
+                    body_structure_status = 'blocked',
                     body_text = NULL,
                     body_source = NULL,
                     body_fetched_at = NULL,
@@ -48,6 +52,11 @@ def ensure_content_job(
             """
             UPDATE live_news
             SET content_rights = %s,
+                body_structure_status = CASE
+                    WHEN body_document IS NOT NULL
+                         AND body_document_version = 'structured-1' THEN 'available'
+                    ELSE 'pending'
+                END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE article_id = %s
             """,
@@ -57,9 +66,30 @@ def ensure_content_job(
             """
             INSERT INTO live_news_content_job (
               article_id, status, attempt_count, next_attempt_at,
-              created_at, updated_at
-            ) VALUES (%s, 'pending', 0, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (article_id) DO NOTHING
+              target_extraction_version, requested_by, created_at, updated_at
+            ) VALUES (
+              %s, 'pending', 0, %s, 'structured-1', 'ingest',
+              CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (article_id) DO UPDATE SET
+              status = CASE
+                WHEN live_news_content_job.status = 'fetching' THEN 'fetching'
+                WHEN EXISTS (
+                  SELECT 1 FROM live_news
+                  WHERE article_id = EXCLUDED.article_id
+                    AND body_structure_status = 'available'
+                    AND body_document_version = 'structured-1'
+                ) THEN live_news_content_job.status
+                ELSE 'pending'
+              END,
+              next_attempt_at = CASE
+                WHEN live_news_content_job.status = 'fetching'
+                  THEN live_news_content_job.next_attempt_at
+                ELSE EXCLUDED.next_attempt_at
+              END,
+              target_extraction_version = 'structured-1',
+              requested_by = 'ingest',
+              updated_at = CURRENT_TIMESTAMP
             """,
             (article_id, now),
         )
@@ -110,7 +140,7 @@ def claim_due_content_jobs(
             WHERE job.article_id = due.article_id
               AND news.article_id = job.article_id
             RETURNING
-              news.article_id, news.canonical_url, news.source_domain,
+              news.article_id, news.canonical_url, news.source_domain, news.image_url,
               news.language, news.content_rights, job.attempt_count
             """,
             (now, limit, now, worker_id),
@@ -130,6 +160,7 @@ def claim_due_content_jobs(
                     expected_domain=policy.domain,
                     language=cast(Literal["zh", "en"], row["language"]),
                     policy=policy.content,
+                    lead_image_url=cast(str | None, row.get("image_url")),
                 ),
                 content_rights=cast(ContentRights, row["content_rights"]),
                 attempt_count=int(row["attempt_count"]),
@@ -143,6 +174,13 @@ def complete_content_job(
     job: ContentJob,
     acquired: AcquiredContent,
 ) -> None:
+    document = acquired.body_document
+    document_payload = (
+        json.dumps(document.model_dump(mode="json"), ensure_ascii=False) if document else None
+    )
+    structure_status = "available" if document else "missing"
+    structure_version = document.extraction_version if document else None
+    structure_hash = document_hash(document) if document else None
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -154,6 +192,11 @@ def complete_content_job(
                 body_content_hash = %s,
                 body_extraction_version = %s,
                 content_rights = %s,
+                body_document = %s::jsonb,
+                body_document_version = %s,
+                body_document_hash = %s,
+                body_structure_status = %s,
+                body_structure_updated_at = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE article_id = %s
             """,
@@ -164,9 +207,59 @@ def complete_content_job(
                 body_hash(acquired.body_text),
                 acquired.extraction_version,
                 job.content_rights,
+                document_payload,
+                structure_version,
+                structure_hash,
+                structure_status,
+                acquired.fetched_at,
                 job.article_id,
             ),
         )
+        cursor.execute(
+            "DELETE FROM live_news_content_asset WHERE article_id = %s",
+            (job.article_id,),
+        )
+        if document:
+            for block in document.blocks:
+                if not isinstance(block, ImageBlock):
+                    continue
+                cursor.execute(
+                    """
+                    INSERT INTO live_news_content_asset (
+                      asset_id, article_id, block_id, source_url, display_url,
+                      mime_type, width, height, alt_text, caption, credit,
+                      cache_status, created_at, updated_at
+                    ) VALUES (
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (article_id, block_id) DO UPDATE SET
+                      source_url = EXCLUDED.source_url,
+                      display_url = EXCLUDED.display_url,
+                      mime_type = EXCLUDED.mime_type,
+                      width = EXCLUDED.width,
+                      height = EXCLUDED.height,
+                      alt_text = EXCLUDED.alt_text,
+                      caption = EXCLUDED.caption,
+                      credit = EXCLUDED.credit,
+                      cache_status = EXCLUDED.cache_status,
+                      updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        block.asset_id,
+                        job.article_id,
+                        block.id,
+                        block.source_url,
+                        block.display_url,
+                        block.mime_type,
+                        block.width,
+                        block.height,
+                        block.alt,
+                        block.caption,
+                        block.credit,
+                        block.cache_status,
+                    ),
+                )
         cursor.execute(
             """
             UPDATE live_news_content_job
@@ -202,7 +295,9 @@ def retry_content_job(
         cursor.execute(
             """
             UPDATE live_news
-            SET body_status = 'pending', body_text = NULL,
+            SET body_status = CASE WHEN body_text IS NULL THEN 'pending' ELSE body_status END,
+                body_structure_status = 'pending',
+                body_structure_updated_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
             WHERE article_id = %s
             """,
@@ -234,12 +329,23 @@ def finish_content_job(
         cursor.execute(
             """
             UPDATE live_news
-            SET body_status = %s, body_text = NULL, body_source = NULL,
-                body_fetched_at = NULL, body_content_hash = NULL,
-                body_extraction_version = NULL, updated_at = CURRENT_TIMESTAMP
+            SET body_status = CASE WHEN body_text IS NULL THEN %s ELSE body_status END,
+                body_source = CASE WHEN body_text IS NULL THEN NULL ELSE body_source END,
+                body_fetched_at = CASE
+                    WHEN body_text IS NULL THEN NULL ELSE body_fetched_at
+                END,
+                body_content_hash = CASE
+                    WHEN body_text IS NULL THEN NULL ELSE body_content_hash
+                END,
+                body_extraction_version = CASE
+                    WHEN body_text IS NULL THEN NULL ELSE body_extraction_version
+                END,
+                body_structure_status = %s,
+                body_structure_updated_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
             WHERE article_id = %s
             """,
-            (status, job.article_id),
+            (status, status, job.article_id),
         )
 
 

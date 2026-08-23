@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from backend.app.news_spaces.types import NewsSpace
 from backend.app.repositories.base import RuntimeRepository
-from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
 from backend.app.schemas.category import CategoryListResponse
 from backend.app.schemas.event_track import EventTrackRequest, EventTrackResponse
 from backend.app.schemas.persona import PersonaListResponse
@@ -26,6 +26,11 @@ class ProductService:
 
     def get_article_card(self, source_space: NewsSpace, article_id: str) -> ArticleCardResponse:
         return self._repository.get_article_card(source_space, article_id)
+
+    def ensure_article_content(
+        self, source_space: NewsSpace, article_id: str
+    ) -> ContentEnsureResponse:
+        return self._repository.ensure_article_content(source_space, article_id)
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
         return self._repository.record_tracked_event(payload)

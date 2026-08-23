@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.app.auth.service import AuthenticatedUser, AuthService
 from backend.app.dependencies import get_feed_service
@@ -13,10 +14,36 @@ from backend.app.routers.auth import (
     get_auth_service_factory,
     require_current_user_when_auth_enabled,
 )
-from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
+from backend.app.schemas.feed import FeedExperimentArm, FeedResponse, FeedUpdateStatusResponse
 from backend.app.services.feed import FeedService
 
 router = APIRouter(tags=["recommendation"])
+
+
+@router.get("/feed/updates", response_model=FeedUpdateStatusResponse)
+def get_feed_update_status(
+    user_id: int = Query(..., description="Demo user ID."),
+    source_space: NewsSpace = Query("mind"),
+    language: LiveLanguage = Query("all"),
+    since: datetime = Query(..., description="Timezone-aware feed watermark."),
+    service: FeedService = Depends(get_feed_service),
+    current_user: AuthenticatedUser | None = Depends(require_current_user_when_auth_enabled),
+    auth_service_factory: Callable[[], AuthService] = Depends(get_auth_service_factory),
+) -> FeedUpdateStatusResponse:
+    authorize_user_access(user_id, current_user, auth_service_factory)
+    if since.tzinfo is None or since.utcoffset() is None:
+        raise HTTPException(status_code=422, detail="since must include a timezone")
+    if source_space == "mind" and language != "all":
+        raise HTTPException(
+            status_code=422,
+            detail="language filtering is only supported for source_space 'live'",
+        )
+    return service.get_feed_update_status(
+        user_id=user_id,
+        source_space=source_space,
+        language=language,
+        since=since,
+    )
 
 
 @router.get("/feed", response_model=FeedResponse)

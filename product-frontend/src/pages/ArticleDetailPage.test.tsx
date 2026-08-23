@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ensureArticleContent,
   getArticleCard,
   newClientId,
   sendTrackedEventKeepalive,
@@ -10,6 +11,7 @@ import {
 import ArticleDetailPage from "./ArticleDetailPage";
 
 const bumpProfile = vi.fn();
+const selectSourceSpace = vi.fn();
 
 vi.mock("../context/PersonaContext", () => ({
   usePersona: () => ({
@@ -23,7 +25,12 @@ vi.mock("../context/PersonaContext", () => ({
   }),
 }));
 
+vi.mock("../context/SourceSpaceContext", () => ({
+  useSourceSpace: () => ({ selectSourceSpace }),
+}));
+
 vi.mock("../api/client", () => ({
+  ensureArticleContent: vi.fn(),
   getArticleCard: vi.fn(),
   newClientId: vi.fn(),
   sendTrackedEventKeepalive: vi.fn(),
@@ -93,11 +100,26 @@ function renderPage(path = "/articles/mind/N301") {
   );
 }
 
+beforeEach(() => {
+  vi.mocked(ensureArticleContent).mockResolvedValue({
+    article_id: "N301",
+    status: "blocked",
+    enqueued: false,
+    retry_after_seconds: null,
+  });
+});
+
 describe("ArticleDetailPage entities", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(newClientId).mockReturnValue("route-load-1");
     vi.mocked(getArticleCard).mockResolvedValue(article as never);
+    vi.mocked(ensureArticleContent).mockResolvedValue({
+      article_id: "N301",
+      status: "blocked",
+      enqueued: false,
+      retry_after_seconds: null,
+    });
     vi.mocked(trackEvent).mockResolvedValue({
       ok: true,
       event_type: "detail_view",
@@ -262,5 +284,82 @@ describe("ArticleDetailPage live metadata", () => {
     renderPage("/articles/live/N301");
     expect(screen.getByText("文章编号无效。")).toBeInTheDocument();
     expect(getArticleCard).not.toHaveBeenCalled();
+  });
+});
+
+describe("ArticleDetailPage feed return navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(newClientId).mockReturnValue("route-load-return");
+    vi.mocked(getArticleCard).mockResolvedValue(article as never);
+    vi.mocked(trackEvent).mockResolvedValue({
+      ok: true,
+      event_type: "detail_view",
+      source_space: "mind",
+      profile_updated: false,
+      behavior_score: null,
+    });
+  });
+
+  it("marks the return action as sticky article navigation", async () => {
+    renderPage();
+
+    await screen.findByText(article.title);
+
+    expect(screen.getByRole("button", { name: "返回信息流" })).toHaveClass(
+      "zr-back-link",
+      "zr-back-link--sticky",
+    );
+  });
+
+  it("uses browser history when the article was opened from a feed", async () => {
+    render(
+      <MemoryRouter
+        initialIndex={1}
+        initialEntries={[
+          "/?category=sports",
+          {
+            pathname: "/articles/mind/N301",
+            state: {
+              fromFeed: true,
+              feedContextKey: '["mind",7004,"sports","all"]',
+            },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path="/" element={<div>restored-feed-route</div>} />
+          <Route
+            path="/articles/:sourceSpace/:articleId"
+            element={<ArticleDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(article.title);
+    fireEvent.click(screen.getByRole("button", { name: "返回信息流" }));
+
+    expect(await screen.findByText("restored-feed-route")).toBeInTheDocument();
+  });
+
+  it("falls back to the article source home for a direct detail visit", async () => {
+    render(
+      <MemoryRouter initialEntries={["/articles/mind/N301"]}>
+        <Routes>
+          <Route path="/" element={<div>source-home</div>} />
+          <Route
+            path="/articles/:sourceSpace/:articleId"
+            element={<ArticleDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(article.title);
+    fireEvent.click(screen.getByRole("button", { name: "返回信息流" }));
+
+    expect(selectSourceSpace).toHaveBeenCalledWith("mind");
+    expect(await screen.findByText("source-home")).toBeInTheDocument();
   });
 });

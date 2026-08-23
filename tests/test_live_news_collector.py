@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -129,3 +129,58 @@ def test_malformed_json_line_is_rejected_without_losing_valid_rows() -> None:
 
     assert result.accepted_count == 1
     assert result.rejected_count == 1
+
+
+def test_stale_checkpoint_is_bounded_by_replay_window() -> None:
+    store = FakeStore()
+    store.checkpoint = LiveNewsCheckpoint(
+        source_name="gdelt_gal",
+        last_batch_time=LATEST - timedelta(days=5),
+        last_etag=None,
+        last_modified=None,
+        last_success_at=LATEST - timedelta(days=5),
+        last_error=None,
+    )
+    requested_batches: list[str] = []
+
+    def fetch(url: str) -> FetchResult:
+        if url.endswith("feed.rss"):
+            return FetchResult(rss_bytes(), None, None)
+        requested_batches.append(url)
+        raise MissingBatch(url)
+
+    collector = LiveNewsCollector(
+        fetch=fetch,
+        store=store,
+        allowlist=load_allowlist(Path("config/live_news_sources.json")),
+        replay_minutes=60,
+    )
+
+    collector.run_once(now=LATEST)
+
+    assert len(requested_batches) == 61
+    assert "20260817011600" in requested_batches[0]
+
+
+def test_collector_stops_between_batches() -> None:
+    store = FakeStore()
+    stop_checks = iter([False, True])
+    requested_batches: list[str] = []
+
+    def fetch(url: str) -> FetchResult:
+        if url.endswith("feed.rss"):
+            return FetchResult(rss_bytes(), None, None)
+        requested_batches.append(url)
+        raise MissingBatch(url)
+
+    collector = LiveNewsCollector(
+        fetch=fetch,
+        store=store,
+        allowlist=load_allowlist(Path("config/live_news_sources.json")),
+        replay_minutes=60,
+        should_stop=lambda: next(stop_checks),
+    )
+
+    collector.run_once(now=LATEST)
+
+    assert len(requested_batches) == 1

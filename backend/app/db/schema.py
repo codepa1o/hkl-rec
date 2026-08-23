@@ -171,6 +171,16 @@ live_news = Table(
     Column("body_content_hash", String(64)),
     Column("body_extraction_version", String(32)),
     Column("content_rights", String(24), nullable=False, server_default=text("'link_only'")),
+    Column("body_document", JSONB),
+    Column("body_document_version", String(32)),
+    Column("body_document_hash", String(64)),
+    Column(
+        "body_structure_status",
+        String(24),
+        nullable=False,
+        server_default=text("'missing'"),
+    ),
+    Column("body_structure_updated_at", DateTime(timezone=True)),
     Column("link_failure_count", Integer, nullable=False, server_default=text("0")),
     Column("last_link_check_at", DateTime(timezone=True)),
     Column(
@@ -202,6 +212,10 @@ live_news = Table(
     CheckConstraint(
         "content_rights IN ('full_text', 'excerpt_only', 'link_only')",
         name="content_rights",
+    ),
+    CheckConstraint(
+        "body_structure_status IN ('missing', 'pending', 'available', 'failed', 'blocked')",
+        name="body_structure_status",
     ),
     CheckConstraint(
         "(body_status = 'available' AND body_text IS NOT NULL "
@@ -249,6 +263,18 @@ live_news_content_job = Table(
     Column("last_error_code", String(64)),
     Column("last_error_detail", Text),
     Column(
+        "target_extraction_version",
+        String(32),
+        nullable=False,
+        server_default=text("'structured-1'"),
+    ),
+    Column(
+        "requested_by",
+        String(24),
+        nullable=False,
+        server_default=text("'ingest'"),
+    ),
+    Column(
         "created_at",
         DateTime(timezone=True),
         nullable=False,
@@ -265,8 +291,59 @@ live_news_content_job = Table(
         "status IN ('pending', 'fetching', 'completed', 'blocked', 'failed')",
         name="status",
     ),
+    CheckConstraint(
+        "requested_by IN ('ingest', 'detail_on_demand', 'operator_backfill', 'version_upgrade')",
+        name="requested_by",
+    ),
     Index("idx_live_news_content_job_due", "status", "next_attempt_at"),
     comment="Durable acquisition queue for Live article body content.",
+)
+
+live_news_content_asset = Table(
+    "live_news_content_asset",
+    metadata,
+    Column("asset_id", String(64), primary_key=True),
+    Column(
+        "article_id",
+        String(64),
+        ForeignKey("live_news.article_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("block_id", String(64), nullable=False),
+    Column("source_url", Text, nullable=False),
+    Column("storage_key", Text),
+    Column("display_url", Text),
+    Column("mime_type", String(64)),
+    Column("width", Integer),
+    Column("height", Integer),
+    Column("alt_text", Text),
+    Column("caption", Text),
+    Column("credit", Text),
+    Column("content_hash", String(64)),
+    Column("cache_status", String(20), nullable=False, server_default=text("'remote_only'")),
+    Column("last_error_code", String(64)),
+    Column("fetched_at", DateTime(timezone=True)),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    ),
+    CheckConstraint("width IS NULL OR width > 0", name="width"),
+    CheckConstraint("height IS NULL OR height > 0", name="height"),
+    CheckConstraint(
+        "cache_status IN ('remote_only', 'pending', 'cached', 'failed', 'omitted')",
+        name="cache_status",
+    ),
+    UniqueConstraint("article_id", "block_id", name="article_block"),
+    Index("idx_live_news_content_asset_article", "article_id", "block_id"),
+    comment="Ordered image metadata and optional cache references for Live articles.",
 )
 
 live_news_source_checkpoint = Table(

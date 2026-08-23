@@ -1,0 +1,25 @@
+FROM python:3.13-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements-worker.txt /tmp/requirements-worker.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements-worker.txt
+
+RUN addgroup --system newsrec \
+    && adduser --system --ingroup newsrec --home /app newsrec
+
+COPY --chown=newsrec:newsrec backend /app/backend
+COPY --chown=newsrec:newsrec scripts /app/scripts
+COPY --chown=newsrec:newsrec config/live_news_sources.json /app/config/live_news_sources.json
+COPY --chown=newsrec:newsrec alembic /app/alembic
+COPY --chown=newsrec:newsrec alembic.ini /app/alembic.ini
+
+USER newsrec

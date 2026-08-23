@@ -46,6 +46,7 @@ def _request(
     url: str = "https://www.theguardian.com/world/2026/aug/18/example-story",
     domain: str = "theguardian.com",
     policy: ContentPolicy | None = None,
+    lead_image_url: str | None = None,
 ) -> ContentRequest:
     return ContentRequest(
         article_id="L0123456789abcdef0123456789abcdef",
@@ -53,6 +54,7 @@ def _request(
         expected_domain=domain,
         language="en",
         policy=policy or ContentPolicy("guardian_api", "full_text"),
+        lead_image_url=lead_image_url,
     )
 
 
@@ -79,6 +81,65 @@ def test_guardian_provider_extracts_fields_body() -> None:
     assert result.fetched_at == NOW
     assert fetcher.calls[0][1] == "content.guardianapis.com"
     assert "api-key=api-key" in fetcher.calls[0][0]
+    assert "show-blocks=all" in fetcher.calls[0][0]
+    assert "show-elements=image" in fetcher.calls[0][0]
+    assert "show-rights=all" in fetcher.calls[0][0]
+
+
+def test_guardian_provider_preserves_inline_image_order() -> None:
+    first = " ".join(["First complete paragraph about architecture."] * 8)
+    second = " ".join(["Second complete paragraph about the trading floor."] * 8)
+    body = (
+        '<figure><img src="https://i.guim.co.uk/lead.jpg" alt="Lead image"></figure>'
+        f"<p>{first}</p>"
+        '<figure><img src="https://i.guim.co.uk/floor.jpg" alt="Trading floor">'
+        '<figcaption>Trading floor. <span class="credit">Photograph: Example</span>'
+        "</figcaption></figure>"
+        f"<p>{second}</p>"
+    )
+    api_body = f"<p>{first}</p><p>{second}</p>"
+    payload = {
+        "response": {
+            "status": "ok",
+            "content": {
+                "webUrl": "https://www.theguardian.com/world/2026/aug/18/example-story",
+                "fields": {"body": api_body},
+                "elements": [
+                    {
+                        "type": "image",
+                        "relation": "main",
+                        "assets": [{"file": "https://i.guim.co.uk/different-api-main.jpg"}],
+                    }
+                ],
+            },
+        }
+    }
+    fetcher = FakeFetcher(
+        _response(json.dumps(payload).encode(), "application/json", "https://content.guardianapis.com/x"),
+        _response(
+            f"<html><body><article>{body}</article></body></html>".encode(),
+            "text/html",
+            "https://www.theguardian.com/world/2026/aug/18/example-story",
+        ),
+    )
+    request = _request(
+        lead_image_url="https://i.guim.co.uk/lead.jpg",
+        policy=ContentPolicy(
+            "guardian_api",
+            "full_text",
+            images={"display": "remote_url", "allowed_domains": ["i.guim.co.uk"]},
+        )
+    )
+
+    result = GuardianContentProvider(fetcher, "api-key", clock=lambda: NOW).acquire(request)
+
+    assert result.body_document is not None
+    assert [block.type for block in result.body_document.blocks] == [
+        "paragraph",
+        "image",
+        "paragraph",
+    ]
+    assert result.body_text == f"{first}\n\nTrading floor. Photograph: Example\n\n{second}"
 
 
 def test_guardian_provider_rejects_returned_url_mismatch() -> None:

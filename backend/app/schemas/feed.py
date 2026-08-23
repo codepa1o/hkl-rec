@@ -123,3 +123,9 @@ class FeedResponse(ApiModel):
         if any(item.source_space != self.source_space for item in self.items):
             raise ValueError("items must match response source_space")
         return self
+
+
+class FeedUpdateStatusResponse(ApiModel):
+    source_space: NewsSpace = DEFAULT_NEWS_SPACE
+    has_updates: bool
+    current_watermark: datetime | None = None

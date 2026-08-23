@@ -20,7 +20,8 @@ from backend.app.db.schema import metadata
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "20260816_0007"
 DUAL_SPACE_REVISION = "20260817_0009"
-HEAD_REVISION = "20260818_0010"
+CONTENT_REVISION = "20260818_0010"
+HEAD_REVISION = "20260821_0011"
 SOURCE_SPACE_TABLES = {
     "topic",
     "query_topic_map",
@@ -55,6 +56,11 @@ LIVE_NEWS_COLUMNS = {
     "body_content_hash",
     "body_extraction_version",
     "content_rights",
+    "body_document",
+    "body_document_version",
+    "body_document_hash",
+    "body_structure_status",
+    "body_structure_updated_at",
     "link_failure_count",
     "last_link_check_at",
     "created_at",
@@ -171,7 +177,7 @@ def test_alembic_has_one_dual_space_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     revision = script.get_revision(HEAD_REVISION)
     assert revision is not None
-    assert revision.down_revision == DUAL_SPACE_REVISION
+    assert revision.down_revision == CONTENT_REVISION
 
 
 def test_dual_space_migration_renders_reserved_seed_guard_in_offline_sql(

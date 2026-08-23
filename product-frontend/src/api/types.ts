@@ -77,6 +77,79 @@ export interface ArticleCardResponse {
   body_status?: "metadata_only" | "pending" | "available" | "blocked" | "failed";
   body_source?: "guardian_api" | "rss" | "html" | null;
   content_rights?: "full_text" | "excerpt_only" | "link_only";
+  body_document?: StructuredBodyDocument | null;
+  body_structure_status?: BodyStructureStatus;
+  body_document_version?: string | null;
+}
+
+export type BodyStructureStatus =
+  | "missing"
+  | "pending"
+  | "available"
+  | "failed"
+  | "blocked";
+
+export interface ParagraphContentBlock {
+  id: string;
+  type: "paragraph";
+  text: string;
+}
+
+export interface HeadingContentBlock {
+  id: string;
+  type: "heading";
+  level: 2 | 3 | 4;
+  text: string;
+}
+
+export interface QuoteContentBlock {
+  id: string;
+  type: "quote";
+  text: string;
+  attribution: string | null;
+}
+
+export interface ListContentBlock {
+  id: string;
+  type: "list";
+  ordered: boolean;
+  items: string[];
+}
+
+export interface ImageContentBlock {
+  id: string;
+  type: "image";
+  asset_id: string;
+  source_url: string;
+  display_url: string | null;
+  alt: string | null;
+  caption: string | null;
+  credit: string | null;
+  width: number | null;
+  height: number | null;
+  mime_type: string | null;
+  cache_status: "remote_only" | "pending" | "cached" | "failed" | "omitted";
+}
+
+export type StructuredContentBlock =
+  | ParagraphContentBlock
+  | HeadingContentBlock
+  | QuoteContentBlock
+  | ListContentBlock
+  | ImageContentBlock;
+
+export interface StructuredBodyDocument {
+  schema_version: 1;
+  extraction_version: string;
+  source: "guardian_api" | "rss" | "html";
+  blocks: StructuredContentBlock[];
+}
+
+export interface ContentEnsureResponse {
+  article_id: string;
+  status: BodyStructureStatus;
+  enqueued: boolean;
+  retry_after_seconds: number | null;
 }
 
 export type ArticleEntityType = "person" | "organization" | "location" | "other";
@@ -140,6 +213,12 @@ export interface FeedResponse {
   next_cursor: string | null;
   has_more: boolean;
   debug?: unknown;
+}
+
+export interface FeedUpdateStatusResponse {
+  source_space: NewsSpace;
+  has_updates: boolean;
+  current_watermark: string | null;
 }
 
 export interface SearchItemScores {

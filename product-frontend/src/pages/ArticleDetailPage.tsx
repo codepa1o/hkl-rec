@@ -1,7 +1,8 @@
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
+  ensureArticleContent,
   getArticleCard,
   newClientId,
   sendTrackedEventKeepalive,
@@ -14,6 +15,8 @@ import type {
   NewsSpace,
 } from "../api/types";
 import { usePersona } from "../context/PersonaContext";
+import { useSourceSpace } from "../context/SourceSpaceContext";
+import StructuredArticleBody from "../components/StructuredArticleBody";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
 import { dwellEventId, VisibleDwellAccumulator } from "../profile/visibleDwell";
 
@@ -49,7 +52,23 @@ function validArticleRoute(sourceSpace: string, articleId: string): sourceSpace 
   return false;
 }
 
+function isFeedNavigationState(
+  value: unknown,
+): value is { fromFeed: true; feedContextKey: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "fromFeed" in value &&
+    value.fromFeed === true &&
+    "feedContextKey" in value &&
+    typeof value.feedContextKey === "string" &&
+    value.feedContextKey.length > 0
+  );
+}
+
 export default function ArticleDetailPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { sourceSpace: routeSource, articleId: routeArticleId, newsId } = useParams<{
     sourceSpace?: string;
     articleId?: string;
@@ -59,11 +78,14 @@ export default function ArticleDetailPage() {
   const articleId = routeArticleId ?? newsId ?? "";
   const routeIsValid = validArticleRoute(sourceSpace, articleId);
   const { selectedPersona, bumpProfile } = usePersona();
+  const { selectSourceSpace } = useSourceSpace();
   const [data, setData] = useState<ArticleCardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
   const outboundTrackedRef = useRef(false);
+  const ensureRequestedRef = useRef(false);
+  const detailTrackedRef = useRef(false);
   const routeLoadId = useMemo(
     () => newClientId("article-detail"),
     [sourceSpace, articleId],
@@ -77,6 +99,8 @@ export default function ArticleDetailPage() {
     setData(null);
     setImageFailed(false);
     outboundTrackedRef.current = false;
+    ensureRequestedRef.current = false;
+    detailTrackedRef.current = false;
     getArticleCard(articleId, sourceSpace)
       .then((res) => {
         if (
@@ -102,7 +126,50 @@ export default function ArticleDetailPage() {
   }, [articleId, routeIsValid, sourceSpace]);
 
   useEffect(() => {
-    if (!data || !selectedPersona) return;
+    if (
+      !data ||
+      sourceSpace !== "live" ||
+      data.body_document ||
+      !["missing", "failed"].includes(data.body_structure_status ?? "missing") ||
+      data.content_rights === "link_only" ||
+      ensureRequestedRef.current
+    ) {
+      return;
+    }
+    ensureRequestedRef.current = true;
+    void ensureArticleContent(sourceSpace, articleId)
+      .then((response) => {
+        setData((current) =>
+          current
+            ? { ...current, body_structure_status: response.status }
+            : current,
+        );
+      })
+      .catch(() => undefined);
+  }, [articleId, data, sourceSpace]);
+
+  useEffect(() => {
+    if (!data || sourceSpace !== "live" || data.body_structure_status !== "pending") return;
+    let cancelled = false;
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden" || attempts >= 12) return;
+      attempts += 1;
+      void getArticleCard(articleId, sourceSpace)
+        .then((response) => {
+          if (!cancelled) setData(response);
+        })
+        .catch(() => undefined);
+    }, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [articleId, data?.body_structure_status, sourceSpace]);
+
+  useEffect(() => {
+    if (!data || !selectedPersona || detailTrackedRef.current) return;
+    detailTrackedRef.current = true;
     void trackEvent({
       event_id: `detail-${sourceSpace}:${selectedPersona.user_id}:${articleId}:${routeLoadId}`,
       user_id: selectedPersona.user_id,
@@ -211,14 +278,26 @@ export default function ArticleDetailPage() {
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean);
+  const handleReturnToFeed = () => {
+    if (isFeedNavigationState(location.state)) {
+      navigate(-1);
+      return;
+    }
+    selectSourceSpace(sourceSpace);
+    navigate("/", { replace: true });
+  };
 
   return (
     <main className="zr-center zr-article-page">
       <div className="zr-post-detail">
-        <Link to="/" className="zr-back-link">
+        <button
+          type="button"
+          className="zr-back-link zr-back-link--sticky"
+          onClick={handleReturnToFeed}
+        >
           <ArrowLeft size={14} />
           返回信息流
-        </Link>
+        </button>
 
         <div className="zr-card__meta">
           {mainCategory && (
@@ -260,7 +339,17 @@ export default function ArticleDetailPage() {
         <div className="zr-post-detail__content">
           <span className="zr-eyebrow">文章摘要</span>
           <div className="zr-post-detail__summary">{data.abstract}</div>
-          {bodyParagraphs.length > 0 ? (
+          {data.body_structure_status === "pending" && bodyParagraphs.length > 0 && (
+            <p className="zr-post-detail__body-state">正在优化图文排版</p>
+          )}
+          {data.body_document ? (
+            <section className="zr-post-detail__body" aria-labelledby="article-body-title">
+              <h2 id="article-body-title" className="zr-eyebrow">
+                正文
+              </h2>
+              <StructuredArticleBody document={data.body_document} />
+            </section>
+          ) : bodyParagraphs.length > 0 ? (
             <section className="zr-post-detail__body" aria-labelledby="article-body-title">
               <h2 id="article-body-title" className="zr-eyebrow">
                 正文

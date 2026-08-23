@@ -2,6 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from "react";
 import { listPersonas } from "../api/client";
 import type { PersonaCard } from "../api/types";
+import {
+  readPersonaSelection,
+  savePersonaSelection,
+} from "../feed/feedSessionStore";
 import { useAuth } from "./AuthContext";
 import { useSourceSpace } from "./SourceSpaceContext";
 
@@ -43,8 +47,12 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
         const items = accountPersona
           ? [accountPersona, ...res.items.filter((item) => item.user_id !== accountPersona.user_id)]
           : res.items;
+        const storedId = readPersonaSelection(user?.user_id ?? null, sourceSpace);
+        const restoredId = items.some((item) => item.user_id === storedId)
+          ? storedId
+          : null;
         setPersonas(items);
-        setSelectedId(accountPersona?.user_id ?? items[0]?.user_id ?? null);
+        setSelectedId(restoredId ?? accountPersona?.user_id ?? items[0]?.user_id ?? null);
         setError(null);
       })
       .catch((err: Error) => {
@@ -62,8 +70,9 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
 
   const selectPersona = useCallback((userId: number) => {
     setSelectedId(userId);
+    savePersonaSelection(user?.user_id ?? null, sourceSpace, userId);
     setRefreshTick((tick) => tick + 1);
-  }, []);
+  }, [sourceSpace, user?.user_id]);
 
   const bumpProfile = useCallback(() => {
     setRefreshTick((tick) => tick + 1);

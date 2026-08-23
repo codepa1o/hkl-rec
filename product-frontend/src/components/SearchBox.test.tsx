@@ -20,7 +20,7 @@ function LocationProbe() {
 }
 
 function renderSearchBox(initialEntry = "/", initialQuery = "") {
-  render(
+  return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <SearchBox initialQuery={initialQuery} />
       <LocationProbe />
@@ -35,6 +35,18 @@ describe("搜索框操作区", () => {
       source_space: "mind",
       items: [],
     });
+  });
+
+  it("cancels a pending suggestion request when the search box unmounts", async () => {
+    const view = renderSearchBox();
+    fireEvent.change(screen.getByPlaceholderText("搜索新闻"), {
+      target: { value: "climate" },
+    });
+
+    view.unmount();
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+    expect(listSearchSuggestions).not.toHaveBeenCalled();
   });
 
   it("按当前新闻空间请求搜索建议", async () => {

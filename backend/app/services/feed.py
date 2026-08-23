@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.repositories.base import RuntimeRepository
-from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
+from backend.app.schemas.feed import FeedExperimentArm, FeedResponse, FeedUpdateStatusResponse
 
 
 class FeedService:
@@ -35,4 +37,19 @@ class FeedService:
             category=category,
             source_space=source_space,
             language=language,
+        )
+
+    def get_feed_update_status(
+        self,
+        *,
+        user_id: int,
+        source_space: NewsSpace,
+        language: LiveLanguage,
+        since: datetime,
+    ) -> FeedUpdateStatusResponse:
+        return self._repository.get_feed_update_status(
+            user_id=user_id,
+            source_space=source_space,
+            language=language,
+            since=since,
         )

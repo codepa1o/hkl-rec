@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { ApiError, getFeed, newClientId, stableClientId, trackEvent } from "../api/client";
+import {
+  ApiError,
+  getFeed,
+  getFeedUpdateStatus,
+  newClientId,
+  stableClientId,
+  trackEvent,
+} from "../api/client";
 import type { FeedItem, LiveLanguage } from "../api/types";
 import PostCard from "../components/PostCard";
 import { usePersona } from "../context/PersonaContext";
 import { useSourceSpace } from "../context/SourceSpaceContext";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
+import type { FeedSessionSnapshot } from "../feed/feedSessionStore";
+import { useFeedSessionRestoration } from "../feed/useFeedSessionRestoration";
 
 const PAGE_SIZE = 20;
 
@@ -19,17 +28,26 @@ interface FeedEntry {
   requestId: string;
 }
 
+function latestFeedWatermark(items: FeedItem[]): string | null {
+  const timestamps = items
+    .map((item) => item.discovered_at)
+    .filter((value): value is string => Boolean(value));
+  return timestamps.length > 0 ? timestamps.sort().at(-1) ?? null : null;
+}
+
 export default function FeedPage() {
-  const { selectedPersona, refreshTick, bumpProfile } = usePersona();
+  const { selectedPersona, bumpProfile } = usePersona();
   const { sourceSpace } = useSourceSpace();
   const location = useLocation();
   const navigate = useNavigate();
-  const routeCategory = useMemo(
-    () => new URLSearchParams(location.search).get("category") || undefined,
-    [location.search],
-  );
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const routeCategory = searchParams.get("category") || undefined;
   const category = sourceSpace === "mind" ? routeCategory : undefined;
-  const [language, setLanguage] = useState<LiveLanguage>("all");
+  const routeLanguage = searchParams.get("language");
+  const language: LiveLanguage =
+    sourceSpace === "live" && (routeLanguage === "zh" || routeLanguage === "en")
+      ? routeLanguage
+      : "all";
   const [pages, setPages] = useState<FeedPageBatch[]>([]);
   const [feedUserId, setFeedUserId] = useState<number | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -40,6 +58,8 @@ export default function FeedPage() {
   const [invalidCategory, setInvalidCategory] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [feedWatermark, setFeedWatermark] = useState<string | null>(null);
+  const [hasNewUpdates, setHasNewUpdates] = useState(false);
   const trackedRef = useRef<Set<string>>(new Set());
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -48,18 +68,128 @@ export default function FeedPage() {
     () =>
       stableClientId(
         "feed",
-        `${location.key}:${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${refreshTick}:${category ?? "all"}:${language}`,
+        `${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${category ?? "all"}:${language}`,
       ),
-    [category, language, location.key, selectedPersona?.user_id, refreshTick, sourceSpace],
+    [category, language, selectedPersona?.user_id, sourceSpace],
   );
 
   useEffect(() => {
-    setLanguage("all");
-    if (sourceSpace === "live" && routeCategory) navigate("/", { replace: true });
-  }, [navigate, routeCategory, sourceSpace]);
+    if (sourceSpace !== "live" || !routeCategory) return;
+    const next = new URLSearchParams(location.search);
+    next.delete("category");
+    const query = next.toString();
+    navigate({ pathname: "/", search: query ? `?${query}` : "" }, { replace: true });
+  }, [location.search, navigate, routeCategory, sourceSpace]);
+
+  const context = useMemo(
+    () =>
+      selectedPersona
+        ? {
+            sourceSpace,
+            personaUserId: selectedPersona.user_id,
+            category: category ?? null,
+            language,
+          }
+        : null,
+    [category, language, selectedPersona?.user_id, sourceSpace],
+  );
+  const renderedArticleIds = useMemo(
+    () => pages.flatMap((page) => page.items.map((item) => item.article_id)),
+    [pages],
+  );
+  const hydrateFeed = useCallback(
+    (snapshot: FeedSessionSnapshot) => {
+      activeSessionRef.current = snapshot.contextKey;
+      loadingMoreRef.current = false;
+      trackedRef.current = new Set(
+        snapshot.pages.flatMap((page) =>
+          page.items.map(
+            (item) =>
+              `${snapshot.sourceSpace}:${snapshot.personaUserId}:${page.requestId}:${item.article_id}`,
+          ),
+        ),
+      );
+      setPages(snapshot.pages);
+      setFeedUserId(snapshot.feedUserId);
+      setNextCursor(snapshot.nextCursor);
+      setHasMore(snapshot.hasMore);
+      setFeedWatermark(snapshot.feedWatermark);
+      setLoading(false);
+      setLoadingMore(false);
+      setError(null);
+      setInvalidCategory(false);
+      setLoadMoreError(null);
+    },
+    [],
+  );
+  const restoration = useFeedSessionRestoration({
+    context,
+    state: { pages, feedUserId, nextCursor, hasMore, feedWatermark },
+    renderedArticleIds,
+    onHydrate: hydrateFeed,
+  });
 
   useEffect(() => {
-    if (!selectedPersona) return;
+    setHasNewUpdates(false);
+    if (
+      restoration.hydrationStatus !== "restored" ||
+      sourceSpace !== "live" ||
+      !selectedPersona ||
+      !feedWatermark
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const checkForUpdates = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const response = await getFeedUpdateStatus(
+          selectedPersona.user_id,
+          sourceSpace,
+          language,
+          feedWatermark,
+        );
+        if (!cancelled && response.source_space === sourceSpace) {
+          setHasNewUpdates(response.has_updates);
+        }
+      } catch {
+        // A background freshness check must never replace the restored feed.
+      }
+    };
+    void checkForUpdates();
+    const interval = window.setInterval(() => void checkForUpdates(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    feedWatermark,
+    language,
+    restoration.contextKey,
+    restoration.hydrationStatus,
+    selectedPersona?.user_id,
+    sourceSpace,
+  ]);
+
+  const reloadLatestFeed = useCallback(() => {
+    restoration.clear();
+    setHasNewUpdates(false);
+    loadingMoreRef.current = false;
+    setPages([]);
+    setFeedUserId(null);
+    setNextCursor(null);
+    setHasMore(false);
+    setFeedWatermark(null);
+    setLoading(false);
+    setLoadingMore(false);
+    setError(null);
+    setInvalidCategory(false);
+    setLoadMoreError(null);
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [restoration.clear]);
+
+  useEffect(() => {
+    if (!selectedPersona || restoration.hydrationStatus !== "miss") return;
     let cancelled = false;
     activeSessionRef.current = loadRequestId;
     loadingMoreRef.current = false;
@@ -72,6 +202,7 @@ export default function FeedPage() {
     setNextCursor(null);
     setHasMore(false);
     setFeedUserId(null);
+    setFeedWatermark(null);
     trackedRef.current = new Set();
     getFeed(
       selectedPersona.user_id,
@@ -89,6 +220,7 @@ export default function FeedPage() {
         setNextCursor(res.next_cursor);
         setHasMore(res.has_more);
         setFeedUserId(res.user_id);
+        setFeedWatermark(latestFeedWatermark(res.items));
       })
       .catch((err: Error) => {
         if (cancelled) return;
@@ -102,7 +234,14 @@ export default function FeedPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPersona, refreshTick, loadRequestId, category, sourceSpace, language]);
+  }, [
+    selectedPersona,
+    restoration.hydrationStatus,
+    loadRequestId,
+    category,
+    sourceSpace,
+    language,
+  ]);
 
   const visibleEntries = useMemo<FeedEntry[]>(() => {
     if (!selectedPersona || feedUserId !== selectedPersona.user_id) return [];
@@ -190,6 +329,7 @@ export default function FeedPage() {
       ]);
       setNextCursor(res.next_cursor);
       setHasMore(res.has_more);
+      setFeedWatermark((current) => latestFeedWatermark(res.items) ?? current);
     } catch (err) {
       if (activeSessionRef.current !== sessionId) return;
       const message = err instanceof Error ? err.message : "未知错误";
@@ -285,7 +425,17 @@ export default function FeedPage() {
               type="button"
               key={value}
               aria-pressed={language === value}
-              onClick={() => setLanguage(value)}
+              onClick={() => {
+                const next = new URLSearchParams(location.search);
+                next.delete("category");
+                if (value === "all") next.delete("language");
+                else next.set("language", value);
+                const query = next.toString();
+                navigate(
+                  { pathname: "/", search: query ? `?${query}` : "" },
+                  { replace: true },
+                );
+              }}
             >
               {value === "all" ? "全部" : value === "zh" ? "中文" : "English"}
             </button>
@@ -297,6 +447,16 @@ export default function FeedPage() {
         <div className="zr-status">正在加载信息流…</div>
       )}
       {trackingError && <div className="zr-status">{trackingError}</div>}
+
+      {hasNewUpdates && (
+        <button
+          type="button"
+          className="zr-feed-update-prompt"
+          onClick={reloadLatestFeed}
+        >
+          有新新闻
+        </button>
+      )}
 
       {!loading && visibleEntries.length === 0 && (
         <div className="zr-status">
@@ -319,6 +479,12 @@ export default function FeedPage() {
           showReason
           onTrackClick={() => handleClick(entry)}
           onProfileChanged={bumpProfile}
+          feedNavigationState={
+            restoration.contextKey
+              ? { fromFeed: true, feedContextKey: restoration.contextKey }
+              : undefined
+          }
+          onOpenArticle={restoration.captureArticle}
         />
       ))}
 

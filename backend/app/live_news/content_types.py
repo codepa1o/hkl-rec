@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from backend.app.live_news.content_policy import ContentPolicy, ContentRights
+
+if TYPE_CHECKING:
+    from backend.app.live_news.content_document import StructuredBodyDocument
 
 BodySource = Literal["guardian_api", "rss", "html"]
 BodyStatus = Literal["metadata_only", "pending", "available", "blocked", "failed"]
@@ -18,6 +21,7 @@ class ContentRequest:
     expected_domain: str
     language: Literal["zh", "en"]
     policy: ContentPolicy
+    lead_image_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,7 @@ class AcquiredContent:
     body_text: str
     fetched_at: datetime
     extraction_version: str
+    body_document: StructuredBodyDocument | None = None
 
 
 @dataclass(frozen=True)

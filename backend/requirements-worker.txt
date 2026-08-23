@@ -1,0 +1,9 @@
+# Runtime dependencies for the live-news collector, content worker, and migrations.
+python-dotenv==1.2.2
+pydantic==2.12.5
+psycopg[binary]>=3.2,<4
+SQLAlchemy>=2.0,<3
+alembic>=1.15,<2
+prometheus-client>=0.21,<1
+trafilatura>=2.1,<2.2
+lxml>=5.3,<7
