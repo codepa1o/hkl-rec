@@ -74,6 +74,7 @@ def ensure_content_job(
             ON CONFLICT (article_id) DO UPDATE SET
               status = CASE
                 WHEN live_news_content_job.status = 'fetching' THEN 'fetching'
+                WHEN live_news_content_job.status = 'blocked' THEN 'blocked'
                 WHEN EXISTS (
                   SELECT 1 FROM live_news
                   WHERE article_id = EXCLUDED.article_id
@@ -83,7 +84,7 @@ def ensure_content_job(
                 ELSE 'pending'
               END,
               next_attempt_at = CASE
-                WHEN live_news_content_job.status = 'fetching'
+                WHEN live_news_content_job.status IN ('fetching', 'blocked')
                   THEN live_news_content_job.next_attempt_at
                 ELSE EXCLUDED.next_attempt_at
               END,
@@ -102,6 +103,11 @@ def ensure_content_job(
                     WHEN 'completed' THEN
                         CASE WHEN news.body_text IS NOT NULL THEN 'available' ELSE 'pending' END
                     ELSE 'pending'
+                END,
+                body_structure_status = CASE job.status
+                    WHEN 'blocked' THEN 'blocked'
+                    WHEN 'failed' THEN 'failed'
+                    ELSE news.body_structure_status
                 END,
                 updated_at = CURRENT_TIMESTAMP
             FROM live_news_content_job AS job

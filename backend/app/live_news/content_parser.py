@@ -104,9 +104,7 @@ def _image_block(
     block_id = _stable_id(article_id, index, "image", url)
     return ImageBlock(
         id=block_id,
-        asset_id=hashlib.sha256(
-            f"{article_id}\0{block_id}\0{url}".encode()
-        ).hexdigest()[:32],
+        asset_id=hashlib.sha256(f"{article_id}\0{block_id}\0{url}".encode()).hexdigest()[:32],
         source_url=url,
         display_url=url,
         alt=str(image.get("alt") or "").strip() or None,

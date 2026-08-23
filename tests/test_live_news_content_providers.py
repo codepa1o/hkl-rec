@@ -115,7 +115,9 @@ def test_guardian_provider_preserves_inline_image_order() -> None:
         }
     }
     fetcher = FakeFetcher(
-        _response(json.dumps(payload).encode(), "application/json", "https://content.guardianapis.com/x"),
+        _response(
+            json.dumps(payload).encode(), "application/json", "https://content.guardianapis.com/x"
+        ),
         _response(
             f"<html><body><article>{body}</article></body></html>".encode(),
             "text/html",
@@ -128,7 +130,7 @@ def test_guardian_provider_preserves_inline_image_order() -> None:
             "guardian_api",
             "full_text",
             images={"display": "remote_url", "allowed_domains": ["i.guim.co.uk"]},
-        )
+        ),
     )
 
     result = GuardianContentProvider(fetcher, "api-key", clock=lambda: NOW).acquire(request)

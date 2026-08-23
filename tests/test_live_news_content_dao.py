@@ -359,10 +359,17 @@ def test_metadata_replay_preserves_blocked_job_state(postgres_connection) -> Non
 
         with postgres_connection.cursor() as cursor:
             cursor.execute(
-                "SELECT body_status FROM live_news WHERE article_id = %s",
+                """
+                SELECT body_status, body_structure_status
+                FROM live_news
+                WHERE article_id = %s
+                """,
                 (BLOCKED_ARTICLE_ID,),
             )
-            assert cursor.fetchone() == {"body_status": "blocked"}
+            assert cursor.fetchone() == {
+                "body_status": "blocked",
+                "body_structure_status": "blocked",
+            }
     finally:
         with postgres_connection.cursor() as cursor:
             cursor.execute(
