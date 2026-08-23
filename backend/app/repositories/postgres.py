@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -108,7 +109,7 @@ from backend.app.repositories.sponsored_dao import (
     record_sponsored_click,
     reserve_sponsored_delivery,
 )
-from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
 from backend.app.schemas.category import CategoryItem, CategoryListResponse
 from backend.app.schemas.common import TopicCard
 from backend.app.schemas.event import (
@@ -131,6 +132,7 @@ from backend.app.schemas.feed import (
     FeedItemScores,
     FeedProfileSummary,
     FeedResponse,
+    FeedUpdateStatusResponse,
     RecallCandidateDebug,
     SponsoredCandidateDebug,
     SponsoredFeedMetadata,
@@ -709,6 +711,25 @@ class PostgresRuntimeRepository(RuntimeRepository):
             raise
         finally:
             connection.close()
+
+    def get_feed_update_status(
+        self,
+        user_id: int,
+        source_space: NewsSpace,
+        language: LiveLanguage,
+        since: datetime,
+    ) -> FeedUpdateStatusResponse:
+        if source_space == "mind":
+            if language != "all":
+                raise ValueError("language filtering is only supported for source_space 'live'")
+            return FeedUpdateStatusResponse(
+                source_space="mind",
+                has_updates=False,
+                current_watermark=None,
+            )
+        if not self._settings.live_news_enabled:
+            raise RepositoryNotReadyError("GET /feed/updates?source_space=live")
+        return self._live_news_space.get_feed_update_status(language=language, since=since)
 
     def search(self, payload: SearchRequest) -> SearchResponse:
         if payload.source_space == "live":
@@ -1454,6 +1475,15 @@ class PostgresRuntimeRepository(RuntimeRepository):
             for row in rows
         ]
         return SuggestionListResponse(items=items)
+
+    def ensure_article_content(
+        self, source_space: NewsSpace, article_id: str
+    ) -> ContentEnsureResponse:
+        if source_space != "live" or not self._settings.live_news_enabled:
+            raise RepositoryNotReadyError(
+                f"POST /articles/{source_space}/{article_id}/content/ensure"
+            )
+        return self._live_news_space.ensure_structured_content(article_id)
 
     def get_article_card(self, source_space: NewsSpace, article_id: str) -> ArticleCardResponse:
         if source_space == "live":

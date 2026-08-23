@@ -32,6 +32,13 @@ export default function SearchBox({ initialQuery }: Props) {
     setOpen(false);
   }, [sourceSpace]);
 
+  useEffect(
+    () => () => {
+      clearTimeout(debounceRef.current);
+    },
+    [],
+  );
+
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {

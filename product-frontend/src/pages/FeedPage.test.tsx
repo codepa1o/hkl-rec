@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeedPage from "./FeedPage";
-import { getFeed, trackEvent } from "../api/client";
+import { getFeed, getFeedUpdateStatus, trackEvent } from "../api/client";
 import type { NewsSpace } from "../api/types";
+import {
+  FEED_SESSION_SCHEMA_VERSION,
+  buildFeedContextKey,
+  readFeedSnapshot,
+  saveFeedSnapshot,
+} from "../feed/feedSessionStore";
 
 const routeState = vi.hoisted(() => ({ key: "route-test", search: "" }));
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -38,14 +44,29 @@ vi.mock("react-router-dom", async (importOriginal) => {
 
 vi.mock("../api/client", () => ({
   getFeed: vi.fn(),
+  getFeedUpdateStatus: vi.fn(),
   newClientId: vi.fn(() => "feed-page-test"),
   stableClientId: vi.fn(() => "feed-load-test"),
   trackEvent: vi.fn(),
 }));
 
 vi.mock("../components/PostCard", () => ({
-  default: ({ item }: { item: { article_id: string } }) => (
-    <div data-testid={`article-${item.article_id}`}>{item.article_id}</div>
+  default: ({
+    item,
+    onOpenArticle,
+  }: {
+    item: { article_id: string };
+    onOpenArticle?: (articleId: string) => void;
+  }) => (
+    <article
+      data-testid={`article-${item.article_id}`}
+      data-article-id={item.article_id}
+    >
+      {item.article_id}
+      <button type="button" onClick={() => onOpenArticle?.(item.article_id)}>
+        open-{item.article_id}
+      </button>
+    </article>
   ),
 }));
 
@@ -130,12 +151,20 @@ class TestIntersectionObserver {
 
 describe("FeedPage impressions", () => {
   beforeEach(() => {
+    sessionStorage.clear();
     personaState.selectedPersona.user_id = 7248;
     personaState.refreshTick = 0;
     sourceState.sourceSpace = "mind";
     routeState.search = "";
     intersectionCallback = null;
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(window, "scrollBy").mockImplementation(() => undefined);
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
     vi.mocked(getFeed).mockResolvedValue({
       source_space: "mind",
       user_id: 7248,
@@ -273,6 +302,11 @@ describe("FeedPage impressions", () => {
       items: feedItems,
       next_cursor: null,
       has_more: false,
+    });
+    vi.mocked(getFeedUpdateStatus).mockResolvedValue({
+      source_space: "live",
+      has_updates: false,
+      current_watermark: null,
     });
     await waitFor(() =>
       expect(trackEvent).toHaveBeenCalledWith(
@@ -503,5 +537,261 @@ describe("FeedPage impressions", () => {
     });
     await act(async () => Promise.resolve());
     expect(screen.queryByTestId("article-N301")).not.toBeInTheDocument();
+  });
+
+  it("hydrates loaded pages and cursor without requesting page one again", async () => {
+    const contextKey = buildFeedContextKey({
+      sourceSpace: "mind",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+    });
+    saveFeedSnapshot({
+      schemaVersion: FEED_SESSION_SCHEMA_VERSION,
+      contextKey,
+      sourceSpace: "mind",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+      pages: [
+        { requestId: "restored-page-1", items: feedItems },
+        { requestId: "restored-page-2", items: [thirdFeedItem] },
+      ],
+      feedUserId: 7248,
+      nextCursor: "cursor-page-3",
+      hasMore: true,
+      anchorArticleId: "N303",
+      anchorViewportTop: 100,
+      scrollY: 3200,
+      feedWatermark: null,
+      savedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    });
+
+    render(<FeedPage />);
+
+    expect(await screen.findByTestId("article-N303")).toBeInTheDocument();
+    expect(getFeed).not.toHaveBeenCalled();
+
+    vi.mocked(getFeed).mockResolvedValueOnce({
+      source_space: "mind",
+      user_id: 7248,
+      request_id: "restored-page-3",
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+    act(() => {
+      intersectionCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+    });
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(1));
+    expect(getFeed).toHaveBeenCalledWith(
+      7248,
+      20,
+      true,
+      "feed-page-test",
+      "cursor-page-3",
+      undefined,
+      "mind",
+      "all",
+    );
+  });
+
+  it("does not hydrate a snapshot belonging to another source space", async () => {
+    const contextKey = buildFeedContextKey({
+      sourceSpace: "mind",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+    });
+    saveFeedSnapshot({
+      schemaVersion: FEED_SESSION_SCHEMA_VERSION,
+      contextKey,
+      sourceSpace: "mind",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+      pages: [{ requestId: "mind-page", items: feedItems }],
+      feedUserId: 7248,
+      nextCursor: null,
+      hasMore: false,
+      anchorArticleId: "N301",
+      anchorViewportTop: 100,
+      scrollY: 1000,
+      feedWatermark: null,
+      savedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    });
+    sourceState.sourceSpace = "live";
+    vi.mocked(getFeed).mockResolvedValueOnce({
+      source_space: "live",
+      user_id: 7248,
+      request_id: "live-page",
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    render(<FeedPage />);
+
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(1));
+    expect(getFeed).toHaveBeenCalledWith(
+      7248,
+      20,
+      true,
+      "feed-load-test",
+      undefined,
+      undefined,
+      "live",
+      "all",
+    );
+  });
+
+  it("uses the Live language from the URL as part of the feed context", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?language=zh";
+    vi.mocked(getFeed).mockResolvedValueOnce({
+      source_space: "live",
+      user_id: 7248,
+      request_id: "live-zh-page",
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    render(<FeedPage />);
+
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(1));
+    expect(getFeed).toHaveBeenCalledWith(
+      7248,
+      20,
+      true,
+      "feed-load-test",
+      undefined,
+      undefined,
+      "live",
+      "zh",
+    );
+  });
+
+  it("prompts for newer Live news without replacing the restored list", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?language=zh";
+    const liveItem = {
+      ...feedItems[0],
+      source_space: "live" as const,
+      article_id: "L0123456789abcdef0123456789abcdef",
+      news_id: null,
+      language: "zh" as const,
+      discovered_at: "2026-08-20T01:00:00Z",
+    };
+    const contextKey = buildFeedContextKey({
+      sourceSpace: "live",
+      personaUserId: 7248,
+      category: null,
+      language: "zh",
+    });
+    saveFeedSnapshot({
+      schemaVersion: FEED_SESSION_SCHEMA_VERSION,
+      contextKey,
+      sourceSpace: "live",
+      personaUserId: 7248,
+      category: null,
+      language: "zh",
+      pages: [{ requestId: "restored-live", items: [liveItem] }],
+      feedUserId: 7248,
+      nextCursor: null,
+      hasMore: false,
+      anchorArticleId: liveItem.article_id,
+      anchorViewportTop: 120,
+      scrollY: 3000,
+      feedWatermark: liveItem.discovered_at,
+      savedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    });
+    vi.mocked(getFeedUpdateStatus).mockResolvedValueOnce({
+      source_space: "live",
+      has_updates: true,
+      current_watermark: "2026-08-20T01:05:00Z",
+    });
+
+    render(<FeedPage />);
+
+    expect(await screen.findByTestId(`article-${liveItem.article_id}`)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "有新新闻" })).toBeInTheDocument();
+    expect(getFeed).not.toHaveBeenCalled();
+    expect(getFeedUpdateStatus).toHaveBeenCalledWith(
+      7248,
+      "live",
+      "zh",
+      liveItem.discovered_at,
+    );
+  });
+
+  it("clears only the active snapshot and reloads when the update prompt is clicked", async () => {
+    sourceState.sourceSpace = "live";
+    const liveItem = {
+      ...feedItems[0],
+      source_space: "live" as const,
+      article_id: "L0123456789abcdef0123456789abcdef",
+      news_id: null,
+      language: "en" as const,
+      discovered_at: "2026-08-20T01:00:00Z",
+    };
+    const contextKey = buildFeedContextKey({
+      sourceSpace: "live",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+    });
+    saveFeedSnapshot({
+      schemaVersion: FEED_SESSION_SCHEMA_VERSION,
+      contextKey,
+      sourceSpace: "live",
+      personaUserId: 7248,
+      category: null,
+      language: "all",
+      pages: [{ requestId: "restored-live", items: [liveItem] }],
+      feedUserId: 7248,
+      nextCursor: null,
+      hasMore: false,
+      anchorArticleId: liveItem.article_id,
+      anchorViewportTop: 120,
+      scrollY: 3000,
+      feedWatermark: liveItem.discovered_at,
+      savedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    });
+    vi.mocked(getFeedUpdateStatus).mockResolvedValueOnce({
+      source_space: "live",
+      has_updates: true,
+      current_watermark: "2026-08-20T01:05:00Z",
+    });
+    vi.mocked(getFeed).mockResolvedValueOnce({
+      source_space: "live",
+      user_id: 7248,
+      request_id: "fresh-live",
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    render(<FeedPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "有新新闻" }));
+
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(readFeedSnapshot(contextKey)?.pages).toEqual([
+        { requestId: "fresh-live", items: [] },
+      ]),
+    );
+    expect(window.scrollTo).toHaveBeenCalledWith({
+      top: 0,
+      left: 0,
+      behavior: "auto",
+    });
   });
 });

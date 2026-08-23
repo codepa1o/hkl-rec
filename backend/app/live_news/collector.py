@@ -93,6 +93,7 @@ class LiveNewsCollector:
         allowlist: SourceAllowlist,
         replay_minutes: int = 60,
         max_age_hours: int = 72,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         if replay_minutes < 0:
             raise ValueError("replay_minutes must be non-negative")
@@ -103,6 +104,7 @@ class LiveNewsCollector:
         self._allowlist = allowlist
         self._replay_minutes = replay_minutes
         self._max_age = timedelta(hours=max_age_hours)
+        self._should_stop = should_stop or (lambda: False)
 
     def run_once(self, *, now: datetime | None = None) -> list[LiveImportResult]:
         observed_now = (now or datetime.now(UTC)).astimezone(UTC)
@@ -115,10 +117,12 @@ class LiveNewsCollector:
         if checkpoint is None or checkpoint.last_batch_time is None:
             start = replay_start
         else:
-            start = min(checkpoint.last_batch_time + timedelta(minutes=1), replay_start)
+            start = max(checkpoint.last_batch_time + timedelta(minutes=1), replay_start)
         results: list[LiveImportResult] = []
         try:
             for batch_time in minute_range(start, latest):
+                if self._should_stop():
+                    break
                 timestamp = batch_time.strftime("%Y%m%d%H%M%S")
                 source_url = GAL_URL_TEMPLATE.format(timestamp=timestamp)
                 try:

@@ -49,6 +49,7 @@ logs/
 /build/mind_search/
 /build/search_eval/
 /build/backups/
+/backups/
 /build/ci_mind_raw/
 /build/ci_mind_normalized/
 /build/ci_mind_search/

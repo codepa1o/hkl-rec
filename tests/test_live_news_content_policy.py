@@ -35,7 +35,18 @@ def test_allowlist_parses_guardian_content_policy(tmp_path: Path) -> None:
     path = tmp_path / "sources.json"
     _write_sources(
         path,
-        {"mode": "guardian_api", "display": "full_text", "feed_urls": []},
+        {
+            "mode": "guardian_api",
+            "display": "full_text",
+            "feed_urls": [],
+            "images": {
+                "display": "remote_url",
+                "cache": "when_authorized",
+                "allowed_domains": ["i.guim.co.uk"],
+                "max_images_per_article": 20,
+                "max_bytes_per_image": 8_388_608,
+            },
+        },
     )
 
     policy = load_allowlist(path).match("example.com")
@@ -43,6 +54,9 @@ def test_allowlist_parses_guardian_content_policy(tmp_path: Path) -> None:
     assert policy is not None
     assert policy.content.mode == "guardian_api"
     assert policy.content.display == "full_text"
+    assert policy.content.images.display == "remote_url"
+    assert policy.content.images.cache == "when_authorized"
+    assert policy.content.images.allowed_domains == ("i.guim.co.uk",)
 
 
 @pytest.mark.parametrize(
@@ -57,6 +71,12 @@ def test_allowlist_parses_guardian_content_policy(tmp_path: Path) -> None:
         {"mode": "link_only", "display": "full_text", "feed_urls": []},
         {"mode": "browser", "display": "full_text", "feed_urls": []},
         {"mode": "html", "display": "unknown", "feed_urls": []},
+        {
+            "mode": "html",
+            "display": "full_text",
+            "feed_urls": [],
+            "images": {"display": "remote_url", "allowed_domains": []},
+        },
     ],
 )
 def test_allowlist_rejects_invalid_content_policy(

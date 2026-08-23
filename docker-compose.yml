@@ -1,5 +1,11 @@
 name: newsintentrec
 
+x-worker-image: &worker-image
+  image: newsrec-worker:local
+  build:
+    context: .
+    dockerfile: Dockerfile.worker
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,6 +25,57 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+
+  db-migrate:
+    <<: *worker-image
+    container_name: newsrec-db-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NEWSREC_DATABASE_URL: "postgresql://newsrec:newsrec@postgres:5432/newsrec_demo"
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+
+  live-news-collector:
+    <<: *worker-image
+    container_name: newsrec-live-news-collector
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      NEWSREC_DATABASE_URL: "postgresql://newsrec:newsrec@postgres:5432/newsrec_demo"
+      NEWSREC_LIVE_NEWS_COLLECTOR_ENABLED: "1"
+      NEWSREC_LIVE_NEWS_SOURCE_CONFIG: "config/live_news_sources.json"
+      NEWSREC_LIVE_NEWS_POLL_INTERVAL_SECONDS: "${NEWSREC_LIVE_NEWS_POLL_INTERVAL_SECONDS:-60}"
+      NEWSREC_LIVE_NEWS_REPLAY_MINUTES: "${NEWSREC_LIVE_NEWS_REPLAY_MINUTES:-60}"
+      NEWSREC_LIVE_NEWS_MAX_AGE_HOURS: "${NEWSREC_LIVE_NEWS_MAX_AGE_HOURS:-72}"
+      NEWSREC_LIVE_NEWS_COLLECTOR_METRICS_PORT: "${NEWSREC_LIVE_NEWS_COLLECTOR_METRICS_PORT:-9103}"
+    command: ["python", "scripts/run_live_news_collector.py"]
+
+  live-content-worker:
+    <<: *worker-image
+    container_name: newsrec-live-content-worker
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      NEWSREC_DATABASE_URL: "postgresql://newsrec:newsrec@postgres:5432/newsrec_demo"
+      NEWSREC_LIVE_NEWS_SOURCE_CONFIG: "config/live_news_sources.json"
+      NEWSREC_LIVE_CONTENT_WORKER_ENABLED: "1"
+      NEWSREC_GUARDIAN_API_KEY: "${NEWSREC_GUARDIAN_API_KEY:-}"
+      NEWSREC_LIVE_CONTENT_CONNECT_TIMEOUT_SECONDS: "${NEWSREC_LIVE_CONTENT_CONNECT_TIMEOUT_SECONDS:-5}"
+      NEWSREC_LIVE_CONTENT_READ_TIMEOUT_SECONDS: "${NEWSREC_LIVE_CONTENT_READ_TIMEOUT_SECONDS:-15}"
+      NEWSREC_LIVE_CONTENT_MAX_RESPONSE_BYTES: "${NEWSREC_LIVE_CONTENT_MAX_RESPONSE_BYTES:-2097152}"
+      NEWSREC_LIVE_CONTENT_WORKER_BATCH_SIZE: "${NEWSREC_LIVE_CONTENT_WORKER_BATCH_SIZE:-20}"
+      NEWSREC_LIVE_CONTENT_WORKER_CONCURRENCY: "${NEWSREC_LIVE_CONTENT_WORKER_CONCURRENCY:-4}"
+    command: ["python", "scripts/run_live_news_content_worker.py"]
 
 volumes:
   newsrec_postgres_data:

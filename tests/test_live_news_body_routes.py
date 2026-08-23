@@ -66,6 +66,9 @@ def _row(**changes: Any) -> dict[str, Any]:
         "body_status": "metadata_only",
         "body_source": None,
         "content_rights": "link_only",
+        "body_document": None,
+        "body_document_version": None,
+        "body_structure_status": "missing",
     }
     value.update(changes)
     return value
@@ -101,6 +104,67 @@ def test_full_text_article_returns_available_body(tmp_path: Path) -> None:
     assert article.body_status == "available"
     assert article.body_source == "html"
     assert article.content_rights == "full_text"
+
+
+def test_full_text_article_returns_valid_structured_document(tmp_path: Path) -> None:
+    document = {
+        "schema_version": 1,
+        "extraction_version": "structured-1",
+        "source": "html",
+        "blocks": [
+            {"id": "p-1", "type": "paragraph", "text": "First paragraph."},
+            {
+                "id": "img-2",
+                "type": "image",
+                "asset_id": "asset-2",
+                "source_url": "https://images.example.com/photo.jpg",
+                "display_url": "https://images.example.com/photo.jpg",
+                "alt": "Photo",
+                "caption": "Caption",
+                "credit": "Photograph: Example",
+                "width": 1200,
+                "height": 800,
+                "mime_type": "image/jpeg",
+                "cache_status": "remote_only",
+            },
+        ],
+    }
+
+    article = _repository(
+        tmp_path,
+        _row(
+            body_text="First paragraph.",
+            body_status="available",
+            body_source="html",
+            content_rights="full_text",
+            body_document=document,
+            body_document_version="structured-1",
+            body_structure_status="available",
+        ),
+    ).get_article(ARTICLE_ID)
+
+    assert article.body_document is not None
+    assert [block.type for block in article.body_document.blocks] == ["paragraph", "image"]
+    assert article.body_structure_status == "available"
+    assert article.body_document_version == "structured-1"
+
+
+def test_corrupt_structured_document_falls_back_to_plain_text(tmp_path: Path) -> None:
+    article = _repository(
+        tmp_path,
+        _row(
+            body_text="Readable fallback.",
+            body_status="available",
+            body_source="html",
+            content_rights="full_text",
+            body_document={"schema_version": 999, "blocks": []},
+            body_document_version="unknown",
+            body_structure_status="available",
+        ),
+    ).get_article(ARTICLE_ID)
+
+    assert article.body_document is None
+    assert article.body_text == "Readable fallback."
 
 
 def test_excerpt_only_article_never_returns_more_than_1000_characters(tmp_path: Path) -> None:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from backend.app.config import Settings
 from backend.app.errors import RepositoryNotReadyError
 from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.repositories.base import RuntimeRepository
-from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
 from backend.app.schemas.category import CategoryListResponse
 from backend.app.schemas.event import (
     EventAckResponse,
@@ -12,7 +14,7 @@ from backend.app.schemas.event import (
     SearchResultClickRequest,
 )
 from backend.app.schemas.event_track import EventTrackRequest, EventTrackResponse
-from backend.app.schemas.feed import FeedExperimentArm, FeedResponse
+from backend.app.schemas.feed import FeedExperimentArm, FeedResponse, FeedUpdateStatusResponse
 from backend.app.schemas.persona import PersonaListResponse
 from backend.app.schemas.profile import DebugProfileResponse, ProfileResponse
 from backend.app.schemas.search import SearchRequest, SearchResponse
@@ -43,6 +45,15 @@ class UnwiredRuntimeRepository(RuntimeRepository):
         language: LiveLanguage = "all",
     ) -> FeedResponse:
         raise RepositoryNotReadyError("GET /feed")
+
+    def get_feed_update_status(
+        self,
+        user_id: int,
+        source_space: NewsSpace,
+        language: LiveLanguage,
+        since: datetime,
+    ) -> FeedUpdateStatusResponse:
+        raise RepositoryNotReadyError("GET /feed/updates")
 
     def search(self, payload: SearchRequest) -> SearchResponse:
         raise RepositoryNotReadyError("POST /search")
@@ -77,6 +88,11 @@ class UnwiredRuntimeRepository(RuntimeRepository):
 
     def get_article_card(self, source_space: NewsSpace, article_id: str) -> ArticleCardResponse:
         raise RepositoryNotReadyError(f"GET /articles/{source_space}/{article_id}")
+
+    def ensure_article_content(
+        self, source_space: NewsSpace, article_id: str
+    ) -> ContentEnsureResponse:
+        raise RepositoryNotReadyError(f"POST /articles/{source_space}/{article_id}/content/ensure")
 
     def record_tracked_event(self, payload: EventTrackRequest) -> EventTrackResponse:
         raise RepositoryNotReadyError("POST /event/track")

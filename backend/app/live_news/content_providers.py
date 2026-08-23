@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import quote, urlencode, urlsplit
 from xml.etree import ElementTree
 
 from trafilatura import extract
 
+from backend.app.live_news.content_document import ImageBlock, StructuredBodyDocument
 from backend.app.live_news.content_fetch import SafeFetcher
 from backend.app.live_news.content_normalize import validate_body
+from backend.app.live_news.content_parser import derive_body_text, parse_structured_document
 from backend.app.live_news.content_types import (
     AcquiredContent,
+    BodySource,
     ContentAcquisitionError,
     ContentRequest,
 )
@@ -28,6 +32,12 @@ PAYWALL_MARKERS = (
 )
 
 
+def _image_identity(url: str) -> str:
+    path = urlsplit(url).path
+    match = re.search(r"/img/media/([^/]+)", path)
+    return match.group(1) if match else path
+
+
 class ContentProvider(Protocol):
     def acquire(self, request: ContentRequest) -> AcquiredContent: ...
 
@@ -36,7 +46,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _html_to_valid_body(html: str, request: ContentRequest) -> str:
+def _html_to_valid_body(html: str, request: ContentRequest) -> tuple[str, StructuredBodyDocument]:
     document = (
         html if "<html" in html.lower() else f"<html><body><article>{html}</article></body></html>"
     )
@@ -52,7 +62,15 @@ def _html_to_valid_body(html: str, request: ContentRequest) -> str:
         raise ContentAcquisitionError(
             "extraction_too_short", "provider returned no extractable body", retryable=False
         )
-    return validate_body(extracted, language=request.language)
+    document_model = parse_structured_document(
+        document,
+        article_id=request.article_id,
+        source=cast(BodySource, request.policy.mode),
+        base_url=request.canonical_url,
+        allowed_image_domains=frozenset(request.policy.images.allowed_domains),
+    )
+    body_text = validate_body(derive_body_text(document_model), language=request.language)
+    return body_text, document_model
 
 
 def _host_matches(host: str, domain: str) -> bool:
@@ -81,7 +99,15 @@ class GuardianContentProvider:
             raise ContentAcquisitionError(
                 "invalid_url", "Guardian article URL has no content path", retryable=False
             )
-        query = urlencode({"show-fields": "body", "api-key": self._api_key})
+        query = urlencode(
+            {
+                "show-fields": "body,headline,standfirst,thumbnail,byline",
+                "show-blocks": "all",
+                "show-elements": "image",
+                "show-rights": "all",
+                "api-key": self._api_key,
+            }
+        )
         api_url = f"https://content.guardianapis.com/{quote(path, safe='/')}?{query}"
         response = self._fetcher.get(
             api_url,
@@ -106,11 +132,47 @@ class GuardianContentProvider:
                 "Guardian response URL does not match the requested publisher",
                 retryable=False,
             )
+        body_text, body_document = _html_to_valid_body(body_html, request)
+        if request.policy.images.display != "omit":
+            try:
+                page_response = self._fetcher.get(
+                    request.canonical_url,
+                    expected_domain=request.expected_domain,
+                    accepted_content_types=frozenset({"text/html"}),
+                )
+                page_html = page_response.body.decode("utf-8")
+                enriched_text, enriched_document = _html_to_valid_body(page_html, request)
+                if any(block.type == "image" for block in enriched_document.blocks):
+                    body_text = enriched_text
+                    body_document = enriched_document
+            except (ContentAcquisitionError, UnicodeDecodeError):
+                pass
+        main_image_ids = {
+            _image_identity(str(asset["file"]))
+            for element in content.get("elements", [])
+            if element.get("type") == "image" and element.get("relation") == "main"
+            for asset in element.get("assets", [])
+            if asset.get("file")
+        }
+        if request.lead_image_url:
+            main_image_ids.add(_image_identity(request.lead_image_url))
+        if main_image_ids:
+            filtered_blocks = [
+                block
+                for block in body_document.blocks
+                if not (
+                    isinstance(block, ImageBlock)
+                    and _image_identity(block.source_url) in main_image_ids
+                )
+            ]
+            body_document = body_document.model_copy(update={"blocks": filtered_blocks})
+            body_text = validate_body(derive_body_text(body_document), language=request.language)
         return AcquiredContent(
             source="guardian_api",
-            body_text=_html_to_valid_body(body_html, request),
+            body_text=body_text,
             fetched_at=self._clock(),
             extraction_version=EXTRACTION_VERSION,
+            body_document=body_document,
         )
 
 
@@ -150,11 +212,13 @@ class RssContentProvider:
                 if not matches:
                     continue
                 content = item.findtext(CONTENT_ENCODED) or item.findtext("description") or ""
+                body_text, body_document = _html_to_valid_body(content, request)
                 return AcquiredContent(
                     source="rss",
-                    body_text=_html_to_valid_body(content, request),
+                    body_text=body_text,
                     fetched_at=self._clock(),
                     extraction_version=EXTRACTION_VERSION,
+                    body_document=body_document,
                 )
         raise ContentAcquisitionError(
             "rss_item_missing", "article is not present in configured feeds", retryable=True
@@ -188,9 +252,11 @@ class HtmlContentProvider:
             raise ContentAcquisitionError(
                 "paywall_or_login", "publisher page requires subscription or login", retryable=False
             )
+        body_text, body_document = _html_to_valid_body(html, request)
         return AcquiredContent(
             source="html",
-            body_text=_html_to_valid_body(html, request),
+            body_text=body_text,
             fetched_at=self._clock(),
             extraction_version=EXTRACTION_VERSION,
+            body_document=body_document,
         )

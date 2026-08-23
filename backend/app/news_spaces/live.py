@@ -3,8 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from pydantic import ValidationError
+
 from backend.app.config import Settings
 from backend.app.live_news.allowlist import SourceAllowlist
+from backend.app.live_news.content_document import StructuredBodyDocument
 from backend.app.live_news.ranking import (
     LiveCandidate,
     diversify_live_candidates,
@@ -19,9 +22,14 @@ from backend.app.repositories.sponsored_dao import (
     complete_feed_request,
     load_feed_session_news_ids,
 )
-from backend.app.schemas.article import ArticleCardResponse
+from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
 from backend.app.schemas.category import CategoryListResponse
-from backend.app.schemas.feed import FeedItem, FeedItemScores, FeedResponse
+from backend.app.schemas.feed import (
+    FeedItem,
+    FeedItemScores,
+    FeedResponse,
+    FeedUpdateStatusResponse,
+)
 from backend.app.schemas.search import (
     SearchItem,
     SearchItemScores,
@@ -45,6 +53,20 @@ def _visible_body(value: dict[str, Any]) -> str | None:
     excerpt = body[:BODY_EXCERPT_LIMIT]
     paragraph_end = excerpt.rfind("\n\n")
     return excerpt[:paragraph_end] if paragraph_end >= 700 else excerpt
+
+
+def _visible_document(value: dict[str, Any]) -> StructuredBodyDocument | None:
+    if (
+        value.get("content_rights") != "full_text"
+        or value.get("body_structure_status") != "available"
+        or value.get("body_document_version") != "structured-1"
+        or value.get("body_document") is None
+    ):
+        return None
+    try:
+        return StructuredBodyDocument.model_validate(value["body_document"])
+    except ValidationError:
+        return None
 
 
 class LiveNewsSpaceRepository:
@@ -130,6 +152,37 @@ class LiveNewsSpaceRepository:
         finally:
             connection.close()
 
+    def get_feed_update_status(
+        self,
+        *,
+        language: LiveLanguage,
+        since: datetime,
+    ) -> FeedUpdateStatusResponse:
+        language_clause = "" if language == "all" else "AND language = %s"
+        params: tuple[Any, ...] = () if language == "all" else (language,)
+        connection = self._connection_pool.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT MAX(discovered_at) AS current_watermark
+                    FROM live_news
+                    WHERE status = 'active'
+                      AND discovered_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+                      {language_clause}
+                    """,
+                    params,
+                )
+                row = cursor.fetchone()
+        finally:
+            connection.close()
+        current_watermark = cast(datetime | None, row["current_watermark"] if row else None)
+        return FeedUpdateStatusResponse(
+            source_space="live",
+            has_updates=current_watermark is not None and current_watermark > since,
+            current_watermark=current_watermark,
+        )
+
     def search(self, payload: SearchRequest) -> SearchResponse:
         query = " ".join((payload.query_text or payload.query_key or "").split())
         if not query:
@@ -213,6 +266,10 @@ class LiveNewsSpaceRepository:
         if row is None:
             raise LookupError(f"live news not found: {article_id}")
         value = dict(row)
+        body_document = _visible_document(value)
+        structure_status = value.get("body_structure_status") or "missing"
+        if structure_status == "available" and body_document is None:
+            structure_status = "failed"
         return ArticleCardResponse(
             source_space="live",
             article_id=article_id,
@@ -234,10 +291,106 @@ class LiveNewsSpaceRepository:
             body_status=value.get("body_status") or "metadata_only",
             body_source=value.get("body_source"),
             content_rights=value.get("content_rights") or "link_only",
+            body_document=body_document,
+            body_structure_status=structure_status,
+            body_document_version=(
+                str(value["body_document_version"])
+                if body_document and value.get("body_document_version")
+                else None
+            ),
         )
 
     def validate_article_id(self, article_id: str) -> None:
         self.get_article(article_id)
+
+    def ensure_structured_content(self, article_id: str) -> ContentEnsureResponse:
+        validate_article_id_shape("live", article_id)
+        connection = self._connection_pool.connect()
+        try:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                        SELECT source_domain, content_rights, body_document_version,
+                               body_structure_status
+                        FROM live_news
+                        WHERE article_id = %s AND status = 'active'
+                        FOR UPDATE
+                        """,
+                    (article_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise LookupError(f"live news not found: {article_id}")
+                policy = self._allowlist.match(str(row["source_domain"]))
+                if (
+                    policy is None
+                    or policy.content.mode == "link_only"
+                    or row["content_rights"] == "link_only"
+                ):
+                    cursor.execute(
+                        """
+                            UPDATE live_news
+                            SET body_structure_status = 'blocked',
+                                body_structure_updated_at = CURRENT_TIMESTAMP
+                            WHERE article_id = %s
+                            """,
+                        (article_id,),
+                    )
+                    return ContentEnsureResponse(
+                        article_id=article_id,
+                        status="blocked",
+                        enqueued=False,
+                        retry_after_seconds=None,
+                    )
+                if (
+                    row["body_structure_status"] == "available"
+                    and row["body_document_version"] == "structured-1"
+                ):
+                    return ContentEnsureResponse(
+                        article_id=article_id,
+                        status="available",
+                        enqueued=False,
+                        retry_after_seconds=None,
+                    )
+                cursor.execute(
+                    """
+                        INSERT INTO live_news_content_job (
+                          article_id, status, attempt_count, next_attempt_at,
+                          target_extraction_version, requested_by, created_at, updated_at
+                        ) VALUES (
+                          %s, 'pending', 0, CURRENT_TIMESTAMP,
+                          'structured-1', 'detail_on_demand',
+                          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT (article_id) DO UPDATE SET
+                          status = CASE
+                              WHEN live_news_content_job.status = 'fetching' THEN 'fetching'
+                              ELSE 'pending'
+                          END,
+                          next_attempt_at = CURRENT_TIMESTAMP,
+                          target_extraction_version = 'structured-1',
+                          requested_by = 'detail_on_demand',
+                          updated_at = CURRENT_TIMESTAMP
+                        """,
+                    (article_id,),
+                )
+                cursor.execute(
+                    """
+                        UPDATE live_news
+                        SET body_structure_status = 'pending',
+                            body_structure_updated_at = CURRENT_TIMESTAMP
+                        WHERE article_id = %s
+                        """,
+                    (article_id,),
+                )
+            return ContentEnsureResponse(
+                article_id=article_id,
+                status="pending",
+                enqueued=True,
+                retry_after_seconds=5,
+            )
+        finally:
+            connection.close()
 
     def list_categories(self) -> CategoryListResponse:
         return CategoryListResponse(source_space="live", items=[])

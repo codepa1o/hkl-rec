@@ -13,9 +13,16 @@ from backend.app.live_news.content_dao import (
     claim_due_content_jobs,
     complete_content_job,
     ensure_content_job,
+    finish_content_job,
+    retry_content_job,
+)
+from backend.app.live_news.content_document import (
+    ImageBlock,
+    ParagraphBlock,
+    StructuredBodyDocument,
 )
 from backend.app.live_news.content_policy import ContentPolicy
-from backend.app.live_news.content_types import AcquiredContent
+from backend.app.live_news.content_types import AcquiredContent, ContentJob, ContentRequest
 
 NOW = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
 ARTICLE_ID = "L0123456789abcdef0123456789abcdef"
@@ -87,6 +94,8 @@ def test_ensure_content_job_inserts_one_pending_eligible_job() -> None:
     statements = "\n".join(sql for sql, _params in connection.cursor_value.executed)
     assert "ELSE 'pending'" in statements
     assert "INSERT INTO live_news_content_job" in statements
+    assert "ON CONFLICT (article_id) DO UPDATE" in statements
+    assert "target_extraction_version = 'structured-1'" in statements
     assert connection.cursor_value.executed[0][1] == ("full_text", ARTICLE_ID)
     assert (ARTICLE_ID, NOW) in [params for _sql, params in connection.cursor_value.executed]
     assert connection.cursor_value.executed[-1][1] == (ARTICLE_ID,)
@@ -126,6 +135,101 @@ def test_claim_due_content_jobs_attaches_current_source_policy(tmp_path: Path) -
     assert jobs[0].request.policy.mode == "html"
     assert jobs[0].request.expected_domain == "example.com"
     assert jobs[0].attempt_count == 1
+
+
+def test_completion_persists_document_and_image_metadata_in_the_same_transaction() -> None:
+    connection = FakeConnection()
+    document = StructuredBodyDocument(
+        extraction_version="structured-1",
+        source="html",
+        blocks=[
+            ParagraphBlock(id="p-1", text="A complete paragraph."),
+            ImageBlock(
+                id="img-1",
+                asset_id="asset-1",
+                source_url="https://images.example.com/photo.jpg",
+                display_url="https://images.example.com/photo.jpg",
+                alt="Photo",
+                caption="Caption",
+                credit="Photograph: Example",
+                width=1200,
+                height=800,
+                mime_type="image/jpeg",
+                cache_status="remote_only",
+            ),
+        ],
+    )
+    job = ContentJob(
+        article_id=ARTICLE_ID,
+        request=ContentRequest(
+            article_id=ARTICLE_ID,
+            canonical_url="https://example.com/story",
+            expected_domain="example.com",
+            language="en",
+            policy=ContentPolicy("html", "full_text"),
+        ),
+        content_rights="full_text",
+        attempt_count=1,
+    )
+
+    complete_content_job(
+        connection,
+        job,
+        AcquiredContent(
+            source="html",
+            body_text="A complete paragraph.",
+            fetched_at=NOW,
+            extraction_version="structured-1",
+            body_document=document,
+        ),
+    )
+
+    statements = "\n".join(sql for sql, _params in connection.cursor_value.executed)
+    assert "body_document = %s" in statements
+    assert "body_structure_status = %s" in statements
+    assert any("available" in params for _sql, params in connection.cursor_value.executed)
+    assert "INSERT INTO live_news_content_asset" in statements
+    assert "ON CONFLICT (article_id, block_id) DO UPDATE" in statements
+    assert "UPDATE live_news_content_job" in statements
+
+
+def test_structure_retry_and_failure_preserve_existing_plain_text() -> None:
+    connection = FakeConnection()
+    job = ContentJob(
+        article_id=ARTICLE_ID,
+        request=ContentRequest(
+            article_id=ARTICLE_ID,
+            canonical_url="https://example.com/story",
+            expected_domain="example.com",
+            language="en",
+            policy=ContentPolicy("html", "full_text"),
+        ),
+        content_rights="full_text",
+        attempt_count=2,
+    )
+
+    retry_content_job(
+        connection,
+        job,
+        code="timeout",
+        detail="temporary",
+        next_attempt_at=NOW,
+    )
+    finish_content_job(
+        connection,
+        job,
+        status="failed",
+        code="extraction_too_short",
+        detail="permanent",
+    )
+
+    live_updates = [
+        sql for sql, _params in connection.cursor_value.executed if "UPDATE live_news\n" in sql
+    ]
+    assert live_updates
+    assert all("body_text = NULL" not in sql for sql in live_updates)
+    assert any("body_structure_status = 'pending'" in sql for sql in live_updates)
+    assert any("body_structure_status = %s" in sql for sql in live_updates)
 
 
 def test_postgres_store_wraps_claim_in_transaction_and_closes_connection(
@@ -255,10 +359,17 @@ def test_metadata_replay_preserves_blocked_job_state(postgres_connection) -> Non
 
         with postgres_connection.cursor() as cursor:
             cursor.execute(
-                "SELECT body_status FROM live_news WHERE article_id = %s",
+                """
+                SELECT body_status, body_structure_status
+                FROM live_news
+                WHERE article_id = %s
+                """,
                 (BLOCKED_ARTICLE_ID,),
             )
-            assert cursor.fetchone() == {"body_status": "blocked"}
+            assert cursor.fetchone() == {
+                "body_status": "blocked",
+                "body_structure_status": "blocked",
+            }
     finally:
         with postgres_connection.cursor() as cursor:
             cursor.execute(
