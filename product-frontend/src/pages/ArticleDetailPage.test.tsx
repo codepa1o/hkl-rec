@@ -266,6 +266,7 @@ describe("ArticleDetailPage live metadata", () => {
     expect(screen.getByText(/Reuters/)).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Live article" })).toBeInTheDocument();
 
+    await waitFor(() => expect(bumpProfile).toHaveBeenCalledTimes(1));
     const bumpsBeforeOutbound = bumpProfile.mock.calls.length;
     fireEvent.click(original);
     await waitFor(() =>
