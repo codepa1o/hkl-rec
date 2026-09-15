@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.app.config import Settings, get_settings  # noqa: E402
+from backend.app.config import (  # noqa: E402
+    Settings,
+    get_settings,
+    local_research_content_allowed,
+)
 from backend.app.live_news.allowlist import load_allowlist  # noqa: E402
 from backend.app.live_news.content_dao import PostgresLiveContentStore  # noqa: E402
 from backend.app.live_news.content_fetch import SafeFetcher  # noqa: E402
@@ -43,7 +47,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def build_provider_registry(settings: Settings, fetcher: SafeFetcher) -> ProviderRegistry:
     providers = {
         "rss": RssContentProvider(fetcher),
-        "html": HtmlContentProvider(fetcher),
+        "html": HtmlContentProvider(
+            fetcher,
+            local_research_allowed=local_research_content_allowed(settings),
+        ),
     }
     if settings.guardian_api_key:
         providers["guardian_api"] = GuardianContentProvider(

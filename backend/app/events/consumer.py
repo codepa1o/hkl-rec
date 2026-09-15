@@ -18,6 +18,7 @@ from backend.app.events.schema import (
     UserEventMessage,
 )
 from backend.app.events.worker_state import update_worker_heartbeat
+from backend.app.live_news.topic_dao import load_live_topic_ids
 from backend.app.observability import (
     CONSUMER_EVENTS,
     CONSUMER_LAG,
@@ -281,7 +282,7 @@ class ProfileEventApplier:
         news_topic_ids = (
             load_news_topic_ids(connection, event.article_id)
             if event.source_space == "mind"
-            else []
+            else load_live_topic_ids(connection, event.article_id)
         )
         query_topic_ids = {topic.topic_id for topic in query_topics}
         news_topic_set = set(news_topic_ids)
@@ -384,7 +385,7 @@ class ProfileEventApplier:
         news_topic_ids = (
             load_news_topic_ids(connection, event.article_id)
             if event.source_space == "mind"
-            else []
+            else load_live_topic_ids(connection, event.article_id)
         )
         topic_deltas = {topic_id: topic_delta for topic_id in news_topic_ids}
         record_click_event(
@@ -485,7 +486,7 @@ class ProfileEventApplier:
             news_topic_ids = (
                 load_news_topic_ids(connection, event.article_id)
                 if event.source_space == "mind"
-                else []
+                else load_live_topic_ids(connection, event.article_id)
             )
             self._project_profile_v2(
                 connection,

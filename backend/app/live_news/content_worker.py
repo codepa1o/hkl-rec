@@ -14,7 +14,13 @@ from backend.app.live_news.content_types import (
 )
 
 BLOCKED_FAILURE_CODES = frozenset(
-    {"blocked_by_policy", "authentication_required", "paywall_or_login"}
+    {
+        "blocked_by_policy",
+        "authentication_required",
+        "local_research_disabled",
+        "paywall_or_login",
+        "publisher_blocked",
+    }
 )
 
 

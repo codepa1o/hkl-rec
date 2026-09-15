@@ -23,6 +23,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB
 
+from backend.app.live_news.topic_schema import define_topic_tables
+
 metadata = MetaData(
     naming_convention={
         "pk": "pk_%(table_name)s",
@@ -171,6 +173,12 @@ live_news = Table(
     Column("body_content_hash", String(64)),
     Column("body_extraction_version", String(32)),
     Column("content_rights", String(24), nullable=False, server_default=text("'link_only'")),
+    Column(
+        "body_access_scope",
+        String(24),
+        nullable=False,
+        server_default=text("'public'"),
+    ),
     Column("body_document", JSONB),
     Column("body_document_version", String(32)),
     Column("body_document_hash", String(64)),
@@ -212,6 +220,10 @@ live_news = Table(
     CheckConstraint(
         "content_rights IN ('full_text', 'excerpt_only', 'link_only')",
         name="content_rights",
+    ),
+    CheckConstraint(
+        "body_access_scope IN ('public', 'local_research')",
+        name="body_access_scope",
     ),
     CheckConstraint(
         "body_structure_status IN ('missing', 'pending', 'available', 'failed', 'blocked')",
@@ -883,3 +895,5 @@ worker_heartbeat = Table(
     Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     comment="Readiness heartbeat and progress state for local Kafka workers.",
 )
+
+define_topic_tables(metadata)

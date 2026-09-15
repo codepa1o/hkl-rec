@@ -42,6 +42,7 @@ def test_feed_update_route_forwards_the_read_only_query(unwired_client) -> None:
         source_space="live",
         language="zh",
         since=datetime(2026, 8, 20, 1, 0, tzinfo=UTC),
+        category=None,
     )
 
 

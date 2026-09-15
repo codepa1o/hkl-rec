@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,10 @@ class Connection:
     def cursor(self) -> Cursor:
         return Cursor(self.row)
 
+    @contextmanager
+    def transaction(self):
+        yield
+
     def close(self) -> None:
         return None
 
@@ -66,6 +72,7 @@ def _row(**changes: Any) -> dict[str, Any]:
         "body_status": "metadata_only",
         "body_source": None,
         "content_rights": "link_only",
+        "body_access_scope": "public",
         "body_document": None,
         "body_document_version": None,
         "body_structure_status": "missing",
@@ -74,15 +81,25 @@ def _row(**changes: Any) -> dict[str, Any]:
     return value
 
 
-def _repository(tmp_path: Path, row: dict[str, Any]) -> LiveNewsSpaceRepository:
+def _repository(
+    tmp_path: Path,
+    row: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+    content: dict[str, Any] | None = None,
+) -> LiveNewsSpaceRepository:
     config = tmp_path / "sources.json"
-    config.write_text(
-        '{"sources":[{"domain":"example.com","languages":["en"],"quality_weight":0.8}]}',
-        encoding="utf-8",
-    )
+    source: dict[str, Any] = {
+        "domain": "example.com",
+        "languages": ["en"],
+        "quality_weight": 0.8,
+    }
+    if content is not None:
+        source["content"] = content
+    config.write_text(json.dumps({"sources": [source]}), encoding="utf-8")
     return LiveNewsSpaceRepository(
         Pool(row),  # type: ignore[arg-type]
-        Settings(),
+        settings or Settings(),
         load_allowlist(config),
     )
 
@@ -147,6 +164,61 @@ def test_full_text_article_returns_valid_structured_document(tmp_path: Path) -> 
     assert [block.type for block in article.body_document.blocks] == ["paragraph", "image"]
     assert article.body_structure_status == "available"
     assert article.body_document_version == "structured-1"
+
+
+def test_local_research_body_is_visible_only_when_development_gate_is_open(
+    tmp_path: Path,
+) -> None:
+    document = {
+        "schema_version": 1,
+        "extraction_version": "zh-xinhua-1",
+        "source": "html",
+        "blocks": [{"id": "p-1", "type": "paragraph", "text": "本地研究正文"}],
+    }
+    row = _row(
+        body_text="本地研究正文",
+        body_status="available",
+        body_source="html",
+        content_rights="full_text",
+        body_access_scope="local_research",
+        body_document=document,
+        body_document_version="zh-xinhua-1",
+        body_structure_status="available",
+    )
+
+    visible = _repository(
+        tmp_path,
+        row,
+        settings=Settings(
+            environment="development",
+            local_research_fulltext_enabled=True,
+        ),
+    ).get_article(ARTICLE_ID)
+    hidden = _repository(
+        tmp_path,
+        row,
+        settings=Settings(
+            environment="development",
+            local_research_fulltext_enabled=False,
+        ),
+    ).get_article(ARTICLE_ID)
+    production = _repository(
+        tmp_path,
+        row,
+        settings=Settings(
+            environment="production",
+            local_research_fulltext_enabled=True,
+        ),
+    ).get_article(ARTICLE_ID)
+
+    assert visible.body_text == "本地研究正文"
+    assert visible.body_document is not None
+    assert visible.body_access_scope == "local_research"
+    for redacted in (hidden, production):
+        assert redacted.body_text is None
+        assert redacted.body_document is None
+        assert redacted.content_rights == "link_only"
+        assert redacted.body_structure_status == "blocked"
 
 
 def test_corrupt_structured_document_falls_back_to_plain_text(tmp_path: Path) -> None:
@@ -232,3 +304,79 @@ def test_mind_article_response_defaults_to_metadata_only_body_contract() -> None
     assert article.body_status == "metadata_only"
     assert article.body_source is None
     assert article.content_rights == "link_only"
+
+
+def test_local_research_ensure_is_blocked_when_runtime_gate_is_closed(tmp_path: Path) -> None:
+    repository = _repository(
+        tmp_path,
+        _row(
+            content_rights="full_text",
+            body_access_scope="local_research",
+            body_structure_status="missing",
+        ),
+        settings=Settings(environment="development", local_research_fulltext_enabled=False),
+        content={
+            "mode": "html",
+            "display": "full_text",
+            "access_scope": "local_research",
+            "adapter": "xinhuanet",
+            "target_extraction_version": "zh-xinhua-1",
+            "allow_insecure_http": True,
+        },
+    )
+
+    response = repository.ensure_structured_content(ARTICLE_ID)
+
+    assert response.status == "blocked"
+    assert response.enqueued is False
+
+
+def test_local_research_ensure_accepts_adapter_current_version(tmp_path: Path) -> None:
+    repository = _repository(
+        tmp_path,
+        _row(
+            content_rights="full_text",
+            body_access_scope="local_research",
+            body_structure_status="available",
+            body_document_version="zh-xinhua-1",
+        ),
+        settings=Settings(environment="development", local_research_fulltext_enabled=True),
+        content={
+            "mode": "html",
+            "display": "full_text",
+            "access_scope": "local_research",
+            "adapter": "xinhuanet",
+            "target_extraction_version": "zh-xinhua-1",
+            "allow_insecure_http": True,
+        },
+    )
+
+    response = repository.ensure_structured_content(ARTICLE_ID)
+
+    assert response.status == "available"
+    assert response.enqueued is False
+
+
+def test_local_research_ensure_upgrades_legacy_link_only_article(tmp_path: Path) -> None:
+    repository = _repository(
+        tmp_path,
+        _row(
+            content_rights="link_only",
+            body_access_scope="public",
+            body_structure_status="blocked",
+        ),
+        settings=Settings(environment="development", local_research_fulltext_enabled=True),
+        content={
+            "mode": "html",
+            "display": "full_text",
+            "access_scope": "local_research",
+            "adapter": "xinhuanet",
+            "target_extraction_version": "zh-xinhua-1",
+            "allow_insecure_http": True,
+        },
+    )
+
+    response = repository.ensure_structured_content(ARTICLE_ID)
+
+    assert response.status == "pending"
+    assert response.enqueued is True

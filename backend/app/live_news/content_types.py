@@ -22,6 +22,7 @@ class ContentRequest:
     language: Literal["zh", "en"]
     policy: ContentPolicy
     lead_image_url: str | None = None
+    title: str = ""
 
 
 @dataclass(frozen=True)

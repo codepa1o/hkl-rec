@@ -44,6 +44,7 @@ def persist_batch(
     batch: NormalizedGalBatch,
     *,
     allowlist: SourceAllowlist | None = None,
+    local_research_allowed: bool = False,
 ) -> LiveImportResult:
     rejection_counts = Counter(item.reason for item in batch.rejections)
     with connection.cursor() as cursor:
@@ -127,7 +128,9 @@ def persist_batch(
         if allowlist is not None:
             for article in batch.articles:
                 policy = allowlist.match(article.source_domain)
-                if policy is not None:
+                if policy is not None and (
+                    policy.content.access_scope != "local_research" or local_research_allowed
+                ):
                     ensure_content_job(
                         connection,
                         article.article_id,
@@ -194,9 +197,12 @@ class PostgresLiveNewsStore:
         self,
         connection_factory: Callable[[], Any],
         allowlist: SourceAllowlist | None = None,
+        *,
+        local_research_allowed: bool = False,
     ) -> None:
         self._connection_factory = connection_factory
         self._allowlist = allowlist
+        self._local_research_allowed = local_research_allowed
 
     def load_checkpoint(self, source_name: str) -> LiveNewsCheckpoint | None:
         connection = self._connection_factory()
@@ -209,7 +215,12 @@ class PostgresLiveNewsStore:
         connection = self._connection_factory()
         try:
             with connection.transaction():
-                return persist_batch(connection, batch, allowlist=self._allowlist)
+                return persist_batch(
+                    connection,
+                    batch,
+                    allowlist=self._allowlist,
+                    local_research_allowed=self._local_research_allowed,
+                )
         finally:
             connection.close()
 

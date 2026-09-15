@@ -4,14 +4,17 @@ import json
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Protocol, cast
 from urllib.parse import quote, urlencode, urlsplit
 from xml.etree import ElementTree
 
+from lxml import html as lxml_html  # type: ignore[import-untyped]
 from trafilatura import extract
 
+from backend.app.live_news.content_decode import decode_html
 from backend.app.live_news.content_document import ImageBlock, StructuredBodyDocument
-from backend.app.live_news.content_fetch import SafeFetcher
+from backend.app.live_news.content_fetch import FetchPolicy, SafeFetcher
 from backend.app.live_news.content_normalize import validate_body
 from backend.app.live_news.content_parser import derive_body_text, parse_structured_document
 from backend.app.live_news.content_types import (
@@ -20,6 +23,7 @@ from backend.app.live_news.content_types import (
     ContentAcquisitionError,
     ContentRequest,
 )
+from backend.app.live_news.html_adapters import get_html_adapter
 from backend.app.live_news.normalize import canonicalize_url
 
 EXTRACTION_VERSION = "trafilatura-2.1"
@@ -77,6 +81,32 @@ def _host_matches(host: str, domain: str) -> bool:
     host = host.rstrip(".").lower()
     domain = domain.rstrip(".").lower()
     return host == domain or host.endswith(f".{domain}")
+
+
+def _normalized_title(value: str) -> str:
+    value = re.sub(r"(?:[-_—|]\s*)?(?:新华网.*|人民网.*|中新网.*)$", "", value.strip())
+    return "".join(character.casefold() for character in value if character.isalnum())
+
+
+def _page_title_matches(document_html: str, expected_title: str) -> bool:
+    expected = _normalized_title(expected_title)
+    if not expected:
+        return True
+    document = lxml_html.fromstring(document_html)
+    candidates = [
+        _normalized_title(str(value))
+        for value in document.xpath("//h1//text() | //title/text()")
+        if str(value).strip()
+    ]
+    if not candidates:
+        return True
+    return any(
+        expected in candidate
+        or candidate in expected
+        or SequenceMatcher(None, expected, candidate).ratio() >= 0.45
+        for candidate in candidates
+        if candidate
+    )
 
 
 class GuardianContentProvider:
@@ -231,32 +261,81 @@ class HtmlContentProvider:
         fetcher: SafeFetcher,
         *,
         clock: Callable[[], datetime] = _utc_now,
+        local_research_allowed: bool = False,
     ) -> None:
         self._fetcher = fetcher
         self._clock = clock
+        self._local_research_allowed = local_research_allowed
 
     def acquire(self, request: ContentRequest) -> AcquiredContent:
+        is_local_research = request.policy.access_scope == "local_research"
+        if is_local_research and not self._local_research_allowed:
+            raise ContentAcquisitionError(
+                "local_research_disabled",
+                "local research full text is disabled in this runtime",
+                retryable=False,
+            )
+        fetch_policy = (
+            FetchPolicy.local_research_http()
+            if request.policy.allow_insecure_http and is_local_research
+            else None
+        )
         response = self._fetcher.get(
             request.canonical_url,
             expected_domain=request.expected_domain,
             accepted_content_types=frozenset({"text/html"}),
+            fetch_policy=fetch_policy,
         )
-        try:
-            html = response.body.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ContentAcquisitionError(
-                "invalid_provider_payload", "HTML is not valid UTF-8", retryable=False
-            ) from exc
+        html = decode_html(response.body, response.content_type)
         lowered = html.casefold()
         if any(marker in lowered for marker in PAYWALL_MARKERS):
             raise ContentAcquisitionError(
                 "paywall_or_login", "publisher page requires subscription or login", retryable=False
             )
-        body_text, body_document = _html_to_valid_body(html, request)
+        adapter = get_html_adapter(request.policy.adapter)
+        document_html = html
+        extraction_version = EXTRACTION_VERSION
+        if adapter is not None:
+            if not _page_title_matches(html, request.title):
+                raise ContentAcquisitionError(
+                    "extraction_quality_failed",
+                    "publisher page title does not match the stored article title",
+                    retryable=False,
+                )
+            if adapter.extraction_version != request.policy.target_extraction_version:
+                raise ContentAcquisitionError(
+                    "unsupported_template",
+                    "configured extraction version does not match the HTML adapter",
+                    retryable=False,
+                )
+            prepared = adapter.prepare(html, base_url=request.canonical_url)
+            document_html = lxml_html.tostring(prepared, encoding="unicode")
+            extraction_version = adapter.extraction_version
+        try:
+            body_text, body_document = _html_to_valid_body(document_html, request)
+        except ContentAcquisitionError as exc:
+            if adapter is not None and exc.code == "extraction_too_short":
+                raise ContentAcquisitionError(
+                    "extraction_quality_failed",
+                    "article body does not meet local research quality thresholds",
+                    retryable=False,
+                ) from exc
+            raise
+        if adapter is not None:
+            body_document = body_document.model_copy(
+                update={"extraction_version": extraction_version}
+            )
+            text_block_count = sum(block.type != "image" for block in body_document.blocks)
+            if len(body_text) < 300 or text_block_count < 3:
+                raise ContentAcquisitionError(
+                    "extraction_quality_failed",
+                    "article body does not meet local research quality thresholds",
+                    retryable=False,
+                )
         return AcquiredContent(
             source="html",
             body_text=body_text,
             fetched_at=self._clock(),
-            extraction_version=EXTRACTION_VERSION,
+            extraction_version=extraction_version,
             body_document=body_document,
         )

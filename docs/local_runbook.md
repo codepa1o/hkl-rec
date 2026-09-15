@@ -109,3 +109,31 @@ npm --prefix product-frontend run build
 
 健康检查端点包括 `/livez`、`/readyz`、`/healthz` 和 `/metrics`。启用混合搜索时，就绪检查会
 验证规范化数据指纹、搜索制品哈希、FAISS 行数和编码器修订号。
+
+## 中文实时新闻本地研究全文
+
+新华网、人民网和中新网的正文采集仅供本机、论文和非公开演示。默认关闭；生产环境即使把
+开关设为 `1`，API 也不会返回 `local_research` 正文。澎湃新闻继续保持原文链接模式。
+
+启用前先迁移数据库并重建两个 Worker：
+
+```powershell
+$env:NEWSREC_ENVIRONMENT='development'
+$env:NEWSREC_LOCAL_RESEARCH_FULLTEXT_ENABLED='1'
+docker compose up -d --build db-migrate live-news-collector live-content-worker
+```
+
+先对单一来源做最多 20 篇 dry-run：
+
+```powershell
+python scripts/backfill_live_structured_content.py `
+  --language zh `
+  --source-suffix xinhuanet.com `
+  --since-days 7 `
+  --limit 20 `
+  --dry-run
+```
+
+去掉 `--dry-run` 只会把候选文章加入正文任务队列，实际抓取由 `live-content-worker` 完成。
+观察日志和数据库中的成功率、失败码、正文长度与结构块数量后再逐步扩大。不得绕过发布方的
+登录、验证码、403 或反爬限制，也不得将该模式部署给公网普通用户。

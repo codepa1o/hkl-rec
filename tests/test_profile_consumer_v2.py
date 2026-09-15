@@ -236,10 +236,12 @@ def test_live_click_never_loads_mind_topics_and_persists_canonical_identity(
         lambda *args, **kwargs: calls.append(kwargs),
     )
 
+    monkeypatch.setattr(consumer, "load_live_topic_ids", lambda *_: [1000004])
     applier._apply_recommendation_click(object(), live_event, project_profile=False)
 
     assert calls[0]["source_space"] == "live"
     assert calls[0]["article_id"] == live_event.article_id
+    assert calls[0]["topic_ids"] == [1000004]
 
 
 def test_consumer_training_message_is_schema_v5_and_space_scoped() -> None:

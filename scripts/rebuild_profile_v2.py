@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app.config import Settings, get_settings  # noqa: E402
 from backend.app.events.schema import UserEventMessage, UserEventType  # noqa: E402
+from backend.app.live_news.topic_dao import load_live_topic_ids  # noqa: E402
 from backend.app.news_spaces.types import NewsSpace  # noqa: E402
 from backend.app.profiles.signals import topic_strengths_for_event  # noqa: E402
 from backend.app.repositories._utils import parse_json  # noqa: E402
@@ -300,6 +301,10 @@ def replay_event(
     news_topic_ids = [] if event.event_type == "search_result_click" else _stored_topic_ids(row)
     if event.source_space == "mind" and event.article_id is not None and not news_topic_ids:
         news_topic_ids = load_news_topic_ids(connection, event.article_id)
+    elif event.source_space == "live" and event.article_id is not None:
+        # Live metadata can change; immutable event snapshots are audit facts,
+        # not the current catalog classification used to rebuild projections.
+        news_topic_ids = load_live_topic_ids(connection, event.article_id)
     query_topic_ids = (
         [item.topic_id for item in load_query_topics(connection, event.query_key)]
         if event.source_space == "mind"

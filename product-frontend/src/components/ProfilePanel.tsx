@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { getProfile, resetProfile } from "../api/client";
 import type { NewsSpace, ProfileResponse, ProfileTopicEvidence } from "../api/types";
@@ -38,14 +38,27 @@ function TopicGroup({
   title,
   topics,
   tone = "positive",
+  scoreTotal,
 }: {
   title: string;
   topics: ProfileTopicEvidence[];
   tone?: "positive" | "negative";
+  scoreTotal?: number | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (topics.length === 0) return null;
-  const visibleTopics = expanded ? topics : topics.slice(0, 5);
+  const weights = topics.map((topic) => Number.isFinite(topic.score)
+    ? Math.max(0, tone === "negative" ? -topic.score : topic.score) : 0);
+  // Normalize before folding; the backend denominator also includes omitted top-k topics.
+  // Older servers without a total fall back to all returned topics in this group.
+  const returnedTotal = weights.reduce((sum, weight) => sum + weight, 0);
+  const total = typeof scoreTotal === "number" && Number.isFinite(scoreTotal)
+    ? Math.max(returnedTotal, scoreTotal) : returnedTotal;
+  const shares = topics.map((topic, index) => ({
+    topic,
+    percent: total > 0 ? Math.round((weights[index] / total) * 1000) / 10 : 0,
+  }));
+  const visibleTopics = expanded ? shares : shares.slice(0, 5);
 
   return (
     <section className="zr-profile-group" aria-label={title}>
@@ -53,18 +66,21 @@ function TopicGroup({
         <h3>{title}</h3>
         <span>{topics.length}</span>
       </div>
+      <p className="zr-profile-updating">
+        {tone === "negative" ? "本组减少推荐强度占比，独立于正向兴趣" : "同层兴趣占比，非预测概率；折叠不影响计算"}
+      </p>
       <div className="zr-profile-topic-list">
-        {visibleTopics.map((topic) => (
+        {visibleTopics.map(({ topic, percent }) => (
           <article
             className={`zr-profile-topic zr-profile-topic--${tone}`}
             key={topic.topic_id}
           >
             <div className="zr-profile-topic__line">
               <strong>{localizeCategoryName(topic.display_name)}</strong>
-              <span>{Math.round(Math.abs(topic.score) * 100)}%</span>
+              <span>{percent}%</span>
             </div>
             <div className="zr-profile-topic__track" aria-hidden="true">
-              <span style={{ width: `${Math.min(100, Math.abs(topic.score) * 100)}%` }} />
+              <span style={{ width: `${percent}%` }} />
             </div>
             <p>{evidenceExplanation(topic)}</p>
           </article>
@@ -111,34 +127,51 @@ export default function ProfilePanel({
   const [error, setError] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  const cancelLoad = useRef<(() => void) | undefined>();
 
   const load = useCallback(() => {
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let followUps = 0;
     setLoading(true);
     setError(null);
     setData(null);
-    getProfile(sourceSpace, userId)
-      .then((profile) => {
-        if (
-          active &&
-          profile.source_space === sourceSpace &&
-          profile.user_id === userId
-        ) {
-          setData(profile);
-        }
-      })
-      .catch((requestError: Error) => {
-        if (active) setError(requestError.message);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    const refresh = () => {
+      getProfile(sourceSpace, userId)
+        .then((profile) => {
+          if (
+            active &&
+            profile.source_space === sourceSpace &&
+            profile.user_id === userId
+          ) {
+            setData(profile);
+            setError(null);
+          }
+        })
+        .catch((requestError: Error) => {
+          if (active) setError(requestError.message);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+          if (active && sourceSpace === "live" && followUps < 5) {
+            followUps += 1;
+            timer = setTimeout(refresh, 2000);
+          }
+        });
+    };
+    refresh();
     return () => {
       active = false;
+      if (timer) clearTimeout(timer);
     };
   }, [sourceSpace, userId]);
 
-  useEffect(load, [load, refreshTick]);
+  useEffect(() => {
+    const cancel = load();
+    cancelLoad.current = cancel;
+    return cancel;
+  }, [load, refreshTick, reloadTick]);
 
   const reduced = useMemo(() => (data ? reducedTopics(data) : []), [data]);
   const isEmpty =
@@ -154,6 +187,7 @@ export default function ProfilePanel({
       return;
     }
     setResetting(true);
+    cancelLoad.current?.();
     setError(null);
     try {
       const profile = await resetProfile(sourceSpace, userId);
@@ -175,7 +209,7 @@ export default function ProfilePanel({
     return (
       <div className="zr-rail-card zr-status" role="alert">
         <p>兴趣画像加载失败：{localizeInterfaceError(error)}</p>
-        <button className="zr-profile-text-action" type="button" onClick={load}>
+        <button className="zr-profile-text-action" type="button" onClick={() => setReloadTick((tick) => tick + 1)}>
           重新加载
         </button>
       </div>
@@ -199,19 +233,19 @@ export default function ProfilePanel({
         </p>
         <div className="zr-profile-confidence">
           <span>{STATUS_LABELS[data.status]}</span>
-          <strong>{confidence}% 置信度</strong>
+          <strong title="根据互动证据数量计算，不代表画像准确率">{confidence}% {sourceSpace === "live" ? "画像积累度" : "置信度"}</strong>
         </div>
         <div
           className="zr-profile-confidence__track"
           role="progressbar"
-          aria-label="画像置信度"
+          aria-label={sourceSpace === "live" ? "画像积累度" : "画像置信度"}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={confidence}
         >
           <span style={{ width: `${confidence}%` }} />
         </div>
-        <p className="zr-profile-evidence-total">已参考 {data.evidence_count} 次有效互动</p>
+        <p className="zr-profile-evidence-total">已参考 {data.evidence_count} 次{sourceSpace === "live" ? "有主题依据的互动" : "有效互动"}</p>
       </header>
 
       {loading && <p className="zr-profile-updating">正在同步最新变化…</p>}
@@ -220,14 +254,14 @@ export default function ProfilePanel({
           <strong>你的画像还很轻</strong>
           <p>
             {sourceSpace === "live"
-              ? "阅读和互动后，这里会逐渐记录独立的实时新闻偏好与最近活动。"
+              ? "阅读记录已独立保存。新闻主题分析完成后，点击和深度阅读将形成短期与长期兴趣；主题不明确的内容仅保留最近活动。"
               : "阅读、搜索、停留或点踩后，这里会逐渐形成可解释的兴趣主题。"}
           </p>
         </div>
       ) : (
         <div className="zr-profile-groups">
-          <TopicGroup title="短期兴趣" topics={data.short_term.interests} />
-          <TopicGroup title="长期兴趣" topics={data.long_term.interests} />
+          <TopicGroup title="短期兴趣" topics={data.short_term.interests} scoreTotal={data.short_term.positive_score_total} />
+          <TopicGroup title="长期兴趣" topics={data.long_term.interests} scoreTotal={data.long_term.positive_score_total} />
           <TopicGroup title="减少推荐" topics={reduced} tone="negative" />
         </div>
       )}

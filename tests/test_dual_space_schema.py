@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "20260816_0007"
 DUAL_SPACE_REVISION = "20260817_0009"
 CONTENT_REVISION = "20260818_0010"
-HEAD_REVISION = "20260821_0011"
+STRUCTURED_REVISION = "20260821_0011"
+HEAD_REVISION = "20260914_0013"
 SOURCE_SPACE_TABLES = {
     "topic",
     "query_topic_map",
@@ -33,6 +34,10 @@ SOURCE_SPACE_TABLES = {
     "user_event",
 }
 LIVE_NEWS_COLUMNS = {
+    "topic_status",
+    "topic_classifier_version",
+    "topic_classified_at",
+    "topic_input_hash",
     "article_id",
     "canonical_url",
     "source_external_id",
@@ -56,6 +61,7 @@ LIVE_NEWS_COLUMNS = {
     "body_content_hash",
     "body_extraction_version",
     "content_rights",
+    "body_access_scope",
     "body_document",
     "body_document_version",
     "body_document_hash",
@@ -177,7 +183,7 @@ def test_alembic_has_one_dual_space_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     revision = script.get_revision(HEAD_REVISION)
     assert revision is not None
-    assert revision.down_revision == CONTENT_REVISION
+    assert revision.down_revision == "20260914_0012"
 
 
 def test_dual_space_migration_renders_reserved_seed_guard_in_offline_sql(
@@ -226,7 +232,10 @@ def test_metadata_scopes_profiles_topics_queries_and_events() -> None:
         for constraint in metadata.tables["topic"].constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    assert topic_uniques == {"uq_topic_space_key": ["source_space", "topic_key"]}
+    assert topic_uniques == {
+        "uq_topic_space_key": ["source_space", "topic_key"],
+        "uq_topic_id_space": ["topic_id", "source_space"],
+    }
 
     event = metadata.tables["user_event"]
     assert event.c.article_id.type.length == 64
@@ -256,6 +265,7 @@ def test_metadata_defines_live_catalog_tables_checks_and_indexes() -> None:
         "chk_live_news_language",
         "chk_live_news_published_at_quality",
         "chk_live_news_status",
+        "chk_live_news_body_access_scope",
     }
 
     checkpoint = metadata.tables["live_news_source_checkpoint"]
@@ -431,6 +441,11 @@ def _assert_upgraded_schema(connection: Any, *, user_id: int, news_id: str) -> N
     check_expectations = {
         ("live_news", "chk_live_news_language", "language"): {"zh", "en"},
         ("live_news", "chk_live_news_status", "status"): {"active", "inactive"},
+        (
+            "live_news",
+            "chk_live_news_body_access_scope",
+            "body_access_scope",
+        ): {"public", "local_research"},
         (
             "live_news",
             "chk_live_news_published_at_quality",

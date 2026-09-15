@@ -153,6 +153,19 @@ it("renders available body as separate text paragraphs", async () => {
   expect(screen.getByText("正文")).toBeInTheDocument();
 });
 
+it("labels visible local research full text", async () => {
+  renderPage({
+    ...baseArticle,
+    body_text: "本地研究正文第一段。\n\n本地研究正文第二段。",
+    body_status: "available",
+    body_source: "html",
+    content_rights: "full_text",
+    body_access_scope: "local_research",
+  });
+
+  expect(await screen.findByText("本地研究正文")).toBeInTheDocument();
+});
+
 it("renders provider markup as text instead of executable HTML", async () => {
   renderPage({
     ...baseArticle,

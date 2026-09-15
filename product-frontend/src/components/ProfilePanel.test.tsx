@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getProfile, resetProfile } from "../api/client";
 import type { ProfileResponse } from "../api/types";
 import ProfilePanel from "./ProfilePanel";
@@ -68,6 +68,66 @@ const profile: ProfileResponse = {
 };
 
 describe("ProfilePanel", () => {
+  it.each(["mind", "live"] as const)("%s 大于 1 的分数按组归一化且展开不改变占比", async (sourceSpace) => {
+    const interests = profile.short_term.interests.map((topic, index) => ({...topic, score: [6,4,3,3,2,2][index]}));
+    vi.mocked(getProfile).mockResolvedValue({...profile, source_space: sourceSpace,
+      short_term: {...profile.short_term, interests},
+      long_term: {...profile.long_term, interests: [{...profile.long_term.interests[0], score: 10}]},
+    });
+    render(<ProfilePanel sourceSpace={sourceSpace} userId={7004} refreshTick={0} onReset={vi.fn()} />);
+    const short = within(await screen.findByRole("region", {name: "短期兴趣"}));
+    expect(short.getByText("30%")).toBeInTheDocument();
+    const card = short.getByText("短期主题 1").closest("article")!;
+    expect(card.querySelector(".zr-profile-topic__track > span")).toHaveStyle({width: "30%"});
+    fireEvent.click(short.getByRole("button", {name: "展开短期兴趣"}));
+    expect(short.getByText("30%")).toBeInTheDocument();
+    expect(short.getAllByText("10%")).toHaveLength(2);
+    const long = within(screen.getByRole("region", {name: "长期兴趣"}));
+    expect(long.getByText("100%")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", {name: "减少推荐"})).getByText("100%")).toBeInTheDocument();
+    expect(screen.queryByText("600%")).not.toBeInTheDocument();
+    expect(interests[0].score).toBe(6);
+  });
+
+  it("使用后端全量分母而非截断后的十个主题计算占比", async () => {
+    vi.mocked(getProfile).mockResolvedValue({...profile, short_term: {
+      ...profile.short_term, positive_score_total: 40,
+      interests: [{...profile.short_term.interests[0], score: 6}],
+    }});
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
+    expect(await screen.findByText("15%")).toBeInTheDocument();
+  });
+
+  it("零分数或非有限分数不产生 NaN 或无限百分比", async () => {
+    vi.mocked(getProfile).mockResolvedValue({...profile, short_term: {...profile.short_term,
+      interests: profile.short_term.interests.slice(0,3).map((topic,index) => ({...topic, score: [0, Number.NaN, Infinity][index]})),
+    }});
+    render(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={0} onReset={vi.fn()} />);
+    const short = within(await screen.findByRole("region", {name: "短期兴趣"}));
+    expect(short.getAllByText("0%")).toHaveLength(3);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("Live 有界刷新并在切换空间时取消后续请求", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getProfile).mockResolvedValue({ ...profile, source_space: "live" });
+    const view = render(<ProfilePanel sourceSpace="live" userId={7004} refreshTick={0} onReset={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.getByText("63% 画像积累度")).toBeInTheDocument();
+    for (let i = 0; i < 8; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    }
+    expect(getProfile).toHaveBeenCalledTimes(6);
+    view.rerender(<ProfilePanel sourceSpace="live" userId={7004} refreshTick={1} onReset={vi.fn()} />);
+    await act(async () => {});
+    vi.mocked(getProfile).mockResolvedValue(profile);
+    view.rerender(<ProfilePanel sourceSpace="mind" userId={7004} refreshTick={1} onReset={vi.fn()} />);
+    await act(async () => {});
+    const calls = vi.mocked(getProfile).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+    expect(getProfile).toHaveBeenCalledTimes(calls);
+    view.unmount();
+  });
   beforeEach(() => {
     vi.mocked(getProfile).mockResolvedValue(profile);
     vi.mocked(resetProfile).mockResolvedValue({

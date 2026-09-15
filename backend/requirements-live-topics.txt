@@ -1,0 +1,11 @@
+# Python 3.12; CPU inference. For an air-gapped install, prepare a wheelhouse first.
+-r requirements.txt
+torch==2.6.0
+numpy==2.2.6
+sentence-transformers==5.6.1
+transformers==4.51.0
+tokenizers==0.21.1
+safetensors==0.5.3
+huggingface-hub==0.30.1
+scikit-learn==1.8.0
+scipy==1.13.1

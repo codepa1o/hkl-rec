@@ -16,6 +16,7 @@ from backend.app.errors import (
 from backend.app.events.outbox import enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage, UserEventType
 from backend.app.live_news.allowlist import load_allowlist
+from backend.app.live_news.topic_dao import load_live_topic_ids
 from backend.app.news_spaces.live import LiveNewsSpaceRepository
 from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.observability import (
@@ -235,6 +236,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 request_id=request_id,
                 cursor=cursor,
                 language=language,
+                category=category,
             )
         if language != "all":
             raise ValueError("language filtering is only supported for source_space 'live'")
@@ -718,6 +720,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         source_space: NewsSpace,
         language: LiveLanguage,
         since: datetime,
+        category: str | None = None,
     ) -> FeedUpdateStatusResponse:
         if source_space == "mind":
             if language != "all":
@@ -729,7 +732,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
         if not self._settings.live_news_enabled:
             raise RepositoryNotReadyError("GET /feed/updates?source_space=live")
-        return self._live_news_space.get_feed_update_status(language=language, since=since)
+        return self._live_news_space.get_feed_update_status(
+            language=language, since=since, category=category
+        )
 
     def search(self, payload: SearchRequest) -> SearchResponse:
         if payload.source_space == "live":
@@ -1022,7 +1027,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             news_topic_ids = (
                 load_news_topic_ids(connection, payload.article_id)
                 if payload.source_space == "mind"
-                else []
+                else load_live_topic_ids(connection, payload.article_id)
             )
             topic_deltas = {
                 topic_id: self._settings.recommendation_click_topic_delta
@@ -1186,7 +1191,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             news_topic_ids = (
                 load_news_topic_ids(connection, payload.article_id)
                 if payload.source_space == "mind"
-                else []
+                else load_live_topic_ids(connection, payload.article_id)
             )
             query_topic_ids = {topic.topic_id for topic in query_topics}
             news_topic_set = set(news_topic_ids)
@@ -1654,7 +1659,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 news_topic_ids = (
                     load_news_topic_ids(connection, payload.article_id)
                     if payload.source_space == "mind"
-                    else []
+                    else load_live_topic_ids(connection, payload.article_id)
                 )
                 topic_deltas = {
                     topic_id: self._settings.recommendation_click_topic_delta
@@ -1830,7 +1835,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 news_topic_ids = (
                     load_news_topic_ids(connection, payload.article_id)
                     if payload.source_space == "mind"
-                    else []
+                    else load_live_topic_ids(connection, payload.article_id)
                 )
                 profile_v2_updated = self._project_profile_v2(
                     connection,

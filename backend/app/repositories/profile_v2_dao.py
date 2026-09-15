@@ -486,7 +486,11 @@ def _profile_layer(
         (item for item in items if item.score < -0.01),
         key=lambda item: (item.score, item.topic_id),
     )[:10]
-    return ProfileTermLayer(interests=interests, reduced_topics=reduced_topics)
+    return ProfileTermLayer(
+        interests=interests,
+        reduced_topics=reduced_topics,
+        positive_score_total=round(sum(max(item.score, 0.0) for item in items), 6),
+    )
 
 
 def load_profile_v2(

@@ -69,6 +69,7 @@ def test_live_content_settings_have_safe_defaults(monkeypatch) -> None:
         "NEWSREC_LIVE_CONTENT_MAX_RESPONSE_BYTES",
         "NEWSREC_LIVE_CONTENT_WORKER_BATCH_SIZE",
         "NEWSREC_LIVE_CONTENT_WORKER_CONCURRENCY",
+        "NEWSREC_LOCAL_RESEARCH_FULLTEXT_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
     get_settings.cache_clear()
@@ -82,6 +83,7 @@ def test_live_content_settings_have_safe_defaults(monkeypatch) -> None:
     assert settings.live_content_max_response_bytes == 2 * 1024 * 1024
     assert settings.live_content_worker_batch_size == 20
     assert settings.live_content_worker_concurrency == 4
+    assert settings.local_research_fulltext_enabled is False
 
 
 def test_live_content_settings_read_environment(monkeypatch) -> None:
@@ -92,6 +94,7 @@ def test_live_content_settings_read_environment(monkeypatch) -> None:
     monkeypatch.setenv("NEWSREC_LIVE_CONTENT_MAX_RESPONSE_BYTES", "4096")
     monkeypatch.setenv("NEWSREC_LIVE_CONTENT_WORKER_BATCH_SIZE", "8")
     monkeypatch.setenv("NEWSREC_LIVE_CONTENT_WORKER_CONCURRENCY", "2")
+    monkeypatch.setenv("NEWSREC_LOCAL_RESEARCH_FULLTEXT_ENABLED", "1")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -103,3 +106,4 @@ def test_live_content_settings_read_environment(monkeypatch) -> None:
     assert settings.live_content_max_response_bytes == 4096
     assert settings.live_content_worker_batch_size == 8
     assert settings.live_content_worker_concurrency == 2
+    assert settings.local_research_fulltext_enabled is True

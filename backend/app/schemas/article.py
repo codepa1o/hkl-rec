@@ -41,6 +41,7 @@ class ArticleCardResponse(CanonicalArticleModel):
     )
     body_source: Literal["guardian_api", "rss", "html"] | None = None
     content_rights: Literal["full_text", "excerpt_only", "link_only"] = "link_only"
+    body_access_scope: Literal["public", "local_research"] = "public"
     body_document: StructuredBodyDocument | None = None
     body_structure_status: BodyStructureStatus = "missing"
     body_document_version: str | None = None

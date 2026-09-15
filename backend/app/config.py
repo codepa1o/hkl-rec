@@ -110,6 +110,7 @@ class Settings:
     auth_rate_limit_window_seconds: int = 60
     mind_normalized_dir: str = "build/mind_normalized"
     live_news_enabled: bool = False
+    live_topics_required: bool = False
     live_news_collector_enabled: bool = False
     live_news_source_config: str = "config/live_news_sources.json"
     live_news_poll_interval_seconds: int = 60
@@ -117,6 +118,7 @@ class Settings:
     live_news_max_age_hours: int = 72
     live_news_collector_metrics_port: int = 9103
     live_content_worker_enabled: bool = False
+    local_research_fulltext_enabled: bool = False
     guardian_api_key: str = ""
     live_content_connect_timeout_seconds: int = 5
     live_content_read_timeout_seconds: int = 15
@@ -189,6 +191,10 @@ class Settings:
         return self.event_mode in {"kafka_dual_write", "kafka_async"}
 
 
+def local_research_content_allowed(settings: Settings) -> bool:
+    return settings.environment == "development" and settings.local_research_fulltext_enabled
+
+
 def compute_alpha(behavior_score: float, settings: Settings) -> float:
     score = max(0.0, behavior_score)
     raw = score / (score + settings.cold_start_behavior_score_scale)
@@ -216,6 +222,7 @@ def get_settings() -> Settings:
         auth_rate_limit_window_seconds=int(_env("NEWSREC_AUTH_RATE_LIMIT_WINDOW_SECONDS", "60")),
         mind_normalized_dir=mind_normalized_dir,
         live_news_enabled=_env_bool("NEWSREC_LIVE_NEWS_ENABLED", "0"),
+        live_topics_required=_env_bool("NEWSREC_LIVE_TOPICS_REQUIRED", "0"),
         live_news_collector_enabled=_env_bool("NEWSREC_LIVE_NEWS_COLLECTOR_ENABLED", "0"),
         live_news_source_config=_env(
             "NEWSREC_LIVE_NEWS_SOURCE_CONFIG", "config/live_news_sources.json"
@@ -227,6 +234,7 @@ def get_settings() -> Settings:
             _env("NEWSREC_LIVE_NEWS_COLLECTOR_METRICS_PORT", "9103")
         ),
         live_content_worker_enabled=_env_bool("NEWSREC_LIVE_CONTENT_WORKER_ENABLED", "0"),
+        local_research_fulltext_enabled=_env_bool("NEWSREC_LOCAL_RESEARCH_FULLTEXT_ENABLED", "0"),
         guardian_api_key=_env("NEWSREC_GUARDIAN_API_KEY", "").strip(),
         live_content_connect_timeout_seconds=_env_positive_int(
             "NEWSREC_LIVE_CONTENT_CONNECT_TIMEOUT_SECONDS", "5"

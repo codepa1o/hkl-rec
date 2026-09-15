@@ -8,12 +8,31 @@ from typing import Any
 
 import pytest
 
-from backend.app.profiles.signals import ProfileSignalConfig
+from backend.app.profiles.signals import ProfileSignalConfig, TopicProfileState
 from backend.app.repositories.profile_v2_dao import (
+    _profile_layer,
     apply_profile_v2_event,
     load_profile_v2,
     reset_profile_projections,
 )
+
+
+def test_profile_share_denominator_includes_topics_beyond_top_ten():
+    rows = [
+        (
+            {"topic_id": i, "display_name": str(i)},
+            TopicProfileState(short_positive_score=2, long_positive_score=3),
+        )
+        for i in range(1, 13)
+    ]
+    rows.append(({"topic_id": 99}, TopicProfileState(short_negative_score=100)))
+    short = _profile_layer(rows, layer="short")
+    long = _profile_layer(rows, layer="long")
+    assert len(short.interests) == 10
+    assert short.positive_score_total == 24
+    assert long.positive_score_total == 36
+    assert short.interests[0].score == 2  # Raw recommendation score is unchanged.
+    assert _profile_layer([], layer="short").positive_score_total == 0
 
 
 class FakeCursor(AbstractContextManager["FakeCursor"]):

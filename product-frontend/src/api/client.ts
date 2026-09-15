@@ -197,6 +197,7 @@ export function getFeedUpdateStatus(
   sourceSpace: NewsSpace,
   language: LiveLanguage,
   since: string,
+  category?: string,
 ): Promise<FeedUpdateStatusResponse> {
   return request<FeedUpdateStatusResponse>("/feed/updates", {
     params: {
@@ -204,6 +205,7 @@ export function getFeedUpdateStatus(
       source_space: sourceSpace,
       language,
       since,
+      category,
     },
   });
 }

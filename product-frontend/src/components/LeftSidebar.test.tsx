@@ -48,17 +48,19 @@ describe("LeftSidebar 新闻分类", () => {
     });
   });
 
-  it("实时新闻空间隐藏 MIND 分类并不请求分类接口", () => {
+  it("实时空间展示自己的分类且分类链接保留语言", async () => {
     sourceState.sourceSpace = "live";
+    vi.mocked(listCategories).mockResolvedValue({source_space: "live", items: [{key: "live-technology", news_count: 10}]});
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/?category=live-technology&language=zh"]}>
         <LeftSidebar />
       </MemoryRouter>,
     );
 
-    expect(screen.queryByText("新闻分类")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "全部新闻" })).not.toBeInTheDocument();
-    expect(listCategories).not.toHaveBeenCalled();
+    expect(await screen.findByRole("link", {name: "科技"})).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", {name: "科技"})).toHaveAttribute("href", "/?language=zh&category=live-technology");
+    expect(screen.getByRole("link", {name: "全部新闻"})).toHaveAttribute("href", "/?language=zh");
+    expect(listCategories).toHaveBeenCalledWith("live");
   });
 
   it("展示全部一级分类并高亮当前分类", async () => {

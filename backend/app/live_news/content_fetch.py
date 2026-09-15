@@ -25,6 +25,16 @@ class FetchResponse:
     retry_after: str | None
 
 
+@dataclass(frozen=True)
+class FetchPolicy:
+    allowed_schemes: frozenset[str] = frozenset({"https"})
+    allow_https_downgrade: bool = False
+
+    @classmethod
+    def local_research_http(cls) -> FetchPolicy:
+        return cls(allowed_schemes=frozenset({"http", "https"}))
+
+
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, *_args: object, **_kwargs: object) -> None:
         return None
@@ -99,11 +109,13 @@ class SafeFetcher:
         expected_domain: str,
         accepted_content_types: frozenset[str] | None = None,
         headers: Mapping[str, str] | None = None,
+        fetch_policy: FetchPolicy | None = None,
     ) -> FetchResponse:
         accepted = accepted_content_types or frozenset(
             {"text/html", "application/json", "application/rss+xml", "application/xml", "text/xml"}
         )
         current_url = url
+        policy = fetch_policy or FetchPolicy()
         request_headers = {
             "Accept-Encoding": "identity",
             "User-Agent": "hkl-rec-live-content/1.0 (+local research project)",
@@ -112,16 +124,19 @@ class SafeFetcher:
         for redirect_count in range(self._max_redirects + 1):
             parsed = urlsplit(current_url)
             host = (parsed.hostname or "").rstrip(".").lower()
+            valid_port = (parsed.scheme == "https" and parsed.port in {None, 443}) or (
+                parsed.scheme == "http" and parsed.port in {None, 80}
+            )
             if (
-                parsed.scheme != "https"
+                parsed.scheme not in policy.allowed_schemes
                 or not host
                 or parsed.username is not None
                 or parsed.password is not None
-                or parsed.port not in {None, 443}
+                or not valid_port
             ):
                 raise ContentAcquisitionError(
                     "invalid_url",
-                    "content URL must be a credential-free HTTPS URL",
+                    "content URL scheme or authority is not allowed",
                     retryable=False,
                 )
             if not _host_matches(host, expected_domain):
@@ -152,7 +167,18 @@ class SafeFetcher:
                             "redirect limit reached or location missing",
                             retryable=False,
                         )
-                    current_url = urljoin(current_url, location)
+                    next_url = urljoin(current_url, location)
+                    if (
+                        parsed.scheme == "https"
+                        and urlsplit(next_url).scheme == "http"
+                        and not policy.allow_https_downgrade
+                    ):
+                        raise ContentAcquisitionError(
+                            "invalid_redirect",
+                            "HTTPS content cannot redirect to HTTP",
+                            retryable=False,
+                        )
+                    current_url = next_url
                     continue
                 if status >= 400:
                     retryable = status in {408, 425, 429} or status >= 500
@@ -168,16 +194,22 @@ class SafeFetcher:
                         retryable=retryable,
                         retry_after=retry_after,
                     )
-                content_type = (
-                    str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
-                )
+                raw_content_type = str(response.headers.get("Content-Type") or "")
+                content_type = raw_content_type.split(";", 1)[0].lower()
                 if content_type not in accepted:
                     raise ContentAcquisitionError(
                         "unsupported_content_type",
                         f"unsupported content type: {content_type or 'missing'}",
                         retryable=False,
                     )
-                body = response.read(self._max_response_bytes + 1)
+                try:
+                    body = response.read(self._max_response_bytes + 1)
+                except (OSError, TimeoutError) as exc:
+                    raise ContentAcquisitionError(
+                        "network_error",
+                        f"{type(exc).__name__}: publisher response read failed",
+                        retryable=True,
+                    ) from exc
                 if len(body) > self._max_response_bytes:
                     raise ContentAcquisitionError(
                         "response_too_large",
@@ -187,7 +219,7 @@ class SafeFetcher:
                 return FetchResponse(
                     final_url=current_url,
                     status=status,
-                    content_type=content_type,
+                    content_type=raw_content_type,
                     body=body,
                     retry_after=retry_after,
                 )

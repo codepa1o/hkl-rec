@@ -17,6 +17,9 @@ EXPECTED_TABLES = {
     "event_idempotency",
     "feed_request",
     "live_news",
+    "live_news_topic",
+    "live_topic_enrichment_job",
+    "live_profile_rebuild_job",
     "live_news_content_job",
     "live_news_content_asset",
     "live_news_import",
@@ -130,9 +133,9 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 11
+    assert len(versions) == 13
     script = ScriptDirectory.from_config(Config(root / "alembic.ini"))
-    assert script.get_heads() == ["20260821_0011"]
+    assert script.get_heads() == ["20260914_0013"]
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:

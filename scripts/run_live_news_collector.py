@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.app.config import get_settings  # noqa: E402
+from backend.app.config import get_settings, local_research_content_allowed  # noqa: E402
 from backend.app.live_news.allowlist import load_allowlist  # noqa: E402
 from backend.app.live_news.collector import LiveNewsCollector, fetch_url  # noqa: E402
 from backend.app.live_news.dao import PostgresLiveNewsStore  # noqa: E402
@@ -90,6 +90,7 @@ def main() -> int:
             connect_timeout=settings.postgres_connect_timeout_seconds,
         ),
         allowlist,
+        local_research_allowed=local_research_content_allowed(settings),
     )
     collector = LiveNewsCollector(
         fetch=fetch_url,

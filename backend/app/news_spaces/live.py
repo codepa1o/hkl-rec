@@ -5,8 +5,9 @@ from typing import Any, Literal, cast
 
 from pydantic import ValidationError
 
-from backend.app.config import Settings
+from backend.app.config import Settings, local_research_content_allowed
 from backend.app.live_news.allowlist import SourceAllowlist
+from backend.app.live_news.categories import category_clause, live_category_id
 from backend.app.live_news.content_document import StructuredBodyDocument
 from backend.app.live_news.ranking import (
     LiveCandidate,
@@ -14,6 +15,7 @@ from backend.app.live_news.ranking import (
     freshness_score,
     score_live_candidate,
 )
+from backend.app.live_news.topic_classifier import load_taxonomy
 from backend.app.news_spaces.types import LiveLanguage, validate_article_id_shape
 from backend.app.repositories._utils import new_request_id
 from backend.app.repositories.connection import PostgresConnectionPool
@@ -23,7 +25,7 @@ from backend.app.repositories.sponsored_dao import (
     load_feed_session_news_ids,
 )
 from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
-from backend.app.schemas.category import CategoryListResponse
+from backend.app.schemas.category import CategoryItem, CategoryListResponse
 from backend.app.schemas.feed import (
     FeedItem,
     FeedItemScores,
@@ -41,7 +43,15 @@ from backend.app.schemas.suggestion import SuggestionListResponse
 BODY_EXCERPT_LIMIT = 1000
 
 
-def _visible_body(value: dict[str, Any]) -> str | None:
+def _body_access_allowed(value: dict[str, Any], settings: Settings) -> bool:
+    return value.get("body_access_scope", "public") != "local_research" or (
+        local_research_content_allowed(settings)
+    )
+
+
+def _visible_body(value: dict[str, Any], *, access_allowed: bool) -> str | None:
+    if not access_allowed:
+        return None
     if value.get("body_status") != "available":
         return None
     body = str(value.get("body_text") or "")
@@ -55,18 +65,21 @@ def _visible_body(value: dict[str, Any]) -> str | None:
     return excerpt[:paragraph_end] if paragraph_end >= 700 else excerpt
 
 
-def _visible_document(value: dict[str, Any]) -> StructuredBodyDocument | None:
+def _visible_document(
+    value: dict[str, Any], *, access_allowed: bool
+) -> StructuredBodyDocument | None:
     if (
-        value.get("content_rights") != "full_text"
+        not access_allowed
+        or value.get("content_rights") != "full_text"
         or value.get("body_structure_status") != "available"
-        or value.get("body_document_version") != "structured-1"
         or value.get("body_document") is None
     ):
         return None
     try:
-        return StructuredBodyDocument.model_validate(value["body_document"])
+        document = StructuredBodyDocument.model_validate(value["body_document"])
     except ValidationError:
         return None
+    return document if document.extraction_version == value.get("body_document_version") else None
 
 
 class LiveNewsSpaceRepository:
@@ -89,7 +102,9 @@ class LiveNewsSpaceRepository:
         request_id: str | None,
         cursor: str | None,
         language: LiveLanguage,
+        category: str | None = None,
     ) -> FeedResponse:
+        live_category_id(category)
         request_id = request_id or new_request_id(self._settings.request_id_prefix, "live-feed")
         connection = self._connection_pool.connect()
         try:
@@ -104,7 +119,7 @@ class LiveNewsSpaceRepository:
                 include_sponsored=False,
                 experiment_arm="default",
                 as_of_ts=None,
-                category=f"language:{language}",
+                category=f"language:{language}" + (f"|{category}" if category else ""),
                 cursor_token=cursor,
             )
             seen = load_feed_session_news_ids(
@@ -113,7 +128,10 @@ class LiveNewsSpaceRepository:
                 source_space="live",
                 exclude_request_id=request_id,
             )
-            candidates = self._load_candidates(connection, language=language, excluded=seen)
+            watermark = self._current_watermark(connection, language=language, category=category)
+            candidates = self._load_candidates(
+                connection, language=language, excluded=seen, category=category
+            )
             now = datetime.now(UTC)
             selected = diversify_live_candidates(
                 candidates,
@@ -145,6 +163,7 @@ class LiveNewsSpaceRepository:
                 next_cursor=next_cursor,
                 has_more=has_more,
                 debug=None,
+                current_watermark=watermark,
             )
         except Exception:
             connection.rollback()
@@ -157,26 +176,15 @@ class LiveNewsSpaceRepository:
         *,
         language: LiveLanguage,
         since: datetime,
+        category: str | None = None,
     ) -> FeedUpdateStatusResponse:
-        language_clause = "" if language == "all" else "AND language = %s"
-        params: tuple[Any, ...] = () if language == "all" else (language,)
         connection = self._connection_pool.connect()
         try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT MAX(discovered_at) AS current_watermark
-                    FROM live_news
-                    WHERE status = 'active'
-                      AND discovered_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-                      {language_clause}
-                    """,
-                    params,
-                )
-                row = cursor.fetchone()
+            current_watermark = self._current_watermark(
+                connection, language=language, category=category, empty_watermark=False
+            )
         finally:
             connection.close()
-        current_watermark = cast(datetime | None, row["current_watermark"] if row else None)
         return FeedUpdateStatusResponse(
             source_space="live",
             has_updates=current_watermark is not None and current_watermark > since,
@@ -266,8 +274,15 @@ class LiveNewsSpaceRepository:
         if row is None:
             raise LookupError(f"live news not found: {article_id}")
         value = dict(row)
-        body_document = _visible_document(value)
+        access_allowed = _body_access_allowed(value, self._settings)
+        body_document = _visible_document(value, access_allowed=access_allowed)
         structure_status = value.get("body_structure_status") or "missing"
+        content_rights = value.get("content_rights") or "link_only"
+        body_status = value.get("body_status") or "metadata_only"
+        if not access_allowed:
+            structure_status = "blocked"
+            content_rights = "link_only"
+            body_status = "metadata_only"
         if structure_status == "available" and body_document is None:
             structure_status = "failed"
         return ArticleCardResponse(
@@ -287,10 +302,11 @@ class LiveNewsSpaceRepository:
             language=value.get("language"),
             published_at=value.get("published_at"),
             discovered_at=value.get("discovered_at"),
-            body_text=_visible_body(value),
-            body_status=value.get("body_status") or "metadata_only",
+            body_text=_visible_body(value, access_allowed=access_allowed),
+            body_status=body_status,
             body_source=value.get("body_source"),
-            content_rights=value.get("content_rights") or "link_only",
+            content_rights=content_rights,
+            body_access_scope=value.get("body_access_scope") or "public",
             body_document=body_document,
             body_structure_status=structure_status,
             body_document_version=(
@@ -325,7 +341,10 @@ class LiveNewsSpaceRepository:
                 if (
                     policy is None
                     or policy.content.mode == "link_only"
-                    or row["content_rights"] == "link_only"
+                    or (
+                        policy.content.access_scope == "local_research"
+                        and not local_research_content_allowed(self._settings)
+                    )
                 ):
                     cursor.execute(
                         """
@@ -344,7 +363,7 @@ class LiveNewsSpaceRepository:
                     )
                 if (
                     row["body_structure_status"] == "available"
-                    and row["body_document_version"] == "structured-1"
+                    and row["body_document_version"] == policy.content.target_extraction_version
                 ):
                     return ContentEnsureResponse(
                         article_id=article_id,
@@ -359,7 +378,7 @@ class LiveNewsSpaceRepository:
                           target_extraction_version, requested_by, created_at, updated_at
                         ) VALUES (
                           %s, 'pending', 0, CURRENT_TIMESTAMP,
-                          'structured-1', 'detail_on_demand',
+                          %s, 'detail_on_demand',
                           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                         )
                         ON CONFLICT (article_id) DO UPDATE SET
@@ -368,20 +387,30 @@ class LiveNewsSpaceRepository:
                               ELSE 'pending'
                           END,
                           next_attempt_at = CURRENT_TIMESTAMP,
-                          target_extraction_version = 'structured-1',
+                          target_extraction_version = %s,
                           requested_by = 'detail_on_demand',
                           updated_at = CURRENT_TIMESTAMP
                         """,
-                    (article_id,),
+                    (
+                        article_id,
+                        policy.content.target_extraction_version,
+                        policy.content.target_extraction_version,
+                    ),
                 )
                 cursor.execute(
                     """
                         UPDATE live_news
-                        SET body_structure_status = 'pending',
+                        SET content_rights = %s,
+                            body_access_scope = %s,
+                            body_structure_status = 'pending',
                             body_structure_updated_at = CURRENT_TIMESTAMP
                         WHERE article_id = %s
                         """,
-                    (article_id,),
+                    (
+                        policy.content.display,
+                        policy.content.access_scope,
+                        article_id,
+                    ),
                 )
             return ContentEnsureResponse(
                 article_id=article_id,
@@ -393,10 +422,66 @@ class LiveNewsSpaceRepository:
             connection.close()
 
     def list_categories(self) -> CategoryListResponse:
-        return CategoryListResponse(source_space="live", items=[])
+        connection = self._connection_pool.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT t.topic_id,COUNT(*) AS news_count FROM live_news_topic t
+                    JOIN live_news n ON n.article_id=t.article_id
+                    JOIN live_topic_enrichment_job j ON j.article_id=t.article_id
+                    WHERE t.source_space='live' AND j.status='completed' AND n.status='active'
+                      AND n.discovered_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+                    GROUP BY t.topic_id""")
+                counts = {row["topic_id"]: row["news_count"] for row in cursor.fetchall()}
+            return CategoryListResponse(
+                source_space="live",
+                items=[
+                    CategoryItem(
+                        key=t["key"].replace("live:", "live-", 1),
+                        news_count=counts.get(t["topic_id"], 0),
+                    )
+                    for t in load_taxonomy()["topics"]
+                ],
+            )
+        finally:
+            connection.close()
+
+    def _current_watermark(
+        self,
+        connection: Any,
+        *,
+        language: LiveLanguage,
+        category: str | None,
+        empty_watermark: bool = True,
+    ) -> datetime | None:
+        clause, category_params = category_clause(category)
+        language_clause = "" if language == "all" else "AND language = %s"
+        params = (() if language == "all" else (language,)) + category_params
+        timestamp = (
+            "GREATEST(discovered_at,topic_classified_at)"
+            if category or self._settings.live_topics_required
+            else "discovered_at"
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT MAX({timestamp}) AS current_watermark FROM live_news
+                WHERE status = 'active' AND discovered_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+                {language_clause} {clause} {self._topic_filter_sql()}""",
+                params,
+            )
+            row = cursor.fetchone()
+        value = cast(datetime | None, row["current_watermark"] if row else None)
+        return value or (datetime.now(UTC) if empty_watermark else None)
 
     def list_search_suggestions(self) -> SuggestionListResponse:
         return SuggestionListResponse(source_space="live", items=[])
+
+    def _topic_filter_sql(self) -> str:
+        if not self._settings.live_topics_required:
+            return ""
+        return """AND topic_status = 'available'
+            AND EXISTS (SELECT 1 FROM live_news_topic t
+                JOIN live_topic_enrichment_job j ON j.article_id=t.article_id
+                WHERE t.article_id = live_news.article_id AND j.status='completed')"""
 
     def _load_candidates(
         self,
@@ -404,9 +489,12 @@ class LiveNewsSpaceRepository:
         *,
         language: LiveLanguage,
         excluded: set[str],
+        category: str | None = None,
     ) -> list[LiveCandidate]:
+        clause, category_params = category_clause(category)
         language_clause = "" if language == "all" else "AND language = %s"
         params: list[Any] = [] if language == "all" else [language]
+        params.extend(category_params)
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -415,6 +503,8 @@ class LiveNewsSpaceRepository:
                 WHERE status = 'active'
                   AND discovered_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
                   {language_clause}
+                  {clause}
+                  {self._topic_filter_sql()}
                 ORDER BY discovered_at DESC, article_id ASC
                 LIMIT 1000
                 """,

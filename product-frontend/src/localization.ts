@@ -1,4 +1,18 @@
 const CATEGORY_LABELS: Record<string, string> = {
+  "live-world": "国际",
+  "live-politics": "政治",
+  "live-business": "财经",
+  "live-technology": "科技",
+  "live-science": "科学",
+  "live-health": "健康",
+  "live-society-law": "社会与法治",
+  "live-education": "教育",
+  "live-environment": "环境与气候",
+  "live-culture": "文化艺术",
+  "live-entertainment": "娱乐",
+  "live-sports": "体育",
+  "live-lifestyle": "生活方式",
+  "live-general": "综合",
   news: "新闻",
   sports: "体育",
   football: "足球",
@@ -56,7 +70,7 @@ function normalized(value: string): string {
 
 export function localizeCategoryName(value?: string | null): string {
   if (!value) return "新闻";
-  return CATEGORY_LABELS[normalized(value)] ?? value;
+  return CATEGORY_LABELS[value.trim().toLowerCase()] ?? CATEGORY_LABELS[normalized(value)] ?? value;
 }
 
 export function localizePersonaName(value?: string | null): string {

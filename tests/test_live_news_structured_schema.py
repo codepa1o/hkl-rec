@@ -56,4 +56,4 @@ def test_structured_document_migration_is_the_alembic_head() -> None:
         text=True,
     )
 
-    assert result.stdout.strip() == "20260821_0011 (head)"
+    assert result.stdout.strip() == "20260914_0013 (head)"
