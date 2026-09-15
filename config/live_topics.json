@@ -1,0 +1,339 @@
+{
+  "version": "live-topics-1",
+  "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+  "title_weight": 0.65,
+  "semantic_weight": 0.9,
+  "threshold": 0.7,
+  "secondary_margin": 0.025,
+  "maximum_topics": 3,
+  "calibration_status": "preset_not_human_validated",
+  "topics": [
+    {
+      "topic_id": 1000001,
+      "key": "live:world",
+      "name": "国际",
+      "descriptions": [
+        "International diplomacy, foreign relations, global affairs, cross-border relations.",
+        "国际外交、国际关系、外交、访问、峰会、联合国新闻"
+      ],
+      "keywords": [
+        "国际外交",
+        "国际关系",
+        "外交",
+        "访问",
+        "峰会",
+        "联合国",
+        "diplomacy",
+        "united nations",
+        "foreign minister",
+        "summit"
+      ]
+    },
+    {
+      "topic_id": 1000002,
+      "key": "live:politics",
+      "name": "政治",
+      "descriptions": [
+        "Government, elections, political parties, parliament and public policy.",
+        "政治、选举、政府、国会、议会、总统、政策新闻"
+      ],
+      "keywords": [
+        "政治",
+        "选举",
+        "政府",
+        "国会",
+        "议会",
+        "总统",
+        "政策",
+        "election",
+        "parliament",
+        "senate",
+        "political",
+        "government"
+      ]
+    },
+    {
+      "topic_id": 1000003,
+      "key": "live:business",
+      "name": "财经",
+      "descriptions": [
+        "Business, companies, stock markets, banking, trade, prices and employment.",
+        "财经、经济、企业、公司、股市、金融、银行、贸易、产业、就业新闻"
+      ],
+      "keywords": [
+        "财经",
+        "经济",
+        "企业",
+        "公司",
+        "股市",
+        "金融",
+        "银行",
+        "贸易",
+        "产业",
+        "就业",
+        "economy",
+        "stock market",
+        "banking",
+        "inflation",
+        "trade",
+        "investment"
+      ]
+    },
+    {
+      "topic_id": 1000004,
+      "key": "live:technology",
+      "name": "科技",
+      "descriptions": [
+        "Artificial intelligence, software, internet, semiconductors, cybersecurity and digital technology.",
+        "科技、人工智能、软件、互联网、芯片、半导体、网络安全新闻"
+      ],
+      "keywords": [
+        "科技",
+        "人工智能",
+        "软件",
+        "互联网",
+        "芯片",
+        "半导体",
+        "网络安全",
+        "artificial intelligence",
+        "software",
+        "semiconductor",
+        "chip",
+        "cybersecurity"
+      ]
+    },
+    {
+      "topic_id": 1000005,
+      "key": "live:science",
+      "name": "科学",
+      "descriptions": [
+        "Scientific research, physics, astronomy, space exploration, chemistry and discoveries.",
+        "科学、研究、物理、天文、航天、宇宙、化学、实验新闻"
+      ],
+      "keywords": [
+        "科学",
+        "研究",
+        "物理",
+        "天文",
+        "航天",
+        "宇宙",
+        "化学",
+        "实验",
+        "scientific",
+        "physics",
+        "astronomy",
+        "space exploration",
+        "researchers"
+      ]
+    },
+    {
+      "topic_id": 1000006,
+      "key": "live:health",
+      "name": "健康",
+      "descriptions": [
+        "Medicine, public health, disease, hospitals, mental health and medical treatment.",
+        "健康、医疗、疾病、医院、医药、疫苗、心理、癌症新闻"
+      ],
+      "keywords": [
+        "健康",
+        "医疗",
+        "疾病",
+        "医院",
+        "医药",
+        "疫苗",
+        "心理",
+        "癌症",
+        "health",
+        "medical",
+        "hospital",
+        "cancer",
+        "vaccine",
+        "disease"
+      ]
+    },
+    {
+      "topic_id": 1000007,
+      "key": "live:society-law",
+      "name": "社会与法治",
+      "descriptions": [
+        "Local communities, crime, courts, policing, road safety, accidents and social welfare.",
+        "社会、法律、法院、犯罪、警察、交通、事故、道路、福利新闻"
+      ],
+      "keywords": [
+        "社会",
+        "法律",
+        "法院",
+        "犯罪",
+        "警察",
+        "交通",
+        "事故",
+        "道路",
+        "福利",
+        "court",
+        "crime",
+        "police",
+        "accident",
+        "road",
+        "potholes",
+        "community"
+      ]
+    },
+    {
+      "topic_id": 1000008,
+      "key": "live:education",
+      "name": "教育",
+      "descriptions": [
+        "Schools, universities, students, teaching, exams and education policy.",
+        "教育、学校、大学、学生、教师、高考、校园新闻"
+      ],
+      "keywords": [
+        "教育",
+        "学校",
+        "大学",
+        "学生",
+        "教师",
+        "高考",
+        "校园",
+        "education",
+        "school",
+        "university",
+        "student",
+        "teacher"
+      ]
+    },
+    {
+      "topic_id": 1000009,
+      "key": "live:environment",
+      "name": "环境与气候",
+      "descriptions": [
+        "Climate change, pollution, wildlife, ecology, environment and natural disasters.",
+        "环境、气候、污染、生态、野生动物、森林、山火、自然灾害新闻"
+      ],
+      "keywords": [
+        "环境",
+        "气候",
+        "污染",
+        "生态",
+        "野生动物",
+        "森林",
+        "山火",
+        "自然灾害",
+        "climate",
+        "pollution",
+        "wildlife",
+        "environment",
+        "wildfire",
+        "ecology"
+      ]
+    },
+    {
+      "topic_id": 1000010,
+      "key": "live:culture",
+      "name": "文化艺术",
+      "descriptions": [
+        "Literature, visual art, museums, theatre, film criticism, cultural heritage and festivals.",
+        "文化、艺术、文学、博物馆、戏剧、电影、纪录片、遗产新闻"
+      ],
+      "keywords": [
+        "文化",
+        "艺术",
+        "文学",
+        "博物馆",
+        "戏剧",
+        "电影",
+        "纪录片",
+        "遗产",
+        "culture",
+        "art",
+        "museum",
+        "theatre",
+        "documentary",
+        "film",
+        "literature"
+      ]
+    },
+    {
+      "topic_id": 1000011,
+      "key": "live:entertainment",
+      "name": "娱乐",
+      "descriptions": [
+        "Celebrities, television entertainment, pop music, actors, show business and celebrity news.",
+        "娱乐、明星、综艺、歌手、演员、演唱会、电视剧新闻"
+      ],
+      "keywords": [
+        "娱乐",
+        "明星",
+        "综艺",
+        "歌手",
+        "演员",
+        "演唱会",
+        "电视剧",
+        "celebrity",
+        "entertainment",
+        "pop star",
+        "singer",
+        "actor",
+        "concert"
+      ]
+    },
+    {
+      "topic_id": 1000012,
+      "key": "live:sports",
+      "name": "体育",
+      "descriptions": [
+        "Sports competitions, football, basketball, tennis, Olympics and athletic performance.",
+        "体育、足球、篮球、网球、奥运、比赛、运动员新闻"
+      ],
+      "keywords": [
+        "体育",
+        "足球",
+        "篮球",
+        "网球",
+        "奥运",
+        "比赛",
+        "运动员",
+        "football",
+        "basketball",
+        "tennis",
+        "olympic",
+        "sports",
+        "athlete"
+      ]
+    },
+    {
+      "topic_id": 1000013,
+      "key": "live:lifestyle",
+      "name": "生活方式",
+      "descriptions": [
+        "Food, cooking, travel, fashion, home, family, leisure and personal wellbeing.",
+        "生活、美食、烹饪、旅游、时尚、家庭、休闲、家居新闻"
+      ],
+      "keywords": [
+        "生活",
+        "美食",
+        "烹饪",
+        "旅游",
+        "时尚",
+        "家庭",
+        "休闲",
+        "家居",
+        "recipe",
+        "cooking",
+        "travel",
+        "fashion",
+        "lifestyle",
+        "gardening"
+      ]
+    },
+    {
+      "topic_id": 1000014,
+      "key": "live:general",
+      "name": "综合",
+      "descriptions": [
+        "Uncertain or insufficient topic evidence.",
+        "新闻"
+      ],
+      "keywords": []
+    }
+  ]
+}

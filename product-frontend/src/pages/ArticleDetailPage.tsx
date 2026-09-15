@@ -344,6 +344,9 @@ export default function ArticleDetailPage() {
           )}
           {data.body_document ? (
             <section className="zr-post-detail__body" aria-labelledby="article-body-title">
+              {data.body_access_scope === "local_research" && (
+                <span className="zr-local-research-label">本地研究正文</span>
+              )}
               <h2 id="article-body-title" className="zr-eyebrow">
                 正文
               </h2>
@@ -351,6 +354,9 @@ export default function ArticleDetailPage() {
             </section>
           ) : bodyParagraphs.length > 0 ? (
             <section className="zr-post-detail__body" aria-labelledby="article-body-title">
+              {data.body_access_scope === "local_research" && (
+                <span className="zr-local-research-label">本地研究正文</span>
+              )}
               <h2 id="article-body-title" className="zr-eyebrow">
                 正文
               </h2>

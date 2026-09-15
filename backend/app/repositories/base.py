@@ -45,6 +45,7 @@ class RuntimeRepository(Protocol):
         source_space: NewsSpace,
         language: LiveLanguage,
         since: datetime,
+        category: str | None = None,
     ) -> FeedUpdateStatusResponse: ...
 
     def search(self, payload: SearchRequest) -> SearchResponse: ...

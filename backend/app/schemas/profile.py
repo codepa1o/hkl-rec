@@ -57,6 +57,11 @@ class ProfileTopicEvidence(ApiModel):
 
 
 class ProfileTermLayer(ApiModel):
+    positive_score_total: float | None = Field(
+        default=None,
+        ge=0,
+        description="Sum of positive net topic scores before top-k truncation; display normalization only.",
+    )
     interests: list[ProfileTopicEvidence] = Field(default_factory=list)
     reduced_topics: list[ProfileTopicEvidence] = Field(default_factory=list)
 

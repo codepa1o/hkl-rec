@@ -22,6 +22,13 @@ export default function LeftSidebar() {
     (category) => category.key === selectedCategory,
   );
   const isFeedPath = location.pathname === "/";
+  const categoryHref = (key?: string) => {
+    const params = new URLSearchParams();
+    const language = new URLSearchParams(location.search).get("language");
+    if (sourceSpace === "live" && (language === "zh" || language === "en")) params.set("language", language);
+    if (key) params.set("category", key);
+    return params.size ? `/?${params}` : "/";
+  };
   const categoryActiveIndex =
     !isFeedPath
       ? -1
@@ -47,7 +54,6 @@ export default function LeftSidebar() {
     let cancelled = false;
     setCategoryError(false);
     setCategories([]);
-    if (sourceSpace === "live") return;
     void listCategories(sourceSpace)
       .then((response) => {
         if (!cancelled && response.source_space === sourceSpace) {
@@ -85,7 +91,6 @@ export default function LeftSidebar() {
         </NavLink>
       </SlidingSelectionGroup>
 
-      {sourceSpace === "mind" && (
       <div className="zr-left__section zr-left__section--categories">
         <div className="zr-left__section-title">新闻分类</div>
         <SlidingSelectionGroup
@@ -95,7 +100,7 @@ export default function LeftSidebar() {
           itemHeight={44}
         >
           <Link
-            to="/"
+            to={categoryHref()}
             className={`zr-left__item${isFeedPath && selectedCategory === null ? " zr-left__item--active" : ""}`}
             aria-current={isFeedPath && selectedCategory === null ? "page" : undefined}
           >
@@ -106,7 +111,7 @@ export default function LeftSidebar() {
             <Link
               key={category.key}
               data-testid="news-category-link"
-              to={`/?category=${encodeURIComponent(category.key)}`}
+              to={categoryHref(category.key)}
               className={`zr-left__item${isFeedPath && selectedCategory === category.key ? " zr-left__item--active" : ""}`}
               aria-current={
                 isFeedPath && selectedCategory === category.key ? "page" : undefined
@@ -126,7 +131,6 @@ export default function LeftSidebar() {
           )}
         </SlidingSelectionGroup>
       </div>
-      )}
 
       <div className="zr-left__footer">
         <FlaskConical size={16} />

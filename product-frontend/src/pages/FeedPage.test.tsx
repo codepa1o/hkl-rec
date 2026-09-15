@@ -1,4 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeedPage from "./FeedPage";
 import { getFeed, getFeedUpdateStatus, trackEvent } from "../api/client";
@@ -130,6 +132,8 @@ const thirdFeedItem = {
   url: "https://science.example.com/303",
 };
 
+const render = (view: ReactElement) => renderView(view, {wrapper: MemoryRouter});
+
 let intersectionCallback: IntersectionObserverCallback | null = null;
 
 class TestIntersectionObserver {
@@ -150,7 +154,68 @@ class TestIntersectionObserver {
 }
 
 describe("FeedPage impressions", () => {
+  it("切换到加载中的 Live 分类不会把前一分类写进新缓存", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?category=live-technology";
+    const item = {...feedItems[0], source_space: "live" as const, article_id: "L0123456789abcdef0123456789abcdef"};
+    vi.mocked(getFeed).mockResolvedValueOnce({source_space: "live", user_id: 7248, request_id: "technology", items: [item], has_more: false, next_cursor: null})
+      .mockImplementationOnce(() => new Promise(() => {}));
+    const view = render(<FeedPage />);
+    await screen.findByTestId(`article-${item.article_id}`);
+    routeState.search = "?category=live-sports";
+    view.rerender(<FeedPage />);
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(2));
+    const key = buildFeedContextKey({sourceSpace: "live", personaUserId: 7248, category: "live-sports", language: "all"});
+    expect(readFeedSnapshot(key)).toBeNull();
+    expect(screen.queryByTestId(`article-${item.article_id}`)).not.toBeInTheDocument();
+  });
+  it("首次加载的 Live 分类点击更新提示会重新请求而非只清空列表", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?category=live-technology";
+    const item = {...feedItems[0], source_space: "live" as const, article_id: "L0123456789abcdef0123456789abcdef"};
+    vi.mocked(getFeed).mockResolvedValueOnce({source_space: "live", user_id: 7248, request_id: "first", items: [item], has_more: false, next_cursor: null, current_watermark: "2026-08-20T01:00:00Z"})
+      .mockResolvedValueOnce({source_space: "live", user_id: 7248, request_id: "second", items: [{...item, article_id: "Lfedcba9876543210fedcba9876543210"}], has_more: false, next_cursor: null, current_watermark: "2026-08-20T03:00:00Z"});
+    vi.mocked(getFeedUpdateStatus).mockResolvedValue({source_space: "live", has_updates: true, current_watermark: "2026-08-20T03:00:00Z"});
+    render(<FeedPage />);
+    fireEvent.click(await screen.findByRole("button", {name: "有新新闻"}));
+    await screen.findByTestId("article-Lfedcba9876543210fedcba9876543210");
+    expect(getFeed).toHaveBeenCalledTimes(2);
+  });
+  it("Live 翻页保留首屏更新水位与分类条件", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?category=live-technology&language=zh";
+    const item = {...feedItems[0], source_space: "live" as const, article_id: "L0123456789abcdef0123456789abcdef", discovered_at: "2026-08-20T01:00:00Z"};
+    const watermark = "2026-08-20T03:00:00Z";
+    vi.mocked(getFeed).mockResolvedValueOnce({source_space: "live", user_id: 7248, request_id: "live-first", items: [item], next_cursor: "live-next", has_more: true, current_watermark: watermark})
+      .mockResolvedValueOnce({source_space: "live", user_id: 7248, request_id: "live-second", items: [{...item, article_id: "Lfedcba9876543210fedcba9876543210"}], next_cursor: null, has_more: false, current_watermark: watermark});
+    vi.mocked(getFeedUpdateStatus).mockResolvedValue({source_space: "live", has_updates: false, current_watermark: watermark});
+    const view = render(<FeedPage />);
+    await waitFor(() => expect(intersectionCallback).not.toBeNull());
+    act(() => { intersectionCallback?.([{isIntersecting: true} as IntersectionObserverEntry], {} as IntersectionObserver); });
+    await screen.findByTestId("article-Lfedcba9876543210fedcba9876543210");
+    expect(getFeed).toHaveBeenLastCalledWith(7248,20,true,"feed-page-test","live-next","live-technology","live","zh");
+    const key = buildFeedContextKey({sourceSpace: "live", personaUserId: 7248, category: "live-technology", language: "zh"});
+    await waitFor(() => expect(readFeedSnapshot(key)?.feedWatermark).toBe(watermark));
+    view.unmount();
+    vi.mocked(getFeed).mockClear();
+    render(<FeedPage />);
+    await screen.findByTestId("article-Lfedcba9876543210fedcba9876543210");
+    expect(getFeed).not.toHaveBeenCalled();
+    expect(getFeedUpdateStatus).toHaveBeenLastCalledWith(7248,"live","zh",watermark,"live-technology");
+  });
+  it("Live 分类透传且切换语言保留分类", async () => {
+    sourceState.sourceSpace = "live";
+    routeState.search = "?category=live-technology&language=zh";
+    vi.mocked(getFeed).mockResolvedValue({source_space: "live", user_id: 7248, request_id: "live-category", items: [{...feedItems[0], source_space: "live", article_id: "L0123456789abcdef0123456789abcdef"}], has_more: false, next_cursor: null});
+    render(<FeedPage />);
+    await waitFor(() => expect(getFeed).toHaveBeenCalledWith(7248, 20, true, expect.any(String), undefined, "live-technology", "live", "zh"));
+    expect(screen.getByRole("heading", {name: "科技 · 实时新闻"})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "English"}));
+    expect(navigateMock).toHaveBeenCalledWith({pathname: "/", search: "?category=live-technology&language=en"}, {replace: true});
+  });
   beforeEach(() => {
+    vi.mocked(getFeed).mockReset();
+    vi.mocked(getFeedUpdateStatus).mockReset().mockResolvedValue({source_space: "live", has_updates: false, current_watermark: null});
     sessionStorage.clear();
     personaState.selectedPersona.user_id = 7248;
     personaState.refreshTick = 0;
@@ -728,6 +793,7 @@ describe("FeedPage impressions", () => {
       "live",
       "zh",
       liveItem.discovered_at,
+      undefined,
     );
   });
 

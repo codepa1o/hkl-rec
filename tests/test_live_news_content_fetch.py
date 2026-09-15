@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from backend.app.live_news.content_fetch import SafeFetcher
+from backend.app.live_news.content_fetch import FetchPolicy, SafeFetcher
 from backend.app.live_news.content_types import ContentAcquisitionError
 
 
@@ -34,6 +34,11 @@ class FakeResponse:
 
     def close(self) -> None:
         return None
+
+
+class ReadTimeoutResponse(FakeResponse):
+    def read(self, size: int = -1) -> bytes:
+        raise TimeoutError("read timed out")
 
 
 class FakeTransport:
@@ -86,6 +91,58 @@ def test_fetcher_revalidates_each_same_domain_redirect() -> None:
     assert resolved == ["example.com", "www.example.com"]
 
 
+def test_fetcher_rejects_http_by_default() -> None:
+    fetcher = SafeFetcher(
+        transport=FakeTransport(FakeResponse(200, b"article")),
+        resolver=public_resolver,
+    )
+
+    with pytest.raises(ContentAcquisitionError) as raised:
+        fetcher.get("http://example.com/article", expected_domain="example.com")
+
+    assert raised.value.code == "invalid_url"
+
+
+def test_fetcher_allows_explicit_local_research_http() -> None:
+    response = SafeFetcher(
+        transport=FakeTransport(FakeResponse(200, b"article")),
+        resolver=public_resolver,
+    ).get(
+        "http://example.com/article",
+        expected_domain="example.com",
+        fetch_policy=FetchPolicy.local_research_http(),
+    )
+
+    assert response.status == 200
+
+
+def test_fetcher_rejects_nonstandard_http_port() -> None:
+    with pytest.raises(ContentAcquisitionError) as raised:
+        SafeFetcher(
+            transport=FakeTransport(FakeResponse(200, b"article")),
+            resolver=public_resolver,
+        ).get(
+            "http://example.com:8080/article",
+            expected_domain="example.com",
+            fetch_policy=FetchPolicy.local_research_http(),
+        )
+
+    assert raised.value.code == "invalid_url"
+
+
+def test_fetcher_rejects_https_downgrade_even_when_http_is_allowed() -> None:
+    transport = FakeTransport(FakeResponse(302, location="http://example.com/final"))
+
+    with pytest.raises(ContentAcquisitionError) as raised:
+        SafeFetcher(transport=transport, resolver=public_resolver).get(
+            "https://example.com/start",
+            expected_domain="example.com",
+            fetch_policy=FetchPolicy.local_research_http(),
+        )
+
+    assert raised.value.code == "invalid_redirect"
+
+
 def test_fetcher_rejects_cross_domain_redirect() -> None:
     transport = FakeTransport(FakeResponse(302, location="https://evil.test/final"))
 
@@ -110,6 +167,19 @@ def test_fetcher_rejects_response_larger_than_limit() -> None:
         fetcher.get("https://example.com/article", expected_domain="example.com")
 
     assert raised.value.code == "response_too_large"
+
+
+def test_fetcher_classifies_response_read_timeout_as_retryable_network_error() -> None:
+    fetcher = SafeFetcher(
+        transport=FakeTransport(ReadTimeoutResponse(200)),
+        resolver=public_resolver,
+    )
+
+    with pytest.raises(ContentAcquisitionError) as raised:
+        fetcher.get("https://example.com/article", expected_domain="example.com")
+
+    assert raised.value.code == "network_error"
+    assert raised.value.retryable is True
 
 
 def test_fetcher_rejects_unsupported_content_type() -> None:

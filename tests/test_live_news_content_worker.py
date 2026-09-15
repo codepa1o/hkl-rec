@@ -125,6 +125,20 @@ def test_worker_blocks_permanent_paywall_failure() -> None:
     assert result.failed_count == 1
 
 
+def test_worker_blocks_disabled_local_research_job() -> None:
+    store = FakeStore([JOB])
+    error = ContentAcquisitionError(
+        "local_research_disabled",
+        "local research mode is disabled",
+        retryable=False,
+    )
+
+    result = _worker(store, FakeProvider(error=error)).run_once()
+
+    assert store.finished == [(JOB, "blocked", "local_research_disabled")]
+    assert result.failed_count == 1
+
+
 def test_worker_stops_retrying_after_five_claimed_attempts() -> None:
     final_job = ContentJob(REQUEST.article_id, REQUEST, "full_text", 5)
     store = FakeStore([final_job])

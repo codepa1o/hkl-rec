@@ -13,6 +13,7 @@ import {
 export type FeedHydrationStatus = "pending" | "restored" | "miss";
 
 interface FeedRestorationState {
+  loadedContextKey: string | null;
   pages: FeedPageSnapshot[];
   feedUserId: number | null;
   nextCursor: string | null;
@@ -103,6 +104,7 @@ export function useFeedSessionRestoration({
     if (
       !contextKey ||
       !activeContext ||
+      currentState.loadedContextKey !== contextKey ||
       currentState.feedUserId !== activeContext.personaUserId ||
       currentState.pages.length === 0
     ) {
@@ -159,6 +161,7 @@ export function useFeedSessionRestoration({
   }, [
     hydrationStatus,
     state.pages,
+    state.loadedContextKey,
     state.feedUserId,
     state.nextCursor,
     state.hasMore,

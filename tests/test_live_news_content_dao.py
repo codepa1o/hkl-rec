@@ -95,10 +95,36 @@ def test_ensure_content_job_inserts_one_pending_eligible_job() -> None:
     assert "ELSE 'pending'" in statements
     assert "INSERT INTO live_news_content_job" in statements
     assert "ON CONFLICT (article_id) DO UPDATE" in statements
-    assert "target_extraction_version = 'structured-1'" in statements
-    assert connection.cursor_value.executed[0][1] == ("full_text", ARTICLE_ID)
-    assert (ARTICLE_ID, NOW) in [params for _sql, params in connection.cursor_value.executed]
+    assert "target_extraction_version = %s" in statements
+    assert connection.cursor_value.executed[0][1] == (
+        "full_text",
+        "public",
+        "structured-1",
+        ARTICLE_ID,
+    )
+    assert any(
+        params[:3] == (ARTICLE_ID, NOW, "structured-1")
+        for _sql, params in connection.cursor_value.executed
+    )
     assert connection.cursor_value.executed[-1][1] == (ARTICLE_ID,)
+
+
+def test_ensure_content_job_uses_source_specific_version_and_scope() -> None:
+    connection = FakeConnection()
+    policy = ContentPolicy(
+        "html",
+        "full_text",
+        access_scope="local_research",
+        adapter="xinhuanet",
+        target_extraction_version="zh-xinhua-1",
+        allow_insecure_http=True,
+    )
+
+    ensure_content_job(connection, ARTICLE_ID, policy, now=NOW)
+
+    params = [values for _sql, values in connection.cursor_value.executed]
+    assert params[0] == ("full_text", "local_research", "zh-xinhua-1", ARTICLE_ID)
+    assert any("zh-xinhua-1" in values for values in params)
 
 
 def test_claim_due_content_jobs_attaches_current_source_policy(tmp_path: Path) -> None:
@@ -116,6 +142,7 @@ def test_claim_due_content_jobs_attaches_current_source_policy(tmp_path: Path) -
                 "article_id": ARTICLE_ID,
                 "canonical_url": "https://news.example.com/story",
                 "source_domain": "news.example.com",
+                "title": "Stored article title",
                 "language": "en",
                 "content_rights": "full_text",
                 "attempt_count": 1,
@@ -134,6 +161,7 @@ def test_claim_due_content_jobs_attaches_current_source_policy(tmp_path: Path) -
     assert len(jobs) == 1
     assert jobs[0].request.policy.mode == "html"
     assert jobs[0].request.expected_domain == "example.com"
+    assert jobs[0].request.title == "Stored article title"
     assert jobs[0].attempt_count == 1
 
 
@@ -187,6 +215,8 @@ def test_completion_persists_document_and_image_metadata_in_the_same_transaction
     statements = "\n".join(sql for sql, _params in connection.cursor_value.executed)
     assert "body_document = %s" in statements
     assert "body_structure_status = %s" in statements
+    assert "body_access_scope = %s" in statements
+    assert any("public" in params for _sql, params in connection.cursor_value.executed)
     assert any("available" in params for _sql, params in connection.cursor_value.executed)
     assert "INSERT INTO live_news_content_asset" in statements
     assert "ON CONFLICT (article_id, block_id) DO UPDATE" in statements

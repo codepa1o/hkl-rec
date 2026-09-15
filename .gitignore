@@ -46,6 +46,7 @@ logs/
 /build/mind_demo_world/
 /build/mind_demo_fixture/
 /build/mind_models/
+/build/live_topic_model/
 /build/mind_search/
 /build/search_eval/
 /build/backups/

@@ -42,13 +42,15 @@ export default function FeedPage() {
   const navigate = useNavigate();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const routeCategory = searchParams.get("category") || undefined;
-  const category = sourceSpace === "mind" ? routeCategory : undefined;
+  const compatibleCategory = !routeCategory || routeCategory.startsWith("live-") === (sourceSpace === "live");
+  const category = compatibleCategory ? routeCategory : undefined;
   const routeLanguage = searchParams.get("language");
   const language: LiveLanguage =
     sourceSpace === "live" && (routeLanguage === "zh" || routeLanguage === "en")
       ? routeLanguage
       : "all";
   const [pages, setPages] = useState<FeedPageBatch[]>([]);
+  const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
   const [feedUserId, setFeedUserId] = useState<number | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -60,6 +62,7 @@ export default function FeedPage() {
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [feedWatermark, setFeedWatermark] = useState<string | null>(null);
   const [hasNewUpdates, setHasNewUpdates] = useState(false);
+  const [reloadGeneration, setReloadGeneration] = useState(0);
   const trackedRef = useRef<Set<string>>(new Set());
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -68,18 +71,18 @@ export default function FeedPage() {
     () =>
       stableClientId(
         "feed",
-        `${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${category ?? "all"}:${language}`,
+        `${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${category ?? "all"}:${language}:${reloadGeneration}`,
       ),
-    [category, language, selectedPersona?.user_id, sourceSpace],
+    [category, language, selectedPersona?.user_id, sourceSpace, reloadGeneration],
   );
 
   useEffect(() => {
-    if (sourceSpace !== "live" || !routeCategory) return;
+    if (compatibleCategory) return;
     const next = new URLSearchParams(location.search);
     next.delete("category");
     const query = next.toString();
     navigate({ pathname: "/", search: query ? `?${query}` : "" }, { replace: true });
-  }, [location.search, navigate, routeCategory, sourceSpace]);
+  }, [compatibleCategory, location.search, navigate]);
 
   const context = useMemo(
     () =>
@@ -110,6 +113,7 @@ export default function FeedPage() {
         ),
       );
       setPages(snapshot.pages);
+      setLoadedContextKey(snapshot.contextKey);
       setFeedUserId(snapshot.feedUserId);
       setNextCursor(snapshot.nextCursor);
       setHasMore(snapshot.hasMore);
@@ -124,7 +128,7 @@ export default function FeedPage() {
   );
   const restoration = useFeedSessionRestoration({
     context,
-    state: { pages, feedUserId, nextCursor, hasMore, feedWatermark },
+    state: { pages, feedUserId, nextCursor, hasMore, feedWatermark, loadedContextKey },
     renderedArticleIds,
     onHydrate: hydrateFeed,
   });
@@ -132,7 +136,7 @@ export default function FeedPage() {
   useEffect(() => {
     setHasNewUpdates(false);
     if (
-      restoration.hydrationStatus !== "restored" ||
+      restoration.hydrationStatus === "pending" ||
       sourceSpace !== "live" ||
       !selectedPersona ||
       !feedWatermark
@@ -148,6 +152,7 @@ export default function FeedPage() {
           sourceSpace,
           language,
           feedWatermark,
+          category,
         );
         if (!cancelled && response.source_space === sourceSpace) {
           setHasNewUpdates(response.has_updates);
@@ -164,6 +169,7 @@ export default function FeedPage() {
     };
   }, [
     feedWatermark,
+    category,
     language,
     restoration.contextKey,
     restoration.hydrationStatus,
@@ -172,6 +178,7 @@ export default function FeedPage() {
   ]);
 
   const reloadLatestFeed = useCallback(() => {
+    setReloadGeneration((current) => current + 1);
     restoration.clear();
     setHasNewUpdates(false);
     loadingMoreRef.current = false;
@@ -217,10 +224,11 @@ export default function FeedPage() {
       .then((res) => {
         if (cancelled || res.source_space !== sourceSpace) return;
         setPages([{ requestId: res.request_id, items: res.items }]);
+        setLoadedContextKey(restoration.contextKey);
         setNextCursor(res.next_cursor);
         setHasMore(res.has_more);
         setFeedUserId(res.user_id);
-        setFeedWatermark(latestFeedWatermark(res.items));
+        setFeedWatermark(res.current_watermark ?? latestFeedWatermark(res.items));
       })
       .catch((err: Error) => {
         if (cancelled) return;
@@ -238,13 +246,14 @@ export default function FeedPage() {
     selectedPersona,
     restoration.hydrationStatus,
     loadRequestId,
+    reloadGeneration,
     category,
     sourceSpace,
     language,
   ]);
 
   const visibleEntries = useMemo<FeedEntry[]>(() => {
-    if (!selectedPersona || feedUserId !== selectedPersona.user_id) return [];
+    if (!selectedPersona || feedUserId !== selectedPersona.user_id || loadedContextKey !== restoration.contextKey) return [];
     const unique = new Map<string, FeedEntry>();
     pages.forEach((page) => {
       page.items.forEach((item) => {
@@ -254,7 +263,7 @@ export default function FeedPage() {
       });
     });
     return [...unique.values()];
-  }, [pages, selectedPersona, feedUserId]);
+  }, [pages, selectedPersona, feedUserId, loadedContextKey, restoration.contextKey]);
 
   useEffect(() => {
     if (!selectedPersona || visibleEntries.length === 0) return;
@@ -329,7 +338,8 @@ export default function FeedPage() {
       ]);
       setNextCursor(res.next_cursor);
       setHasMore(res.has_more);
-      setFeedWatermark((current) => latestFeedWatermark(res.items) ?? current);
+      // Older pages must not move the first-page freshness boundary backwards.
+      setFeedWatermark((current) => current ?? res.current_watermark ?? latestFeedWatermark(res.items));
     } catch (err) {
       if (activeSessionRef.current !== sessionId) return;
       const message = err instanceof Error ? err.message : "未知错误";
@@ -395,6 +405,7 @@ export default function FeedPage() {
   }
 
   const categoryLabel = category ? localizeCategoryName(category) : null;
+  const allNewsHref = sourceSpace === "live" && language !== "all" ? `/?language=${language}` : "/";
 
   return (
     <main className="zr-center">
@@ -404,7 +415,7 @@ export default function FeedPage() {
         </span>
         <h1>
           {sourceSpace === "live"
-            ? "实时新闻"
+            ? categoryLabel ? `${categoryLabel} · 实时新闻` : "实时新闻"
             : categoryLabel
               ? `${categoryLabel}新闻`
               : "为你推荐"}
@@ -427,7 +438,6 @@ export default function FeedPage() {
               aria-pressed={language === value}
               onClick={() => {
                 const next = new URLSearchParams(location.search);
-                next.delete("category");
                 if (value === "all") next.delete("language");
                 else next.set("language", value);
                 const query = next.toString();
@@ -462,7 +472,8 @@ export default function FeedPage() {
         <div className="zr-status">
           {categoryLabel
             ? `当前${categoryLabel}分类暂无文章，请尝试其他新闻分类。`
-            : "当前信息流暂无文章，请尝试选择其他用户画像。"}
+            : sourceSpace === "live" ? "当前语言暂无新闻，请稍后刷新。" : "当前信息流暂无文章，请尝试选择其他用户画像。"}
+          {category && <Link to={allNewsHref}>查看全部新闻</Link>}
         </div>
       )}
 

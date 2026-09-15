@@ -52,6 +52,7 @@ class UnwiredRuntimeRepository(RuntimeRepository):
         source_space: NewsSpace,
         language: LiveLanguage,
         since: datetime,
+        category: str | None = None,
     ) -> FeedUpdateStatusResponse:
         raise RepositoryNotReadyError("GET /feed/updates")
 

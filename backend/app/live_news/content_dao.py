@@ -31,6 +31,7 @@ def ensure_content_job(
                 """
                 UPDATE live_news
                 SET content_rights = 'link_only',
+                    body_access_scope = %s,
                     body_status = 'metadata_only',
                     body_structure_status = 'blocked',
                     body_text = NULL,
@@ -41,7 +42,7 @@ def ensure_content_job(
                     updated_at = CURRENT_TIMESTAMP
                 WHERE article_id = %s
                 """,
-                (article_id,),
+                (policy.access_scope, article_id),
             )
             cursor.execute(
                 "DELETE FROM live_news_content_job WHERE article_id = %s",
@@ -52,15 +53,21 @@ def ensure_content_job(
             """
             UPDATE live_news
             SET content_rights = %s,
+                body_access_scope = %s,
                 body_structure_status = CASE
                     WHEN body_document IS NOT NULL
-                         AND body_document_version = 'structured-1' THEN 'available'
+                         AND body_document_version = %s THEN 'available'
                     ELSE 'pending'
                 END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE article_id = %s
             """,
-            (policy.display, article_id),
+            (
+                policy.display,
+                policy.access_scope,
+                policy.target_extraction_version,
+                article_id,
+            ),
         )
         cursor.execute(
             """
@@ -68,7 +75,7 @@ def ensure_content_job(
               article_id, status, attempt_count, next_attempt_at,
               target_extraction_version, requested_by, created_at, updated_at
             ) VALUES (
-              %s, 'pending', 0, %s, 'structured-1', 'ingest',
+              %s, 'pending', 0, %s, %s, 'ingest',
               CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             ON CONFLICT (article_id) DO UPDATE SET
@@ -79,7 +86,7 @@ def ensure_content_job(
                   SELECT 1 FROM live_news
                   WHERE article_id = EXCLUDED.article_id
                     AND body_structure_status = 'available'
-                    AND body_document_version = 'structured-1'
+                    AND body_document_version = %s
                 ) THEN live_news_content_job.status
                 ELSE 'pending'
               END,
@@ -88,11 +95,17 @@ def ensure_content_job(
                   THEN live_news_content_job.next_attempt_at
                 ELSE EXCLUDED.next_attempt_at
               END,
-              target_extraction_version = 'structured-1',
+              target_extraction_version = %s,
               requested_by = 'ingest',
               updated_at = CURRENT_TIMESTAMP
             """,
-            (article_id, now),
+            (
+                article_id,
+                now,
+                policy.target_extraction_version,
+                policy.target_extraction_version,
+                policy.target_extraction_version,
+            ),
         )
         cursor.execute(
             """
@@ -147,6 +160,7 @@ def claim_due_content_jobs(
               AND news.article_id = job.article_id
             RETURNING
               news.article_id, news.canonical_url, news.source_domain, news.image_url,
+              news.title,
               news.language, news.content_rights, job.attempt_count
             """,
             (now, limit, now, worker_id),
@@ -167,6 +181,7 @@ def claim_due_content_jobs(
                     language=cast(Literal["zh", "en"], row["language"]),
                     policy=policy.content,
                     lead_image_url=cast(str | None, row.get("image_url")),
+                    title=str(row.get("title") or ""),
                 ),
                 content_rights=cast(ContentRights, row["content_rights"]),
                 attempt_count=int(row["attempt_count"]),
@@ -198,6 +213,7 @@ def complete_content_job(
                 body_content_hash = %s,
                 body_extraction_version = %s,
                 content_rights = %s,
+                body_access_scope = %s,
                 body_document = %s::jsonb,
                 body_document_version = %s,
                 body_document_hash = %s,
@@ -213,6 +229,7 @@ def complete_content_job(
                 body_hash(acquired.body_text),
                 acquired.extraction_version,
                 job.content_rights,
+                job.request.policy.access_scope,
                 document_payload,
                 structure_version,
                 structure_hash,

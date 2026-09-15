@@ -4,9 +4,9 @@
     {"domain": "bbc.com", "languages": ["en"], "quality_weight": 0.95, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
     {"domain": "reuters.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
     {"domain": "apnews.com", "languages": ["en"], "quality_weight": 1.0, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
-    {"domain": "xinhuanet.com", "languages": ["zh"], "quality_weight": 0.95, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
-    {"domain": "people.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
-    {"domain": "chinanews.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}},
+    {"domain": "xinhuanet.com", "languages": ["zh"], "quality_weight": 0.95, "content": {"mode": "html", "display": "full_text", "access_scope": "local_research", "adapter": "xinhuanet", "target_extraction_version": "zh-xinhua-1", "allow_insecure_http": true, "feed_urls": [], "images": {"display": "remote_url", "cache": "never", "allowed_domains": ["xinhuanet.com", "news.cn"], "max_images_per_article": 20, "max_bytes_per_image": 8388608}}},
+    {"domain": "people.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "html", "display": "full_text", "access_scope": "local_research", "adapter": "people", "target_extraction_version": "zh-people-1", "allow_insecure_http": true, "feed_urls": [], "images": {"display": "remote_url", "cache": "never", "allowed_domains": ["people.com.cn", "people.cn"], "max_images_per_article": 20, "max_bytes_per_image": 8388608}}},
+    {"domain": "chinanews.com.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "html", "display": "full_text", "access_scope": "local_research", "adapter": "chinanews", "target_extraction_version": "zh-chinanews-1", "allow_insecure_http": true, "feed_urls": [], "images": {"display": "remote_url", "cache": "never", "allowed_domains": ["chinanews.com.cn", "chinanews.com", "cns.com.cn", "cnsimg.net"], "max_images_per_article": 20, "max_bytes_per_image": 8388608}}},
     {"domain": "thepaper.cn", "languages": ["zh"], "quality_weight": 0.90, "content": {"mode": "link_only", "display": "link_only", "feed_urls": []}}
   ]
 }

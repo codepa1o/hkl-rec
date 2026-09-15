@@ -26,6 +26,7 @@ def get_feed_update_status(
     source_space: NewsSpace = Query("mind"),
     language: LiveLanguage = Query("all"),
     since: datetime = Query(..., description="Timezone-aware feed watermark."),
+    category: str | None = Query(None, min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$"),
     service: FeedService = Depends(get_feed_service),
     current_user: AuthenticatedUser | None = Depends(require_current_user_when_auth_enabled),
     auth_service_factory: Callable[[], AuthService] = Depends(get_auth_service_factory),
@@ -43,6 +44,7 @@ def get_feed_update_status(
         source_space=source_space,
         language=language,
         since=since,
+        category=category,
     )
 
 
@@ -81,7 +83,7 @@ def get_feed(
         min_length=1,
         max_length=64,
         pattern=r"^[a-z0-9-]+$",
-        description="可选的 MIND 一级新闻分类精确值。",
+        description="当前空间的新闻分类 key；Live 使用 live- 前缀。",
     ),
     source_space: NewsSpace = Query("mind"),
     language: LiveLanguage = Query("all"),

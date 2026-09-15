@@ -110,6 +110,7 @@ class FeedDebugPayload(ApiModel):
 
 
 class FeedResponse(ApiModel):
+    current_watermark: datetime | None = None
     source_space: NewsSpace = DEFAULT_NEWS_SPACE
     user_id: int
     request_id: str

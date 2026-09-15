@@ -65,6 +65,7 @@ function storedSnapshot(): FeedSessionSnapshot {
 }
 
 const currentState = {
+  loadedContextKey: buildFeedContextKey(context),
   pages: [{ requestId: "request-3", items: [item] }],
   feedUserId: 7248,
   nextCursor: "cursor-4",

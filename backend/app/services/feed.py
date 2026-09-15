@@ -46,10 +46,12 @@ class FeedService:
         source_space: NewsSpace,
         language: LiveLanguage,
         since: datetime,
+        category: str | None = None,
     ) -> FeedUpdateStatusResponse:
         return self._repository.get_feed_update_status(
             user_id=user_id,
             source_space=source_space,
             language=language,
             since=since,
+            category=category,
         )

@@ -54,7 +54,7 @@ def test_store_uses_psycopg_transaction_context_instead_of_begin_method() -> Non
     assert connection.cursor_value.executed[0][1] == ("gdelt_gal", "fixture failure")
 
 
-def test_store_passes_allowlist_to_batch_persistence(monkeypatch, tmp_path) -> None:
+def test_store_passes_allowlist_and_local_gate_to_batch_persistence(monkeypatch, tmp_path) -> None:
     class Connection:
         def __init__(self) -> None:
             self.closed = False
@@ -77,18 +77,38 @@ def test_store_passes_allowlist_to_batch_persistence(monkeypatch, tmp_path) -> N
     connection = Connection()
     captured: dict[str, object] = {}
 
-    def fake_persist(connection_arg, batch_arg, *, allowlist=None):
-        captured.update(connection=connection_arg, batch=batch_arg, allowlist=allowlist)
+    def fake_persist(
+        connection_arg,
+        batch_arg,
+        *,
+        allowlist=None,
+        local_research_allowed=False,
+    ):
+        captured.update(
+            connection=connection_arg,
+            batch=batch_arg,
+            allowlist=allowlist,
+            local_research_allowed=local_research_allowed,
+        )
         return LiveImportResult("batch", 1, 0)
 
     monkeypatch.setattr(dao, "persist_batch", fake_persist)
     batch = MagicMock(spec=NormalizedGalBatch)
-    store = PostgresLiveNewsStore(lambda: connection, allowlist)
+    store = PostgresLiveNewsStore(
+        lambda: connection,
+        allowlist,
+        local_research_allowed=True,
+    )
 
     result = store.persist_batch(batch)
 
     assert result.accepted_count == 1
-    assert captured == {"connection": connection, "batch": batch, "allowlist": allowlist}
+    assert captured == {
+        "connection": connection,
+        "batch": batch,
+        "allowlist": allowlist,
+        "local_research_allowed": True,
+    }
     assert connection.closed is True
 
 

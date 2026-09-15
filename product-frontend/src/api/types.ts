@@ -77,6 +77,7 @@ export interface ArticleCardResponse {
   body_status?: "metadata_only" | "pending" | "available" | "blocked" | "failed";
   body_source?: "guardian_api" | "rss" | "html" | null;
   content_rights?: "full_text" | "excerpt_only" | "link_only";
+  body_access_scope?: "public" | "local_research";
   body_document?: StructuredBodyDocument | null;
   body_structure_status?: BodyStructureStatus;
   body_document_version?: string | null;
@@ -206,6 +207,7 @@ export interface FeedItem {
 }
 
 export interface FeedResponse {
+  current_watermark?: string | null;
   source_space: NewsSpace;
   user_id: number;
   request_id: string;
@@ -285,6 +287,7 @@ export interface ProfileTopicEvidence {
 }
 
 export interface ProfileTermLayer {
+  positive_score_total?: number | null;
   interests: ProfileTopicEvidence[];
   reduced_topics: ProfileTopicEvidence[];
 }
