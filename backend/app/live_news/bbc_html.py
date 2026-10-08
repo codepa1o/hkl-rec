@@ -12,8 +12,8 @@ from threading import Lock
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
-from lxml import html as lxml_html
-from lxml.etree import ParserError, XMLSyntaxError
+from lxml import html as lxml_html  # type: ignore[import-untyped]
+from lxml.etree import ParserError, XMLSyntaxError  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from .content_decode import decode_html
@@ -100,7 +100,10 @@ class BbcHtmlProvider:
                 rules = cached[1]
             if not rules.can_fetch("hkl-rec-live-content", url):
                 raise _error("publisher_blocked", "BBC robots.txt disallows article acquisition")
-            delay = max(1, rules.crawl_delay("hkl-rec-live-content") or 0)
+            try:
+                delay = max(1.0, float(rules.crawl_delay("hkl-rec-live-content") or 0))
+            except (TypeError, ValueError):
+                delay = 1.0
             if delay > 60:
                 raise _error("publisher_blocked", "BBC crawl delay exceeds the worker budget")
             remaining = delay - (time.monotonic() - self._last_fetch)
@@ -148,7 +151,7 @@ class BbcHtmlProvider:
             )
         ):
             raise _error("extraction_quality_failed", "BBC title does not match the stored article")
-        metadata = []
+        metadata: list[dict[str, object]] = []
         for raw in document.xpath('//script[@type="application/ld+json"]/text()'):
             try:
                 value = json.loads(raw)
@@ -271,6 +274,7 @@ class BbcHtmlProvider:
         bylines = article.xpath('.//*[@data-testid="byline-contributors"]')
         byline = " ".join(bylines[0].text_content().split())[:1000] if len(bylines) == 1 else None
         dates = article.xpath('.//*[@data-component="byline-block"]//time/@datetime')
+        published: datetime | None = None
         try:
             published = datetime.fromisoformat(
                 str(dates[0] if dates else article_meta.get("datePublished", "")).replace(

@@ -13,8 +13,8 @@ from typing import NoReturn
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
-from lxml import html as lxml_html
-from lxml.etree import ParserError, XMLSyntaxError
+from lxml import html as lxml_html  # type: ignore[import-untyped]
+from lxml.etree import ParserError, XMLSyntaxError  # type: ignore[import-untyped]
 
 from .content_decode import decode_html
 from .content_document import PublisherTag
@@ -96,7 +96,10 @@ class GuardianHtmlProvider:
             agent = "hkl-rec-live-content"
             if not rules.can_fetch(agent, request.canonical_url):
                 _fail("publisher_blocked", "robots.txt disallows article acquisition")
-            delay = max(1, rules.crawl_delay(agent) or 0)
+            try:
+                delay = max(1.0, float(rules.crawl_delay(agent) or 0))
+            except (TypeError, ValueError):
+                delay = 1.0
             if delay > 60:
                 _fail("publisher_blocked", "Requested crawl delay exceeds local worker budget")
             remaining = delay - (time.monotonic() - self._last_fetch)
@@ -131,7 +134,7 @@ class GuardianHtmlProvider:
             SequenceMatcher(None, expected, _title(t.text_content())).ratio() >= 0.8 for t in titles
         ):
             _fail("extraction_quality_failed", "Page title does not match the requested article")
-        metadata = []
+        metadata: list[dict[str, object]] = []
         for raw in document.xpath('//script[@type="application/ld+json"]/text()'):
             try:
                 value = json.loads(raw)
@@ -220,6 +223,7 @@ class GuardianHtmlProvider:
         visible_bylines = document.xpath('//*[@data-component="meta-byline"]')
         if len(visible_bylines) == 1:
             byline = " ".join(visible_bylines[0].text_content().split())[:1000] or byline
+        published: datetime | None = None
         try:
             published = datetime.fromisoformat(
                 str(article_meta.get("datePublished", "")).replace("Z", "+00:00")

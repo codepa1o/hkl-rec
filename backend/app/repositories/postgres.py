@@ -473,13 +473,13 @@ class PostgresRuntimeRepository(RuntimeRepository):
             feature_dicts: list[dict[str, float]] = []
             candidate_keys: list[tuple[str, Any, Any, set[int], float, list[str], bool]] = []
             for news_id, candidate in candidates.items():
-                row = news_rows.get(news_id)
-                if row is None:
+                news_row = news_rows.get(news_id)
+                if news_row is None:
                     continue
                 topics = topics_by_news.get(news_id, [])
                 topic_ids = {topic.topic_id for topic in topics}
                 raw_base_score = max(
-                    float(row.get("hot_score") or 0.0),
+                    float(news_row.get("hot_score") or 0.0),
                     float(cast(Any, candidate.get("raw_base_score")) or 0.0),
                 )
                 base_score = (
@@ -491,7 +491,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     else 0.0
                 )
                 feat = build_feature_dict(
-                    article_row=row,
+                    article_row=news_row,
                     topic_ids=topic_ids,
                     topic_weight_map=topic_weight_map,
                     default_topic_weight_map=default_topic_weight_map,
@@ -506,7 +506,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 candidate_keys.append(
                     (
                         news_id,
-                        row,
+                        news_row,
                         topics,
                         topic_ids,
                         base_score,
