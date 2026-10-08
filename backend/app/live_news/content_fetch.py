@@ -187,10 +187,13 @@ class SafeFetcher:
                         code = "authentication_required"
                         if status == 403 and host == "content.guardianapis.com":
                             try:
-                                payload = json.loads(response.read(4096).decode('utf-8'))
-                                message = payload.get('response', {}).get('message', '')
-                                if message == 'You are not permitted to access this content via your current user tier.':
-                                    code = 'api_tier_restricted'
+                                payload = json.loads(response.read(4096).decode("utf-8"))
+                                message = payload.get("response", {}).get("message", "")
+                                if (
+                                    message
+                                    == "You are not permitted to access this content via your current user tier."
+                                ):
+                                    code = "api_tier_restricted"
                             except (ValueError, AttributeError, OSError):
                                 pass
                     elif status in {404, 410}:

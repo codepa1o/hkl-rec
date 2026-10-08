@@ -231,7 +231,8 @@ def complete_content_job(
                 body_hash(acquired.body_text),
                 acquired.extraction_version,
                 job.content_rights,
-                'local_research' if acquired.source == 'html' and job.request.policy.mode == 'guardian_api'
+                "local_research"
+                if acquired.source == "html" and job.request.policy.mode == "guardian_api"
                 else (acquired.access_scope or job.request.policy.access_scope),
                 document_payload,
                 structure_version,

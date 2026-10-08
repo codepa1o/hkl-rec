@@ -57,10 +57,15 @@ def public_resolver(_host: str) -> tuple[str, ...]:
 
 def test_guardian_tier_403_is_distinct_from_authentication_failure():
     body = b'{"response":{"status":"error","message":"You are not permitted to access this content via your current user tier."}}'
-    fetcher=SafeFetcher(transport=FakeTransport(FakeResponse(403,body,content_type='application/json')),resolver=public_resolver)
+    fetcher = SafeFetcher(
+        transport=FakeTransport(FakeResponse(403, body, content_type="application/json")),
+        resolver=public_resolver,
+    )
     with pytest.raises(ContentAcquisitionError) as e:
-        fetcher.get('https://content.guardianapis.com/test',expected_domain='content.guardianapis.com')
-    assert e.value.code == 'api_tier_restricted'
+        fetcher.get(
+            "https://content.guardianapis.com/test", expected_domain="content.guardianapis.com"
+        )
+    assert e.value.code == "api_tier_restricted"
 
 
 @pytest.mark.parametrize(

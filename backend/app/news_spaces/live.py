@@ -307,7 +307,9 @@ class LiveNewsSpaceRepository:
             discovered_at=value.get("discovered_at"),
             body_text=_visible_body(value, access_allowed=access_allowed),
             body_status=body_status,
-            body_error_code=value.get('content_error_code') if access_allowed else 'local_research_disabled',
+            body_error_code=value.get("content_error_code")
+            if access_allowed
+            else "local_research_disabled",
             body_source=value.get("body_source"),
             content_rights=content_rights,
             body_access_scope=value.get("body_access_scope") or "public",

@@ -27,7 +27,9 @@ _FORMATS = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP"
 
 
 class _ImageResponse:
-    def __init__(self, response: Any, connection: HTTPConnection, sock: Any, deadline: float) -> None:
+    def __init__(
+        self, response: Any, connection: HTTPConnection, sock: Any, deadline: float
+    ) -> None:
         self.status = response.status
         self.headers = response.headers
         self._response = response

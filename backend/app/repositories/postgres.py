@@ -376,7 +376,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 refill_limit = min(max(page_size, 50), 2000)
                 for row in sorted(
                     eligible_by_id.values(),
-                    key=lambda item: (-float(item.get("hot_score") or 0.0), str(item["article_id"])),
+                    key=lambda item: (
+                        -float(item.get("hot_score") or 0.0),
+                        str(item["article_id"]),
+                    ),
                 ):
                     if len(candidates) >= refill_limit:
                         break

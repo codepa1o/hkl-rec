@@ -51,7 +51,11 @@ def main() -> int:
             lead_image_url=row["image_url"],
             title=row["title"],
         )
-        acquired = build_provider_registry(settings, SafeFetcher()).for_mode('guardian_api').acquire(request)
+        acquired = (
+            build_provider_registry(settings, SafeFetcher())
+            .for_mode("guardian_api")
+            .acquire(request)
+        )
         doc = acquired.body_document
         report = {
             "article_id": args.article_id,
