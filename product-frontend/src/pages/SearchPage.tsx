@@ -7,26 +7,37 @@ import { useSourceSpace } from "../context/SourceSpaceContext";
 import PostCard from "../components/PostCard";
 import SearchBox from "../components/SearchBox";
 import { localizeInterfaceError } from "../localization";
+import SavedSearchButton from "../reading/SavedSearchButton";
+import { useReading } from "../reading/ReadingContext";
+import { searchReading } from "../reading/api";
 
 export default function SearchPage() {
   const { selectedPersona, bumpProfile } = usePersona();
   const { sourceSpace } = useSourceSpace();
+  const reading = useReading();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const rawQuery = searchParams.get("q") ?? "";
+  const requestedSpace = searchParams.get("space");
+  const effectiveSpace = requestedSpace === "mind" || requestedSpace === "live" ? requestedSpace : sourceSpace;
+  const savedSearchMode = Boolean(reading?.active && requestedSpace === effectiveSpace);
+  const searchLanguage = searchParams.get("language") === "zh" || searchParams.get("language") === "en" ? searchParams.get("language") as "zh" | "en" : "all";
+  const searchCategory = searchParams.get("category");
   const isExact = searchParams.get("exact") === "1";
   const [items, setItems] = useState<SearchItem[]>([]);
   const [resolvedQueryKey, setResolvedQueryKey] = useState<string>("");
   const [requestId, setRequestId] = useState<string>("");
+  const [hiddenCount, setHiddenCount] = useState(0);
+  const [includeHidden, setIncludeHidden] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchEventId = useMemo(
     () =>
       stableClientId(
         "search",
-        `${location.key}:${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${rawQuery}:${isExact}`,
+        `${location.key}:${effectiveSpace}:${selectedPersona?.user_id ?? "none"}:${rawQuery}:${isExact}`,
       ),
-    [location.key, sourceSpace, selectedPersona?.user_id, rawQuery, isExact],
+    [location.key, effectiveSpace, selectedPersona?.user_id, rawQuery, isExact],
   );
 
   useEffect(() => {
@@ -37,13 +48,17 @@ export default function SearchPage() {
     setItems([]);
     setResolvedQueryKey("");
     setRequestId("");
+    setHiddenCount(0);
     const input = isExact ? { queryKey: rawQuery } : { queryText: rawQuery };
-    postSearch(selectedPersona.user_id, input, 10, searchEventId, sourceSpace)
+    (savedSearchMode
+      ? searchReading(effectiveSpace, rawQuery, searchLanguage, searchCategory, includeHidden, searchEventId)
+      : postSearch(selectedPersona.user_id, input, 10, searchEventId, effectiveSpace))
       .then((res) => {
-        if (cancelled || res.source_space !== sourceSpace) return;
+        if (cancelled || res.source_space !== effectiveSpace) return;
         setItems(res.items);
         setResolvedQueryKey(res.query_key);
         setRequestId(res.request_id);
+        setHiddenCount("hidden_count" in res ? Number(res.hidden_count) : 0);
         bumpProfile();
       })
       .catch((err: Error) => {
@@ -61,7 +76,7 @@ export default function SearchPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPersona, rawQuery, isExact, bumpProfile, searchEventId, sourceSpace]);
+  }, [selectedPersona, rawQuery, isExact, bumpProfile, searchEventId, effectiveSpace, savedSearchMode, searchLanguage, searchCategory, includeHidden]);
 
   const handleClick = useCallback(
     (articleId: string) => {
@@ -69,7 +84,7 @@ export default function SearchPage() {
       trackEvent({
         event_id: `search-click-${sourceSpace}:${requestId}:${articleId}`,
         user_id: selectedPersona.user_id,
-        source_space: sourceSpace,
+        source_space: effectiveSpace,
         event_type: "search_result_click",
         surface: "search",
         article_id: articleId,
@@ -79,7 +94,7 @@ export default function SearchPage() {
     },
     [
       selectedPersona,
-      sourceSpace,
+      effectiveSpace,
       resolvedQueryKey,
       rawQuery,
       requestId,
@@ -112,6 +127,13 @@ export default function SearchPage() {
         <div className="zr-search-page__result-label">
           “<strong>{rawQuery}</strong>”的搜索结果
         </div>
+      )}
+
+      {rawQuery && <SavedSearchButton query={rawQuery} language={searchLanguage} category={searchCategory} />}
+      {savedSearchMode && hiddenCount > 0 && !includeHidden && (
+        <button type="button" className="zr-reading-actions" onClick={() => setIncludeHidden(true)}>
+          还有 {hiddenCount} 条结果被偏好规则隐藏，仍然查看
+        </button>
       )}
 
       {!rawQuery && (

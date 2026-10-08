@@ -1,4 +1,4 @@
-import { CircleUserRound, FlaskConical, Home, Search } from "lucide-react";
+import { Bookmark, CircleUserRound, FlaskConical, Home, Search } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { listCategories } from "../api/client";
@@ -42,6 +42,8 @@ export default function LeftSidebar() {
       ? 1
       : location.pathname === "/profile"
         ? 2
+        : location.pathname === "/reading"
+          ? 3
         : location.pathname === "/"
           ? 0
           : -1;
@@ -84,6 +86,10 @@ export default function LeftSidebar() {
         <NavLink to="/search" className={navClass}>
           <Search size={19} />
           <span>搜索</span>
+        </NavLink>
+        <NavLink to="/reading" className={navClass}>
+          <Bookmark size={19} />
+          <span>我的阅读</span>
         </NavLink>
         <NavLink to="/profile" className={navClass}>
           <CircleUserRound size={19} />

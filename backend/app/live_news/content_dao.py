@@ -31,7 +31,8 @@ def ensure_content_job(
                 """
                 UPDATE live_news
                 SET content_rights = 'link_only',
-                    body_access_scope = %s,
+                    body_access_scope = CASE WHEN (body_text IS NOT NULL OR body_document IS NOT NULL)
+                        AND body_access_scope='local_research' THEN body_access_scope ELSE %s END,
                     body_status = 'metadata_only',
                     body_structure_status = 'blocked',
                     body_text = NULL,
@@ -53,7 +54,8 @@ def ensure_content_job(
             """
             UPDATE live_news
             SET content_rights = %s,
-                body_access_scope = %s,
+                body_access_scope = CASE WHEN (body_text IS NOT NULL OR body_document IS NOT NULL) AND body_access_scope = 'local_research'
+                    THEN body_access_scope ELSE %s END,
                 body_structure_status = CASE
                     WHEN body_document IS NOT NULL
                          AND body_document_version = %s THEN 'available'
@@ -115,7 +117,7 @@ def ensure_content_job(
                     WHEN 'failed' THEN 'failed'
                     WHEN 'completed' THEN
                         CASE WHEN news.body_text IS NOT NULL THEN 'available' ELSE 'pending' END
-                    ELSE 'pending'
+                    ELSE CASE WHEN news.body_text IS NOT NULL THEN 'available' ELSE 'pending' END
                 END,
                 body_structure_status = CASE job.status
                     WHEN 'blocked' THEN 'blocked'
@@ -229,7 +231,8 @@ def complete_content_job(
                 body_hash(acquired.body_text),
                 acquired.extraction_version,
                 job.content_rights,
-                job.request.policy.access_scope,
+                'local_research' if acquired.source == 'html' and job.request.policy.mode == 'guardian_api'
+                else (acquired.access_scope or job.request.policy.access_scope),
                 document_payload,
                 structure_version,
                 structure_hash,

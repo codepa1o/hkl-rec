@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.schemas.article import ArticleCardResponse, ContentEnsureResponse
@@ -37,6 +37,7 @@ class RuntimeRepository(Protocol):
         category: str | None = None,
         source_space: NewsSpace = "mind",
         language: LiveLanguage = "all",
+        reading_candidates: list[dict[str, Any]] | None = None,
     ) -> FeedResponse: ...
 
     def get_feed_update_status(

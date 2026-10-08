@@ -45,7 +45,8 @@ function snapshotMatchesContext(
     snapshot.personaUserId === context.personaUserId &&
     snapshot.feedUserId === context.personaUserId &&
     snapshot.category === context.category &&
-    snapshot.language === context.language
+    snapshot.language === context.language &&
+    snapshot.readingKey === context.readingKey
   );
 }
 
@@ -118,6 +119,7 @@ export function useFeedSessionRestoration({
       personaUserId: activeContext.personaUserId,
       category: activeContext.category,
       language: activeContext.language,
+      ...(activeContext.readingKey !== undefined ? { readingKey: activeContext.readingKey } : {}),
       pages: currentState.pages,
       feedUserId: currentState.feedUserId,
       nextCursor: currentState.nextCursor,

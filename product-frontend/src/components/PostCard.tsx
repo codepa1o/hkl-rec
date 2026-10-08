@@ -5,6 +5,7 @@ import { trackEvent } from "../api/client";
 import type { FeedItem, SearchItem } from "../api/types";
 import { localizeCategoryName, localizeRecommendationReason } from "../localization";
 import VoteActions from "./VoteActions";
+import ReadingActions from "../reading/ReadingActions";
 
 interface Props {
   item: FeedItem | SearchItem;
@@ -143,6 +144,7 @@ export default function PostCard({
             surface={surface}
             onVoted={onProfileChanged}
           />
+          <ReadingActions sourceSpace={item.source_space} articleId={item.article_id} />
           <div className="zr-card__actions">
             <Link
               to={articlePath}

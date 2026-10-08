@@ -19,12 +19,24 @@ import { useSourceSpace } from "../context/SourceSpaceContext";
 import StructuredArticleBody from "../components/StructuredArticleBody";
 import { localizeCategoryName, localizeInterfaceError } from "../localization";
 import { dwellEventId, VisibleDwellAccumulator } from "../profile/visibleDwell";
+import ReadingActions from "../reading/ReadingActions";
 
 const entityGroupLabels: Record<ArticleEntityType, string> = {
   person: "人物",
   organization: "机构",
   location: "地点",
   other: "其他实体",
+};
+
+const BODY_ERRORS: Record<string, string> = {
+  authentication_required: "原站要求登录或拒绝访问，请阅读原文。",
+  api_tier_restricted: "当前 API 不提供此文章，网页备用获取未启用或不可用。",
+  paywall_or_login: "原站正文需要登录或订阅，请阅读原文。",
+  publisher_blocked: "原站不允许当前抓取方式，请阅读原文。",
+  unsupported_template: "暂未识别原站正文结构，请阅读原文。",
+  extraction_quality_failed: "正文抽取结果未通过校验，请阅读原文。",
+  article_not_found: "原站文章暂不可用，请检查原文链接。",
+  local_research_disabled: "此正文仅在启用本地研究模式时可见。",
 };
 
 function groupArticleEntities(data: ArticleCardResponse) {
@@ -83,6 +95,7 @@ export default function ArticleDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
+  const [bodyPollingExhausted, setBodyPollingExhausted] = useState(false);
   const outboundTrackedRef = useRef(false);
   const ensureRequestedRef = useRef(false);
   const detailTrackedRef = useRef(false);
@@ -98,6 +111,7 @@ export default function ArticleDetailPage() {
     setError(null);
     setData(null);
     setImageFailed(false);
+    setBodyPollingExhausted(false);
     outboundTrackedRef.current = false;
     ensureRequestedRef.current = false;
     detailTrackedRef.current = false;
@@ -132,6 +146,7 @@ export default function ArticleDetailPage() {
       data.body_document ||
       !["missing", "failed"].includes(data.body_structure_status ?? "missing") ||
       data.content_rights === "link_only" ||
+      (data.body_error_code && BODY_ERRORS[data.body_error_code]) ||
       ensureRequestedRef.current
     ) {
       return;
@@ -152,14 +167,22 @@ export default function ArticleDetailPage() {
     if (!data || sourceSpace !== "live" || data.body_structure_status !== "pending") return;
     let cancelled = false;
     let attempts = 0;
+    let inFlight = false;
     const interval = window.setInterval(() => {
-      if (document.visibilityState === "hidden" || attempts >= 12) return;
+      if (attempts >= 12) {
+        window.clearInterval(interval);
+        setBodyPollingExhausted(true);
+        return;
+      }
       attempts += 1;
+      if (document.visibilityState === "hidden" || inFlight) return;
+      inFlight = true;
       void getArticleCard(articleId, sourceSpace)
         .then((response) => {
-          if (!cancelled) setData(response);
+          if (!cancelled && response.article_id === articleId && response.source_space === sourceSpace) setData(response);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => { inFlight = false; });
     }, 5_000);
     return () => {
       cancelled = true;
@@ -316,6 +339,7 @@ export default function ArticleDetailPage() {
         </div>
 
         <h1 className="zr-post-detail__title">{data.title}</h1>
+        <ReadingActions sourceSpace={data.source_space} articleId={data.article_id} />
 
         {data.image_url && !imageFailed && (
           <img
@@ -366,8 +390,10 @@ export default function ArticleDetailPage() {
                 ))}
               </div>
             </section>
-          ) : data.body_status === "pending" ? (
-            <p className="zr-post-detail__body-state">正文正在获取中…</p>
+          ) : data.body_structure_status === "pending" || data.body_status === "pending" ? (
+            <p className="zr-post-detail__body-state">{bodyPollingExhausted ? "正文仍在后台处理，可稍后刷新或阅读原文。" : data.body_error_code === "network_error" ? "正文获取遇到网络问题，正在重试…" : "正文正在获取中…"}</p>
+          ) : data.body_status === "blocked" || data.body_status === "failed" || data.body_error_code ? (
+            <p className="zr-post-detail__body-state">{BODY_ERRORS[data.body_error_code ?? ""] ?? "正文暂时无法获取，可稍后重试或阅读原文。"}</p>
           ) : null}
           <a
             href={data.url}

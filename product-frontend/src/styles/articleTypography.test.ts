@@ -6,6 +6,15 @@ const globalStyles = readFileSync(resolve(process.cwd(), "src/styles/global.css"
 const liveNewsStyles = readFileSync(resolve(process.cwd(), "src/styles/liveNews.css"), "utf8");
 
 describe("文章详情阅读字号", () => {
+  it("来源信息独立排版、不继承首行缩进，并支持窄屏换行", () => {
+    const metadata = liveNewsStyles.match(/\.zr-article-metadata\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(metadata).toMatch(/text-indent:\s*0/);
+    expect(metadata).toMatch(/font-size:\s*0\.8125rem/);
+    expect(metadata).toMatch(/line-height:\s*1\.6/);
+    const details = liveNewsStyles.match(/\.zr-article-metadata__details\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(details).toMatch(/flex-wrap:\s*wrap/);
+    expect(liveNewsStyles).toMatch(/\.zr-article-metadata__item dd\s*\{[^}]*margin:\s*0/);
+  });
   it("放大栏目标题、摘要和正文，并只缩进普通正文段落", () => {
     expect(globalStyles).toMatch(
       /\.zr-post-detail__content\s*>\s*\.zr-eyebrow[\s\S]*?font-size:\s*14px/,

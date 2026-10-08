@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from backend.app.config import Settings
 from backend.app.errors import RepositoryNotReadyError
@@ -43,6 +44,7 @@ class UnwiredRuntimeRepository(RuntimeRepository):
         category: str | None = None,
         source_space: NewsSpace = "mind",
         language: LiveLanguage = "all",
+        reading_candidates: list[dict[str, Any]] | None = None,
     ) -> FeedResponse:
         raise RepositoryNotReadyError("GET /feed")
 

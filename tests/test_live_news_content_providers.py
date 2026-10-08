@@ -15,6 +15,48 @@ from backend.app.live_news.content_providers import (
 from backend.app.live_news.content_types import ContentAcquisitionError, ContentRequest
 
 NOW = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
+
+
+def test_xinhua_v2_pipeline_keeps_two_images_and_captions():
+    from backend.app.live_news.content_policy import ImagePolicy
+
+    paragraph = "这是虚构的新闻正文，介绍公共服务与科技发展情况。" * 10
+    markup = (
+        '<div id="detail"><p><img src="a.png"></p>'
+        '<p><span style="color:#000080">虚构现场一。新华网发（甲 摄）</span></p>'
+        f'<p>{paragraph}</p><p>{paragraph}</p><p><img src="b.png"></p>'
+        '<p><span style="color:#000080">虚构现场二。新华网发（乙 摄）</span></p>'
+        f"<p>{paragraph}</p></div>"
+    )
+    request = _request(
+        url="http://www.fj.xinhuanet.com/story",
+        domain="xinhuanet.com",
+        language="zh",
+        policy=ContentPolicy(
+            "html",
+            "full_text",
+            access_scope="local_research",
+            adapter="xinhuanet",
+            target_extraction_version="zh-xinhua-3",
+            allow_insecure_http=True,
+            images=ImagePolicy(display="remote_url", allowed_domains=("xinhuanet.com",)),
+        ),
+    )
+    result = HtmlContentProvider(
+        FakeFetcher(_response(markup.encode(), "text/html; charset=utf-8", request.canonical_url)),
+        local_research_allowed=True,
+    ).acquire(request)
+    assert [b.type for b in result.body_document.blocks] == [
+        "image",
+        "paragraph",
+        "paragraph",
+        "image",
+        "paragraph",
+    ]
+    assert result.body_text.count("虚构现场一") == 1
+    assert result.body_document.blocks[0].source_url.startswith("http:")
+
+
 LONG_ENGLISH = " ".join(
     ["This is a complete publisher paragraph with reliable news article content."] * 12
 )
@@ -261,7 +303,7 @@ def test_local_research_html_provider_uses_adapter_and_http_policy() -> None:
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )
@@ -272,9 +314,9 @@ def test_local_research_html_provider_uses_adapter_and_http_policy() -> None:
         local_research_allowed=True,
     ).acquire(request)
 
-    assert result.extraction_version == "zh-xinhua-1"
+    assert result.extraction_version == "zh-xinhua-3"
     assert result.body_document is not None
-    assert result.body_document.extraction_version == "zh-xinhua-1"
+    assert result.body_document.extraction_version == "zh-xinhua-3"
     assert len(result.body_document.blocks) == 3
     assert fetcher.calls[0][3] == FetchPolicy.local_research_http()
 
@@ -290,7 +332,7 @@ def test_local_research_html_provider_refuses_when_runtime_gate_is_closed() -> N
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )
@@ -314,7 +356,7 @@ def test_local_research_html_provider_rejects_short_document() -> None:
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )
@@ -344,7 +386,7 @@ def test_local_research_html_provider_rejects_mismatched_page_title() -> None:
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )

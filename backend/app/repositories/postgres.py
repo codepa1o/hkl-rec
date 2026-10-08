@@ -224,6 +224,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         category: str | None = None,
         source_space: NewsSpace = "mind",
         language: LiveLanguage = "all",
+        reading_candidates: list[dict[str, Any]] | None = None,
     ) -> FeedResponse:
         if source_space == "live":
             if not self._settings.live_news_enabled:
@@ -344,21 +345,64 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 default_topic_count=len(default_topic_weight_map),
             )
 
-            candidates = self._load_feed_candidates(
-                connection=connection,
-                topic_weight_map=topic_weight_map,
-                query_topic_scores=query_recall_topic_scores,
-                profile_v2_topic_scores=profile_v2_recall_scores,
-                page_size=page_size,
-                user_id=user_id,
-                request_id=request_id,
-                use_als=use_als,
-                as_of_ts=as_of_ts,
-                expected_catalog_fingerprint=catalog_fingerprint,
-                excluded_news_ids=seen_news_ids,
-                session_id=feed_claim.session_id,
-                category=category,
-            )
+            if reading_candidates is not None:
+                eligible_by_id = {
+                    str(row["article_id"]): row
+                    for row in reading_candidates
+                    if str(row["article_id"]) not in seen_news_ids
+                }
+                # Keep the standard recommender's personalized recall channels,
+                # then use eligible catalog items to refill slots removed by rules.
+                candidates = self._load_feed_candidates(
+                    connection=connection,
+                    topic_weight_map=topic_weight_map,
+                    query_topic_scores=query_recall_topic_scores,
+                    profile_v2_topic_scores=profile_v2_recall_scores,
+                    page_size=20,
+                    user_id=user_id,
+                    request_id=request_id,
+                    use_als=use_als,
+                    as_of_ts=as_of_ts,
+                    expected_catalog_fingerprint=catalog_fingerprint,
+                    excluded_news_ids=seen_news_ids,
+                    session_id=feed_claim.session_id,
+                    category=category,
+                )
+                candidates = {
+                    news_id: candidate
+                    for news_id, candidate in candidates.items()
+                    if news_id in eligible_by_id
+                }
+                refill_limit = min(max(page_size, 50), 2000)
+                for row in sorted(
+                    eligible_by_id.values(),
+                    key=lambda item: (-float(item.get("hot_score") or 0.0), str(item["article_id"])),
+                ):
+                    if len(candidates) >= refill_limit:
+                        break
+                    add_feed_candidate(
+                        candidates,
+                        news_id=str(row["article_id"]),
+                        source="reading_catalog_refill",
+                        is_fallback=False,
+                        raw_base_score=float(row.get("hot_score") or 0.0),
+                    )
+            else:
+                candidates = self._load_feed_candidates(
+                    connection=connection,
+                    topic_weight_map=topic_weight_map,
+                    query_topic_scores=query_recall_topic_scores,
+                    profile_v2_topic_scores=profile_v2_recall_scores,
+                    page_size=page_size,
+                    user_id=user_id,
+                    request_id=request_id,
+                    use_als=use_als,
+                    as_of_ts=as_of_ts,
+                    expected_catalog_fingerprint=catalog_fingerprint,
+                    excluded_news_ids=seen_news_ids,
+                    session_id=feed_claim.session_id,
+                    category=category,
+                )
             if not candidates:
                 complete_feed_request(
                     connection,
@@ -431,13 +475,16 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     continue
                 topics = topics_by_news.get(news_id, [])
                 topic_ids = {topic.topic_id for topic in topics}
+                raw_base_score = max(
+                    float(row.get("hot_score") or 0.0),
+                    float(cast(Any, candidate.get("raw_base_score")) or 0.0),
+                )
                 base_score = (
                     round(
-                        float(row.get("hot_score") or candidate["raw_base_score"] or 0)
-                        / (float(row.get("hot_score") or candidate["raw_base_score"] or 0) + 100.0),
+                        raw_base_score / (raw_base_score + 100.0),
                         6,
                     )
-                    if float(row.get("hot_score") or candidate["raw_base_score"] or 0) > 0
+                    if raw_base_score > 0
                     else 0.0
                 )
                 feat = build_feature_dict(
@@ -460,7 +507,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                         topics,
                         topic_ids,
                         base_score,
-                        sorted(candidate["sources"]),
+                        sorted(cast(set[str], candidate["sources"])),
                         bool(candidate["is_fallback"]),
                     )
                 )

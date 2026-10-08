@@ -45,6 +45,7 @@ class ArticleCardResponse(CanonicalArticleModel):
     body_document: StructuredBodyDocument | None = None
     body_structure_status: BodyStructureStatus = "missing"
     body_document_version: str | None = None
+    body_error_code: str | None = None
 
 
 class ContentEnsureResponse(ApiModel):

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
-from backend.app.live_news.content_policy import ContentPolicy, ContentRights
+from backend.app.live_news.content_policy import ContentAccessScope, ContentPolicy, ContentRights
 
 if TYPE_CHECKING:
     from backend.app.live_news.content_document import StructuredBodyDocument
@@ -32,6 +32,7 @@ class AcquiredContent:
     fetched_at: datetime
     extraction_version: str
     body_document: StructuredBodyDocument | None = None
+    access_scope: ContentAccessScope | None = None
 
 
 @dataclass(frozen=True)

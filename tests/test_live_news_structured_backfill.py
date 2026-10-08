@@ -15,6 +15,40 @@ from backend.app.live_news.content_backfill import BackfillFilters, enqueue_stru
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_backfill_can_target_one_article():
+    article_id = "L" + "3" * 32
+    connection = Connection()
+    enqueue_structured_backfill(connection, BackfillFilters(article_id=article_id), dry_run=True)
+    sql, params = connection.cursor_value.executed[0]
+    assert "news.article_id = %s" in sql
+    assert article_id in params
+
+
+def test_backfill_filters_current_version_before_limit():
+    connection = Connection(
+        [
+            dict(
+                article_id="L" + "3" * 32,
+                source_domain="xinhuanet.com",
+                body_document_version="zh-xinhua-1",
+            )
+        ]
+    )
+    enqueue_structured_backfill(
+        connection,
+        BackfillFilters(limit=1),
+        dry_run=True,
+        allowlist=load_allowlist(ROOT / "config/live_news_sources.json"),
+        local_research_allowed=True,
+    )
+    sql, params = connection.cursor_value.executed[0]
+    assert params[-1] == 1
+    assert "jsonb_to_recordset" in sql
+    assert "target_version" in sql.split("LIMIT")[0]
+    assert "NOT IN ('fetching', 'blocked')" in sql
+    assert "job.target_extraction_version = selected_policy.target_version" in sql
+
+
 class Cursor:
     def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []

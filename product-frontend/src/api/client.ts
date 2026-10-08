@@ -25,6 +25,19 @@ const BASE_URL: string =
 
 export const UNAUTHORIZED_EVENT = "newsrec:unauthorized";
 
+export function resolveArticleImageUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  if (/^\/articles\/live\/L[0-9a-f]{32}\/assets\/[0-9a-f]{32}$/.test(value)) {
+    return new URL(value, BASE_URL).toString();
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -53,7 +66,7 @@ export function stableClientId(prefix: string, logicalKey: string): string {
   return created;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init?: RequestInit & { params?: Record<string, string | number | boolean | undefined> },
 ): Promise<T> {
