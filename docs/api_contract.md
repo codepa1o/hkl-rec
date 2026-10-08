@@ -137,3 +137,26 @@ Wikidata ID 去重。
 
 赞助卡片使用同一新闻契约，并增加带标签的 `sponsored` 对象。服务端会依据 PostgreSQL 中的
 投放记录验证 `user_id`、`news_id` 和 delivery ID，不直接信任客户端归因字段。
+
+## 个人阅读工具
+
+个人阅读接口始终从 HttpOnly Cookie 会话确定账号，不接受客户端指定 `user_id`。收藏、已读、偏好规则和保存搜索按 `source_space` 隔离；这些持久状态本身不投射到 MIND 行为画像。`POST /reading/search` 复用现有搜索接口，因此搜索行为仍会记录为搜索事件。
+
+| 接口 | 用途 |
+|---|---|
+| `GET /reading/states?source_space=mind&article_ids=N1,N2` | 批量读取最多 100 篇新闻的收藏/已读状态 |
+| `POST /reading/state` | 更新文章收藏或已读状态；至少传 `saved`、`read` 之一 |
+| `GET /reading/library?source_space=live&saved_only=true&unread_only=false&offset=0&limit=20` | 查看收藏列表，保留已失效文章记录 |
+| `GET /reading/rules?source_space=mind` | 查看个人主题、来源和关键词规则 |
+| `POST /reading/rules` | 新建、编辑或暂停规则；规则类型为 `source`、`topic`、`keyword`，处理方式为 `prefer`、`reduce`、`block` |
+| `POST /reading/rules/{id}/delete` | 删除当前账号当前空间的规则 |
+| `GET /reading/searches?source_space=live` | 查看保存搜索 |
+| `POST /reading/searches` | 保存查询、语言和分类条件；相同条件重复提交为幂等操作 |
+| `POST /reading/searches/{id}/delete` | 删除保存搜索 |
+| `GET /reading/feed` | 获取应用未读筛选和手动偏好的产品信息流 |
+| `POST /reading/search` | 搜索并过滤硬屏蔽规则；`include_hidden=true` 可按用户明确操作查看隐藏结果 |
+
+所有 `POST` 请求检查可信 `Origin`。`POST /reading/feed` 不存在，信息流读取采用 `GET`。
+个人信息流 cursor 绑定账号、空间、分类、语言、未读开关及阅读状态/规则版本；条件变化后旧 cursor 返回 409，前端应重新加载第一页。
+
+个人 MIND 信息流使用现有候选召回与排序流程应用偏好规则，并补足被过滤的候选，单个快照最多包含 2,000 条排序候选。普通 `GET /feed` 与 `POST /search` 仍是现有推荐和研究入口；个人阅读规则不会改变离线指标定义。

@@ -8,6 +8,8 @@ import {
   stableClientId,
   trackEvent,
 } from "../api/client";
+import { getReadingFeed } from "../reading/api";
+import { useReading } from "../reading/ReadingContext";
 import type { FeedItem, LiveLanguage } from "../api/types";
 import PostCard from "../components/PostCard";
 import { usePersona } from "../context/PersonaContext";
@@ -37,11 +39,14 @@ function latestFeedWatermark(items: FeedItem[]): string | null {
 
 export default function FeedPage() {
   const { selectedPersona, bumpProfile } = usePersona();
+  const reading = useReading();
   const { sourceSpace } = useSourceSpace();
   const location = useLocation();
   const navigate = useNavigate();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const routeCategory = searchParams.get("category") || undefined;
+  const personalMode = Boolean(reading?.active && selectedPersona?.user_id === reading.accountId);
+  const unreadOnly = personalMode && searchParams.get("unread") === "1";
   const compatibleCategory = !routeCategory || routeCategory.startsWith("live-") === (sourceSpace === "live");
   const category = compatibleCategory ? routeCategory : undefined;
   const routeLanguage = searchParams.get("language");
@@ -71,9 +76,9 @@ export default function FeedPage() {
     () =>
       stableClientId(
         "feed",
-        `${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${category ?? "all"}:${language}:${reloadGeneration}`,
+        `${sourceSpace}:${selectedPersona?.user_id ?? "none"}:${category ?? "all"}:${language}:${personalMode ? `${reading?.revision ?? 0}:${reading?.readRevision ?? 0}:${unreadOnly}` : "research"}:${reloadGeneration}`,
       ),
-    [category, language, selectedPersona?.user_id, sourceSpace, reloadGeneration],
+    [category, language, selectedPersona?.user_id, sourceSpace, reloadGeneration, personalMode, reading?.revision, reading?.readRevision, unreadOnly],
   );
 
   useEffect(() => {
@@ -92,9 +97,10 @@ export default function FeedPage() {
             personaUserId: selectedPersona.user_id,
             category: category ?? null,
             language,
+            ...(personalMode ? { readingKey: `${reading?.revision ?? 0}:${reading?.readRevision ?? 0}:${unreadOnly}` } : {}),
           }
         : null,
-    [category, language, selectedPersona?.user_id, sourceSpace],
+    [category, language, selectedPersona?.user_id, sourceSpace, personalMode, reading?.revision, reading?.readRevision, unreadOnly],
   );
   const renderedArticleIds = useMemo(
     () => pages.flatMap((page) => page.items.map((item) => item.article_id)),
@@ -211,7 +217,9 @@ export default function FeedPage() {
     setFeedUserId(null);
     setFeedWatermark(null);
     trackedRef.current = new Set();
-    getFeed(
+    (personalMode
+      ? getReadingFeed(sourceSpace, loadRequestId, undefined, category, language, unreadOnly)
+      : getFeed(
       selectedPersona.user_id,
       PAGE_SIZE,
       true,
@@ -220,7 +228,7 @@ export default function FeedPage() {
       category,
       sourceSpace,
       language,
-    )
+      ))
       .then((res) => {
         if (cancelled || res.source_space !== sourceSpace) return;
         setPages([{ requestId: res.request_id, items: res.items }]);
@@ -250,6 +258,8 @@ export default function FeedPage() {
     category,
     sourceSpace,
     language,
+    personalMode,
+    unreadOnly,
   ]);
 
   const visibleEntries = useMemo<FeedEntry[]>(() => {
@@ -321,7 +331,9 @@ export default function FeedPage() {
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const res = await getFeed(
+      const res = personalMode
+        ? await getReadingFeed(sourceSpace, pageRequestId, nextCursor, category, language, unreadOnly)
+        : await getFeed(
         userId,
         PAGE_SIZE,
         true,
@@ -330,7 +342,7 @@ export default function FeedPage() {
         category,
         sourceSpace,
         language,
-      );
+          );
       if (activeSessionRef.current !== sessionId || res.source_space !== sourceSpace) return;
       setPages((current) => [
         ...current,
@@ -342,6 +354,10 @@ export default function FeedPage() {
       setFeedWatermark((current) => current ?? res.current_watermark ?? latestFeedWatermark(res.items));
     } catch (err) {
       if (activeSessionRef.current !== sessionId) return;
+      if (personalMode && err instanceof ApiError && err.status === 409) {
+        reloadLatestFeed();
+        return;
+      }
       const message = err instanceof Error ? err.message : "未知错误";
       setLoadMoreError(`加载更多新闻失败：${localizeInterfaceError(message)}`);
     } finally {
@@ -350,7 +366,7 @@ export default function FeedPage() {
         setLoadingMore(false);
       }
     }
-  }, [selectedPersona, feedUserId, nextCursor, hasMore, category, sourceSpace, language]);
+  }, [selectedPersona, feedUserId, nextCursor, hasMore, category, sourceSpace, language, personalMode, unreadOnly, reloadLatestFeed]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -450,6 +466,18 @@ export default function FeedPage() {
               {value === "all" ? "全部" : value === "zh" ? "中文" : "English"}
             </button>
           ))}
+        </div>
+      )}
+
+      {personalMode && (
+        <div className="zr-reading-actions zr-reading-feed-controls">
+          <label><input type="checkbox" checked={unreadOnly} onChange={(event) => {
+            const next = new URLSearchParams(location.search);
+            if (event.target.checked) next.set("unread", "1"); else next.delete("unread");
+            restoration.clear();
+            navigate({ pathname: "/", search: next.size ? `?${next}` : "" });
+          }} />只看未读</label>
+          <Link to="/profile">管理兴趣规则</Link>
         </div>
       )}
 

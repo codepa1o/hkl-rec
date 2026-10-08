@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Enqueue active Live articles missing structured body documents."
     )
+    parser.add_argument("--article-id")
     parser.add_argument("--source-domain")
     parser.add_argument("--source-suffix")
     parser.add_argument("--language", choices=("zh", "en"))
@@ -43,6 +44,7 @@ def main() -> int:
         count = enqueue_structured_backfill(
             connection,
             BackfillFilters(
+                article_id=args.article_id,
                 source_domain=args.source_domain,
                 source_suffix=args.source_suffix,
                 language=args.language,

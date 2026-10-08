@@ -1,11 +1,82 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.app.live_news.content_document import ImageBlock, ListBlock
 from backend.app.live_news.content_parser import (
     derive_body_text,
     document_hash,
     parse_structured_document,
 )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.xinhuanet.com:bad/a.png",
+        "https://www.xinhuanet.com:8888/a.png",
+        "https://user@www.xinhuanet.com/a.png",
+    ],
+)
+def test_bad_image_url_does_not_discard_the_article(url):
+    doc = parse_structured_document(
+        f'<article><p>before<img src="{url}">after</p></article>',
+        article_id="test",
+        source="html",
+        base_url="https://www.xinhuanet.com/story",
+        allowed_image_domains=frozenset({"xinhuanet.com"}),
+    )
+    assert all(b.type == "paragraph" for b in doc.blocks)
+    assert "before" in derive_body_text(doc) and "after" in derive_body_text(doc)
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<img src="https://www.xinhuanet.com/a.png">',
+        '<p><img data-src="https://www.xinhuanet.com/a.png"></p>',
+        '<p><span><img src="https://www.xinhuanet.com/a.png"></span></p>',
+    ],
+)
+def test_parser_keeps_bare_and_nested_images(markup):
+    doc = parse_structured_document(
+        f"<article>{markup}<p>正文</p></article>",
+        article_id="test-image",
+        source="html",
+        base_url="https://www.xinhuanet.com/story",
+        allowed_image_domains=frozenset({"xinhuanet.com"}),
+    )
+    assert [b.type for b in doc.blocks] == ["image", "paragraph"]
+
+
+def test_parser_keeps_mixed_paragraph_text_tails_and_multiple_images():
+    doc = parse_structured_document(
+        '<article><p>前文<span>加粗<img src="https://www.xinhuanet.com/a.png">后文</span>'
+        '<picture><source srcset="https://www.xinhuanet.com/b.png 2x">'
+        '<img src="https://www.xinhuanet.com/small.png"></picture>末尾</p></article>',
+        article_id="test-image",
+        source="html",
+        base_url="https://www.xinhuanet.com/story",
+        allowed_image_domains=frozenset({"xinhuanet.com"}),
+    )
+    assert [b.type for b in doc.blocks] == ["paragraph", "image", "paragraph", "image", "paragraph"]
+    assert [b.text for b in doc.blocks if b.type == "paragraph"] == ["前文加粗", "后文", "末尾"]
+    assert doc.blocks[3].source_url.endswith("/b.png")
+
+
+def test_parser_limits_images_without_losing_surrounding_text():
+    doc = parse_structured_document(
+        '<article><p>before<img src="https://www.xinhuanet.com/a.png">'
+        'between<img src="https://www.xinhuanet.com/b.png">after</p></article>',
+        article_id="test",
+        source="html",
+        base_url="https://www.xinhuanet.com/story",
+        allowed_image_domains=frozenset({"xinhuanet.com"}),
+        max_images=1,
+    )
+    assert sum(b.type == "image" for b in doc.blocks) == 1
+    assert all(word in derive_body_text(doc) for word in ["before", "between", "after"])
+
 
 HTML = """
 <html><body>

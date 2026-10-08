@@ -41,6 +41,10 @@ EXPECTED_TABLES = {
     "user_event",
     "event_outbox",
     "worker_heartbeat",
+    "reading_state",
+    "reading_rule",
+    "reading_search",
+    "reading_feed",
 }
 
 MIND_NEWS_COLUMNS = {
@@ -133,9 +137,9 @@ def test_alembic_is_configured_to_use_project_metadata() -> None:
     assert "target_metadata = metadata" in env_source
     assert "NEWSREC_DATABASE_URL" in env_source
     versions = list((root / "alembic" / "versions").glob("*.py"))
-    assert len(versions) == 13
+    assert len(versions) == 14
     script = ScriptDirectory.from_config(Config(root / "alembic.ini"))
-    assert script.get_heads() == ["20260914_0013"]
+    assert script.get_heads() == ["20260917_0014"]
 
 
 def test_metadata_can_be_inspected_without_binding_an_engine() -> None:

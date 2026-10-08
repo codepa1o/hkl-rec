@@ -120,6 +120,7 @@ class Settings:
     live_content_worker_enabled: bool = False
     local_research_fulltext_enabled: bool = False
     guardian_api_key: str = ""
+    guardian_html_fallback_enabled: bool = False
     live_content_connect_timeout_seconds: int = 5
     live_content_read_timeout_seconds: int = 15
     live_content_max_response_bytes: int = 2 * 1024 * 1024
@@ -236,6 +237,7 @@ def get_settings() -> Settings:
         live_content_worker_enabled=_env_bool("NEWSREC_LIVE_CONTENT_WORKER_ENABLED", "0"),
         local_research_fulltext_enabled=_env_bool("NEWSREC_LOCAL_RESEARCH_FULLTEXT_ENABLED", "0"),
         guardian_api_key=_env("NEWSREC_GUARDIAN_API_KEY", "").strip(),
+        guardian_html_fallback_enabled=_env_bool("NEWSREC_GUARDIAN_HTML_FALLBACK_ENABLED", "0"),
         live_content_connect_timeout_seconds=_env_positive_int(
             "NEWSREC_LIVE_CONTENT_CONNECT_TIMEOUT_SECONDS", "5"
         ),

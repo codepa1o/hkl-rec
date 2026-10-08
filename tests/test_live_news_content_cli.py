@@ -61,7 +61,7 @@ def test_provider_registry_keeps_local_research_disabled_outside_gate() -> None:
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )
@@ -87,11 +87,11 @@ def test_provider_registry_enables_local_research_only_in_development() -> None:
             "full_text",
             access_scope="local_research",
             adapter="xinhuanet",
-            target_extraction_version="zh-xinhua-1",
+            target_extraction_version="zh-xinhua-3",
             allow_insecure_http=True,
         ),
     )
 
     result = registry.for_mode("html").acquire(request)
 
-    assert result.extraction_version == "zh-xinhua-1"
+    assert result.extraction_version == "zh-xinhua-3"

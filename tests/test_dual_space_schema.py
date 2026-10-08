@@ -22,7 +22,7 @@ BASE_REVISION = "20260816_0007"
 DUAL_SPACE_REVISION = "20260817_0009"
 CONTENT_REVISION = "20260818_0010"
 STRUCTURED_REVISION = "20260821_0011"
-HEAD_REVISION = "20260914_0013"
+HEAD_REVISION = "20260917_0014"
 SOURCE_SPACE_TABLES = {
     "topic",
     "query_topic_map",
@@ -183,7 +183,7 @@ def test_alembic_has_one_dual_space_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     revision = script.get_revision(HEAD_REVISION)
     assert revision is not None
-    assert revision.down_revision == "20260914_0012"
+    assert revision.down_revision == "20260914_0013"
 
 
 def test_dual_space_migration_renders_reserved_seed_guard_in_offline_sql(

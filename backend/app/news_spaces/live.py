@@ -265,7 +265,10 @@ class LiveNewsSpaceRepository:
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM live_news WHERE article_id = %s AND status = 'active'",
+                    """SELECT news.*, job.last_error_code AS content_error_code,
+                        job.status AS content_job_status FROM live_news news
+                        LEFT JOIN live_news_content_job job ON job.article_id=news.article_id
+                        WHERE news.article_id = %s AND news.status = 'active'""",
                     (article_id,),
                 )
                 row = cursor.fetchone()
@@ -304,6 +307,9 @@ class LiveNewsSpaceRepository:
             discovered_at=value.get("discovered_at"),
             body_text=_visible_body(value, access_allowed=access_allowed),
             body_status=body_status,
+            body_error_code=value.get("content_error_code")
+            if access_allowed
+            else "local_research_disabled",
             body_source=value.get("body_source"),
             content_rights=content_rights,
             body_access_scope=value.get("body_access_scope") or "public",
@@ -401,7 +407,8 @@ class LiveNewsSpaceRepository:
                     """
                         UPDATE live_news
                         SET content_rights = %s,
-                            body_access_scope = %s,
+                            body_access_scope = CASE WHEN (body_text IS NOT NULL OR body_document IS NOT NULL) AND body_access_scope='local_research'
+                                THEN body_access_scope ELSE %s END,
                             body_structure_status = 'pending',
                             body_structure_updated_at = CURRENT_TIMESTAMP
                         WHERE article_id = %s

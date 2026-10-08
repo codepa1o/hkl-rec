@@ -6,6 +6,7 @@ import App from "./App";
 
 vi.mock("./context/AuthContext", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useAuth: () => ({ user: null }),
 }));
 vi.mock("./context/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,

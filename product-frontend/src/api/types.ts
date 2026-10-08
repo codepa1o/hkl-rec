@@ -56,6 +56,7 @@ export interface SuggestionListResponse {
 }
 
 export interface ArticleCardResponse {
+  body_error_code?: string | null;
   source_space: NewsSpace;
   article_id: string;
   news_id?: string | null;
@@ -118,6 +119,7 @@ export interface ListContentBlock {
 }
 
 export interface ImageContentBlock {
+  access_scope?: "public" | "local_research";
   id: string;
   type: "image";
   asset_id: string;
@@ -140,6 +142,12 @@ export type StructuredContentBlock =
   | ImageContentBlock;
 
 export interface StructuredBodyDocument {
+  fallback_reason?: string | null;
+  html_adapter_version?: string | null;
+  warnings?: string[];
+  byline?: string | null;
+  published_at?: string | null;
+  publisher_tags?: { name: string; url: string }[];
   schema_version: 1;
   extraction_version: string;
   source: "guardian_api" | "rss" | "html";

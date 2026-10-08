@@ -13,6 +13,7 @@ export interface FeedContextIdentity {
   personaUserId: number;
   category: string | null;
   language: LiveLanguage;
+  readingKey?: string;
 }
 
 export interface FeedPageSnapshot {
@@ -27,6 +28,7 @@ export interface FeedSessionSnapshot {
   personaUserId: number;
   category: string | null;
   language: LiveLanguage;
+  readingKey?: string;
   pages: FeedPageSnapshot[];
   feedUserId: number;
   nextCursor: string | null;
@@ -125,6 +127,7 @@ function isSnapshot(value: unknown, expectedKey?: string): value is FeedSessionS
     personaUserId: value.personaUserId,
     category: value.category,
     language: value.language,
+    readingKey: typeof value.readingKey === "string" ? value.readingKey : undefined,
   });
   if (canonicalKey !== value.contextKey) return false;
   return value.pages.every(
@@ -194,12 +197,14 @@ function serializedBytes(value: unknown): number {
 }
 
 export function buildFeedContextKey(context: FeedContextIdentity): string {
-  return JSON.stringify([
+  const key = [
     context.sourceSpace,
     context.personaUserId,
     context.category ?? "",
     context.language,
-  ]);
+  ];
+  if (context.readingKey !== undefined) key.push(context.readingKey);
+  return JSON.stringify(key);
 }
 
 export function readFeedSnapshot(

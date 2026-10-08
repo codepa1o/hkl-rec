@@ -33,6 +33,7 @@ from backend.app.live_news.content_worker import (  # noqa: E402
     LiveNewsContentWorker,
     ProviderRegistry,
 )
+from backend.app.live_news.guardian_html import GuardianHtmlProvider  # noqa: E402
 from backend.app.repositories.connection import connect, parse_database_url  # noqa: E402
 
 
@@ -56,6 +57,11 @@ def build_provider_registry(settings: Settings, fetcher: SafeFetcher) -> Provide
         providers["guardian_api"] = GuardianContentProvider(
             fetcher,
             settings.guardian_api_key,
+            html_fallback=GuardianHtmlProvider(
+                fetcher, local_research_allowed=local_research_content_allowed(settings)
+            )
+            if settings.guardian_html_fallback_enabled
+            else None,
         )
     return ProviderRegistry(providers)
 

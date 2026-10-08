@@ -12,6 +12,9 @@ import ArticleDetailPage from "./pages/ArticleDetailPage";
 import ProfilePage from "./pages/ProfilePage";
 import SearchPage from "./pages/SearchPage";
 import AuthPage from "./pages/AuthPage";
+import ReadingLibrary from "./reading/ReadingLibrary";
+import { ReadingProvider } from "./reading/ReadingContext";
+import "./reading/reading.css";
 import "./styles/liveNews.css";
 
 function ProductShell() {
@@ -23,22 +26,22 @@ function ProductShell() {
       <div className="zr-product-app">
         <SourceSpaceProvider>
           <PersonaProvider>
-            <TopNav />
-            <div className={`zr-shell${isProfilePage ? " zr-shell--profile" : ""}`}>
-              <LeftSidebar />
-              <Routes>
-                <Route path="/" element={<FeedPage />} />
-                <Route path="/search" element={<SearchPage />} />
-                <Route path="/profile" element={<ProfilePage />} />
-                <Route
-                  path="/articles/:sourceSpace/:articleId"
-                  element={<ArticleDetailPage />}
-                />
-                <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-              {!isProfilePage && <RightRail />}
-            </div>
+            <ReadingProvider>
+              <TopNav />
+              <div className={`zr-shell${isProfilePage || location.pathname === "/reading" ? " zr-shell--profile" : ""}`}>
+                <LeftSidebar />
+                <Routes>
+                  <Route path="/" element={<FeedPage />} />
+                  <Route path="/search" element={<SearchPage />} />
+                  <Route path="/profile" element={<ProfilePage />} />
+                  <Route path="/reading" element={<ReadingLibrary />} />
+                  <Route path="/articles/:sourceSpace/:articleId" element={<ArticleDetailPage />} />
+                  <Route path="/articles/:newsId" element={<ArticleDetailPage />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+                {!isProfilePage && location.pathname !== "/reading" && <RightRail />}
+              </div>
+            </ReadingProvider>
           </PersonaProvider>
         </SourceSpaceProvider>
       </div>

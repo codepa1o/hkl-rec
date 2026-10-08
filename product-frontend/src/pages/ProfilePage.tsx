@@ -1,6 +1,7 @@
 import ProfilePanel from "../components/ProfilePanel";
 import { usePersona } from "../context/PersonaContext";
 import { useSourceSpace } from "../context/SourceSpaceContext";
+import PreferenceRules from "../reading/PreferenceRules";
 
 export default function ProfilePage() {
   const { selectedPersona, refreshTick, bumpProfile } = usePersona();
@@ -26,6 +27,7 @@ export default function ProfilePage() {
       ) : (
         <div className="zr-status">请选择一个用户画像。</div>
       )}
+      <PreferenceRules />
     </main>
   );
 }

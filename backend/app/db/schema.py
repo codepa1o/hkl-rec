@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB
 
 from backend.app.live_news.topic_schema import define_topic_tables
+from backend.app.reading.schema import define_reading_tables
 
 metadata = MetaData(
     naming_convention={
@@ -897,3 +898,5 @@ worker_heartbeat = Table(
 )
 
 define_topic_tables(metadata)
+
+define_reading_tables(metadata)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -10,6 +12,7 @@ from backend.app.live_news.content_dao import ensure_content_job
 
 @dataclass(frozen=True)
 class BackfillFilters:
+    article_id: str | None = None
     source_domain: str | None = None
     source_suffix: str | None = None
     language: Literal["zh", "en"] | None = None
@@ -17,6 +20,8 @@ class BackfillFilters:
     limit: int = 100
 
     def __post_init__(self) -> None:
+        if self.article_id and not re.fullmatch(r"L[0-9a-f]{32}", self.article_id):
+            raise ValueError("article_id must be a canonical live article ID")
         if not 1 <= self.limit <= 10_000:
             raise ValueError("backfill limit must be between 1 and 10000")
         if not 1 <= self.since_days <= 365:
@@ -30,13 +35,41 @@ def _select_candidates(
     filters: BackfillFilters,
     *,
     include_link_only: bool,
+    allowlist: SourceAllowlist | None = None,
 ) -> list[dict[str, Any]]:
     clauses = [
         "news.status = 'active'",
-        "COALESCE(job.status, '') <> 'fetching'",
+        "COALESCE(job.status, '') NOT IN ('fetching', 'blocked')",
         "news.discovered_at >= CURRENT_TIMESTAMP - (%s * INTERVAL '1 day')",
     ]
     params: list[Any] = [filters.since_days]
+    if allowlist is not None:
+        clauses.append("""EXISTS (SELECT 1 FROM (
+            SELECT p.target_version FROM jsonb_to_recordset(%s::jsonb)
+                AS p(domain text, target_version text, priority int)
+            WHERE news.source_domain = p.domain OR news.source_domain LIKE ('%%.' || p.domain)
+            ORDER BY p.priority LIMIT 1
+        ) selected_policy WHERE selected_policy.target_version IS NOT NULL
+          AND news.body_document_version IS DISTINCT FROM selected_policy.target_version
+          AND NOT (COALESCE(job.status, '') = 'failed'
+                   AND job.target_extraction_version = selected_policy.target_version))""")
+        params.append(
+            json.dumps(
+                [
+                    {
+                        "domain": p.domain,
+                        "priority": index,
+                        "target_version": p.content.target_extraction_version
+                        if p.content.mode != "link_only"
+                        else None,
+                    }
+                    for index, p in enumerate(allowlist.policies)
+                ]
+            )
+        )
+    if filters.article_id:
+        clauses.append("news.article_id = %s")
+        params.append(filters.article_id)
     if not include_link_only:
         clauses.extend(
             [
@@ -82,6 +115,7 @@ def enqueue_structured_backfill(
             connection,
             filters,
             include_link_only=allowlist is not None,
+            allowlist=allowlist,
         )
         selected: list[tuple[str, Any]] = []
         if allowlist is None:

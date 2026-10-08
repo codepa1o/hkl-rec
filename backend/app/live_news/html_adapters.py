@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -36,33 +37,62 @@ def _host_allowed(host: str, domains: tuple[str, ...]) -> bool:
     return any(normalized == domain or normalized.endswith(f".{domain}") for domain in domains)
 
 
-def _normalize_url(value: str, base_url: str, domains: tuple[str, ...]) -> str | None:
+def _normalize_url(
+    value: str, base_url: str, domains: tuple[str, ...], *, allow_http: bool = False
+) -> str | None:
     candidate = value.strip()
     if not candidate:
         return None
     candidate = f"https:{candidate}" if candidate.startswith("//") else urljoin(base_url, candidate)
     parsed = urlsplit(candidate)
     host = parsed.hostname or ""
-    if not _host_allowed(host, domains):
+    if (
+        not _host_allowed(host, domains)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         return None
-    if parsed.scheme == "http":
+    if parsed.scheme == "http" and not allow_http:
         parsed = parsed._replace(scheme="https", netloc=host)
         candidate = urlunsplit(parsed)
-    if parsed.scheme != "https":
+    if parsed.scheme not in ({"http", "https"} if allow_http else {"https"}):
         return None
     return candidate
 
 
-def _normalize_srcset(value: str, base_url: str, domains: tuple[str, ...]) -> str | None:
+def _normalize_srcset(
+    value: str, base_url: str, domains: tuple[str, ...], *, allow_http: bool = False
+) -> str | None:
     normalized: list[str] = []
     for raw in value.split(","):
         parts = raw.strip().split()
         if not parts:
             continue
-        url = _normalize_url(parts[0], base_url, domains)
+        url = _normalize_url(parts[0], base_url, domains, allow_http=allow_http)
         if url:
             normalized.append(" ".join((url, *parts[1:])))
     return ", ".join(normalized) or None
+
+
+def _bind_xinhua_captions(root: HtmlElement) -> None:
+    for paragraph in root.xpath(".//p[.//img]"):
+        # Only single-image containers: never consume mixed prose or a gallery.
+        if paragraph.text_content().strip() or len(paragraph.xpath(".//img")) != 1:
+            continue
+        caption = paragraph.getnext()
+        if caption is None or caption.tag != "p" or caption.xpath(".//img"):
+            continue
+        text = re.sub(r"\s+", " ", caption.text_content()).strip()
+        styled = any(
+            re.search(r"color\s*:\s*(?:#000080|navy)\b", node.get("style", ""), re.I)
+            for node in caption.iter()
+        )
+        credited = bool(re.search(r"新华网发|新华社记者|[（(][^）)]{1,60}\s摄[）)]", text))
+        if not (0 < len(text) <= 300 and styled and credited):
+            continue
+        paragraph.tag = "figure"
+        caption.tag = "figcaption"
+        paragraph.append(caption)
 
 
 @dataclass(frozen=True)
@@ -73,7 +103,9 @@ class HtmlAdapter:
     noise_selectors: tuple[str, ...]
     image_domains: tuple[str, ...]
 
-    def prepare(self, document_html: str, *, base_url: str) -> HtmlElement:
+    def prepare(
+        self, document_html: str, *, base_url: str, allow_http_images: bool = False
+    ) -> HtmlElement:
         document = lxml_html.fromstring(document_html)
         root: HtmlElement | None = None
         for selector in self.root_selectors:
@@ -98,16 +130,22 @@ class HtmlAdapter:
                 element.drop_tree()
         for element in root.xpath(".//*[@hidden]"):
             element.drop_tree()
-        self._normalize_media(root, base_url)
+        self._normalize_media(root, base_url, allow_http=allow_http_images)
+        if self.name == "xinhuanet":
+            _bind_xinhua_captions(root)
         return root
 
-    def _normalize_media(self, root: HtmlElement, base_url: str) -> None:
+    def _normalize_media(
+        self, root: HtmlElement, base_url: str, *, allow_http: bool = False
+    ) -> None:
         for element in root.xpath(".//img|.//source"):
             has_source = False
             for attribute in ("data-srcset", "srcset"):
                 value = element.get(attribute)
                 if value:
-                    normalized = _normalize_srcset(str(value), base_url, self.image_domains)
+                    normalized = _normalize_srcset(
+                        str(value), base_url, self.image_domains, allow_http=allow_http
+                    )
                     if normalized:
                         element.set(attribute, normalized)
                         has_source = True
@@ -116,7 +154,16 @@ class HtmlAdapter:
             for attribute in ("data-src", "src"):
                 value = element.get(attribute)
                 if value:
-                    normalized = _normalize_url(str(value), base_url, self.image_domains)
+                    normalized = _normalize_url(
+                        str(value), base_url, self.image_domains, allow_http=allow_http
+                    )
+                    if (
+                        normalized
+                        and self.name == "xinhuanet"
+                        and urlsplit(normalized).path
+                        == "/hnstatics/henanwebsite/detail2023/images/space.gif"
+                    ):
+                        normalized = None
                     if normalized:
                         element.set(attribute, normalized)
                         has_source = True
@@ -128,7 +175,7 @@ class HtmlAdapter:
 
 XINHUA_ADAPTER = HtmlAdapter(
     name="xinhuanet",
-    extraction_version="zh-xinhua-1",
+    extraction_version="zh-xinhua-3",
     root_selectors=("#detail", ".main-left", ".main.clearfix"),
     noise_selectors=(".editor", ".related", ".share", ".recommend", "footer"),
     image_domains=("xinhuanet.com", "news.cn"),

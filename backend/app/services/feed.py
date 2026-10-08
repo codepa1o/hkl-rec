@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from backend.app.news_spaces.types import LiveLanguage, NewsSpace
 from backend.app.repositories.base import RuntimeRepository
@@ -24,8 +25,9 @@ class FeedService:
         category: str | None = None,
         source_space: NewsSpace = "mind",
         language: LiveLanguage = "all",
+        reading_candidates: list[dict[str, Any]] | None = None,
     ) -> FeedResponse:
-        return self._repository.get_feed(
+        arguments: dict[str, Any] = dict(
             user_id=user_id,
             page_size=page_size,
             debug=debug,
@@ -38,6 +40,9 @@ class FeedService:
             source_space=source_space,
             language=language,
         )
+        if reading_candidates is not None:
+            arguments["reading_candidates"] = reading_candidates
+        return self._repository.get_feed(**arguments)
 
     def get_feed_update_status(
         self,

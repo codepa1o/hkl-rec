@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
@@ -27,7 +27,8 @@ vi.mock("../context/SourceSpaceContext", () => ({
   useSourceSpace: () => ({ selectSourceSpace: vi.fn() }),
 }));
 
-vi.mock("../api/client", () => ({
+vi.mock("../api/client", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/client")>(),
   ensureArticleContent: vi.fn(),
   getArticleCard: vi.fn(),
   newClientId: vi.fn(),
@@ -81,6 +82,25 @@ beforeEach(() => {
     enqueued: true,
     retry_after_seconds: 5,
   });
+});
+
+it("explains restricted access without repeatedly enqueueing", async () => {
+  renderPage({...baseArticle, content_rights: 'full_text', body_status: 'blocked', body_structure_status: 'blocked', body_error_code: 'authentication_required'});
+  expect(await screen.findByText('原站要求登录或拒绝访问，请阅读原文。')).toBeInTheDocument();
+  expect(ensureArticleContent).not.toHaveBeenCalled();
+});
+
+it("stops showing endless acquisition after bounded polling", async () => {
+  vi.useFakeTimers();
+  try {
+    renderPage({...baseArticle, content_rights: 'full_text', body_status: 'pending', body_structure_status: 'pending'});
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(65000); });
+    expect(screen.getByText('正文仍在后台处理，可稍后刷新或阅读原文。')).toBeInTheDocument();
+    expect(screen.queryByText('正文正在获取中…')).not.toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("renders structured paragraphs and inline images in document order", async () => {

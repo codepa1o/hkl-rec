@@ -22,16 +22,26 @@ from .content_document import (
 from .content_normalize import normalize_body
 from .content_types import BodySource
 
-NOISE_TAGS = frozenset({"nav", "aside", "script", "style", "form", "noscript"})
+NOISE_TAGS = frozenset({"nav", "aside", "footer", "script", "style", "form", "noscript"})
 
 
 def _text(element: HtmlElement) -> str:
     return re.sub(r"\s+", " ", element.text_content()).strip()
 
 
-def _host_allowed(url: str, allowed_domains: frozenset[str]) -> bool:
-    parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+def _host_allowed(url: str, allowed_domains: frozenset[str], *, allow_http: bool = False) -> bool:
+    try:
+        parsed = urlsplit(url)
+        if parsed.port not in {None, 80 if parsed.scheme == "http" else 443}:
+            return False
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in ({"http", "https"} if allow_http else {"https"})
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         return False
     host = parsed.hostname.rstrip(".").lower()
     return any(host == domain or host.endswith(f".{domain}") for domain in allowed_domains)
@@ -57,8 +67,8 @@ def _srcset_url(value: str) -> str | None:
 
 
 def _image_url(figure: HtmlElement, base_url: str) -> str | None:
-    sources = figure.xpath(".//source[@srcset or @data-srcset]")
-    images = figure.xpath(".//img")
+    sources = figure.xpath("descendant-or-self::source[@srcset or @data-srcset]")
+    images = figure.xpath("descendant-or-self::img")
     candidates: list[str] = []
     for element in [*sources, *images]:
         for attribute in ("data-srcset", "srcset"):
@@ -89,9 +99,12 @@ def _image_block(
     index: int,
     base_url: str,
     allowed_image_domains: frozenset[str],
+    allow_research_http_images: bool = False,
 ) -> ImageBlock | None:
     url = _image_url(element, base_url)
-    if not url or not _host_allowed(url, allowed_image_domains):
+    if not url or not _host_allowed(
+        url, allowed_image_domains, allow_http=allow_research_http_images
+    ):
         return None
     images = element.xpath(".//img")
     image = images[0] if images else element
@@ -99,14 +112,19 @@ def _image_block(
     caption = _text(captions[0]) if captions else None
     credits = element.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' credit ')]")
     credit = _text(credits[0]) if credits else None
-    width = int(image.get("width")) if str(image.get("width") or "").isdigit() else None
-    height = int(image.get("height")) if str(image.get("height") or "").isdigit() else None
+    width = (int(image.get("width")) or None) if str(image.get("width") or "").isdigit() else None
+    height = (
+        (int(image.get("height")) or None) if str(image.get("height") or "").isdigit() else None
+    )
     block_id = _stable_id(article_id, index, "image", url)
+    asset_id = hashlib.sha256(f"{article_id}\0{block_id}\0{url}".encode()).hexdigest()[:32]
+    research_http = urlsplit(url).scheme == "http"
     return ImageBlock(
         id=block_id,
-        asset_id=hashlib.sha256(f"{article_id}\0{block_id}\0{url}".encode()).hexdigest()[:32],
+        asset_id=asset_id,
         source_url=url,
-        display_url=url,
+        display_url=f"/articles/live/{article_id}/assets/{asset_id}" if research_http else url,
+        access_scope="local_research" if research_http else "public",
         alt=str(image.get("alt") or "").strip() or None,
         caption=caption,
         credit=credit,
@@ -124,9 +142,13 @@ def parse_structured_document(
     source: BodySource,
     base_url: str,
     allowed_image_domains: frozenset[str],
+    allow_research_http_images: bool = False,
+    max_images: int = 20,
 ) -> StructuredBodyDocument:
     document = lxml_html.fromstring(document_html)
-    for element in document.xpath("//nav|//aside|//script|//style|//form|//noscript|//*[@hidden]"):
+    for element in document.xpath(
+        "//nav|//aside|//footer|//script|//style|//form|//noscript|//*[@hidden]"
+    ):
         element.drop_tree()
     containers = document.xpath("//article") or document.xpath("//body") or [document]
     root = cast(HtmlElement, containers[0])
@@ -154,13 +176,50 @@ def parse_structured_document(
                 )
             )
 
+    def append_image(element: HtmlElement) -> None:
+        if sum(block.type == "image" for block in blocks) >= max_images:
+            return
+        image = _image_block(
+            element,
+            article_id=article_id,
+            index=len(blocks),
+            base_url=base_url,
+            allowed_image_domains=allowed_image_domains,
+            allow_research_http_images=allow_research_http_images,
+        )
+        if image:
+            blocks.append(image)
+
+    def mixed_paragraph(element: HtmlElement) -> None:
+        text_parts: list[str] = []
+
+        def visit(node: HtmlElement) -> None:
+            if str(node.tag).lower() in {"img", "picture", "figure"}:
+                append_text("paragraph", "".join(text_parts))
+                text_parts.clear()
+                append_image(node)
+                return
+            if node.text:
+                text_parts.append(node.text)
+            for child in node:
+                if isinstance(child.tag, str):
+                    visit(child)
+                if child.tail:
+                    text_parts.append(child.tail)
+
+        visit(element)
+        append_text("paragraph", "".join(text_parts))
+
     def walk(elements: Iterable[HtmlElement]) -> None:
         for element in elements:
             tag = str(element.tag).lower()
             if tag in NOISE_TAGS:
                 continue
             if tag == "p":
-                append_text("paragraph", _text(element))
+                if element.xpath(".//img|.//picture|.//figure"):
+                    mixed_paragraph(element)
+                else:
+                    append_text("paragraph", _text(element))
                 continue
             if tag in {"h2", "h3", "h4"}:
                 append_text("heading", _text(element), level=int(tag[1]))
@@ -185,15 +244,7 @@ def parse_structured_document(
                     )
                 continue
             if tag in {"figure", "img", "picture"}:
-                image = _image_block(
-                    element,
-                    article_id=article_id,
-                    index=len(blocks),
-                    base_url=base_url,
-                    allowed_image_domains=allowed_image_domains,
-                )
-                if image:
-                    blocks.append(image)
+                append_image(element)
                 continue
             walk(cast(list[HtmlElement], list(element)))
 
@@ -203,6 +254,17 @@ def parse_structured_document(
         source=source,
         blocks=blocks,
     )
+
+
+def prose_segments(document: StructuredBodyDocument) -> list[str]:
+    """Article prose for quality checks; headings and image captions cannot pad a short body."""
+    values: list[str] = []
+    for block in document.blocks:
+        if isinstance(block, (ParagraphBlock, QuoteBlock)):
+            values.append(block.text)
+        elif isinstance(block, ListBlock):
+            values.extend(block.items)
+    return values
 
 
 def derive_body_text(document: StructuredBodyDocument) -> str:

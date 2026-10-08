@@ -41,9 +41,11 @@ def _language_is_compatible(value: str, language: Literal["zh", "en"]) -> bool:
     return latin_count >= 50 and cjk_count <= max(20, latin_count // 2)
 
 
-def validate_body(value: str, *, language: Literal["zh", "en"]) -> str:
+def validate_body(
+    value: str, *, language: Literal["zh", "en"], min_characters: int = MIN_BODY_CHARACTERS
+) -> str:
     normalized = normalize_body(value)
-    if len(normalized) < MIN_BODY_CHARACTERS:
+    if len(normalized) < min_characters:
         raise ContentAcquisitionError(
             "extraction_too_short",
             f"body contains {len(normalized)} characters",

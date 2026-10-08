@@ -131,7 +131,7 @@ def test_project_allowlist_configures_chinese_local_research_sources() -> None:
     allowlist = load_allowlist(Path("config/live_news_sources.json"))
 
     expected = {
-        "xinhuanet.com": ("xinhuanet", "zh-xinhua-1", True),
+        "xinhuanet.com": ("xinhuanet", "zh-xinhua-3", True),
         "people.com.cn": ("people", "zh-people-1", True),
         "chinanews.com.cn": ("chinanews", "zh-chinanews-1", True),
     }

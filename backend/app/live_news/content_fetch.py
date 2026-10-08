@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -184,6 +185,17 @@ class SafeFetcher:
                     retryable = status in {408, 425, 429} or status >= 500
                     if status in {401, 403}:
                         code = "authentication_required"
+                        if status == 403 and host == "content.guardianapis.com":
+                            try:
+                                payload = json.loads(response.read(4096).decode("utf-8"))
+                                message = payload.get("response", {}).get("message", "")
+                                if (
+                                    message
+                                    == "You are not permitted to access this content via your current user tier."
+                                ):
+                                    code = "api_tier_restricted"
+                            except (ValueError, AttributeError, OSError):
+                                pass
                     elif status in {404, 410}:
                         code = "article_not_found"
                     else:

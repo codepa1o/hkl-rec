@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.app.schemas.common import ApiModel
 
@@ -59,16 +61,38 @@ class ImageBlock(ContentBlockBase):
     height: int | None = Field(default=None, gt=0)
     mime_type: str | None = Field(default=None, max_length=64)
     cache_status: ImageCacheStatus
+    access_scope: Literal["public", "local_research"] = "public"
 
-    @field_validator("source_url", "display_url")
-    @classmethod
-    def require_https(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("image URLs must use HTTPS")
-        return value
+    @model_validator(mode="after")
+    def validate_urls(self) -> ImageBlock:
+        internal = bool(
+            self.display_url
+            and re.fullmatch(r"/articles/live/L[0-9a-f]{32}/assets/[0-9a-f]{32}", self.display_url)
+        )
+        for field, value in (("source", self.source_url), ("display", self.display_url)):
+            if value is None or (field == "display" and internal):
+                continue
+            parsed = urlsplit(value)
+            research_source = (
+                field == "source"
+                and self.access_scope == "local_research"
+                and internal
+                and parsed.scheme == "http"
+            )
+            if (
+                not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.port not in {None, 80 if parsed.scheme == "http" else 443}
+                or (parsed.scheme != "https" and not research_source)
+            ):
+                raise ValueError("image URLs must use HTTPS or a guarded research image endpoint")
+        if internal and (
+            self.access_scope != "local_research"
+            or not (self.display_url or "").endswith("/" + self.asset_id)
+        ):
+            raise ValueError("internal image endpoint requires matching research asset")
+        return self
 
 
 ContentBlock = Annotated[
@@ -77,8 +101,27 @@ ContentBlock = Annotated[
 ]
 
 
+class PublisherTag(ApiModel):
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(max_length=4096)
+
+    @field_validator("url")
+    @classmethod
+    def safe_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("publisher tag URLs must use HTTPS without credentials")
+        return value
+
+
 class StructuredBodyDocument(ApiModel):
     schema_version: Literal[1] = 1
     extraction_version: str = Field(min_length=1, max_length=32)
     source: BodySource
     blocks: list[ContentBlock] = Field(min_length=1, max_length=1_000)
+    publisher_tags: list[PublisherTag] = Field(default_factory=list, max_length=50)
+    fallback_reason: str | None = Field(default=None, max_length=64)
+    html_adapter_version: str | None = Field(default=None, max_length=32)
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+    byline: str | None = Field(default=None, max_length=1000)
+    published_at: datetime | None = None

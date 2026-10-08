@@ -7,14 +7,14 @@ from urllib.parse import urlsplit
 ContentMode = Literal["guardian_api", "rss", "html", "link_only"]
 ContentRights = Literal["full_text", "excerpt_only", "link_only"]
 ContentAccessScope = Literal["public", "local_research"]
-HtmlAdapterName = Literal["generic", "xinhuanet", "people", "chinanews"]
+HtmlAdapterName = Literal["generic", "xinhuanet", "people", "chinanews", "bbc"]
 ImageDisplay = Literal["remote_url", "cached_only", "omit"]
 ImageCache = Literal["never", "when_authorized"]
 
 CONTENT_MODES = frozenset({"guardian_api", "rss", "html", "link_only"})
 CONTENT_RIGHTS = frozenset({"full_text", "excerpt_only", "link_only"})
 CONTENT_ACCESS_SCOPES = frozenset({"public", "local_research"})
-HTML_ADAPTERS = frozenset({"generic", "xinhuanet", "people", "chinanews"})
+HTML_ADAPTERS = frozenset({"generic", "xinhuanet", "people", "chinanews", "bbc"})
 
 
 @dataclass(frozen=True)
@@ -72,9 +72,12 @@ class ContentPolicy:
     adapter: HtmlAdapterName = "generic"
     target_extraction_version: str = "structured-1"
     allow_insecure_http: bool = False
+    html_fallback_enabled: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "images", parse_image_policy(self.images))
+        if self.html_fallback_enabled and self.mode != "guardian_api":
+            raise ValueError("HTML fallback is only supported for Guardian API sources")
         if self.mode == "rss" and not self.feed_urls:
             raise ValueError("rss content mode requires feed_urls")
         for url in self.feed_urls:
@@ -124,6 +127,7 @@ def parse_content_policy(raw: object) -> ContentPolicy:
         adapter=cast(HtmlAdapterName, adapter),
         target_extraction_version=target_extraction_version,
         allow_insecure_http=bool(raw.get("allow_insecure_http", False)),
+        html_fallback_enabled=bool(raw.get("html_fallback_enabled", False)),
         feed_urls=tuple(value.strip() for value in raw_feed_urls),
         images=parse_image_policy(raw.get("images")),
     )

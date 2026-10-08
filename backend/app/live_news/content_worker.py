@@ -17,6 +17,7 @@ BLOCKED_FAILURE_CODES = frozenset(
     {
         "blocked_by_policy",
         "authentication_required",
+        "api_tier_restricted",
         "local_research_disabled",
         "paywall_or_login",
         "publisher_blocked",
